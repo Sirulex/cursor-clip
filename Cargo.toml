@@ -6,4 +6,7 @@ edition = "2024"
 [dependencies]
 wayland-client = "0.31.10"
 wayland-protocols = "0.32.8"
-smithay-client-toolkit = "0.19.2"
+wayland-protocols-wlr = { version = "0.3.8", features = ["client"] }
+memmap2 = "0.9.5"
+#smithay-client-toolkit = "0.19.2"
+#nix = { version = "0.26.0"}
