@@ -6,9 +6,15 @@ use wayland_protocols_wlr::
     layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1,
 };
 
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
+use std::os::fd::BorrowedFd;
+use memmap2::{MmapMut,MmapOptions};
+
 //use smithay_client_toolkit::{
 //    shm::{slot::SlotPool, Shm}
 //};
+
 
 struct State {
     compositor: Option<wl_compositor::WlCompositor>,
@@ -216,54 +222,57 @@ fn main() {
     let stride = width * 4; // 4 bytes per pixel (ARGB8888)
     let size = stride * height;
 
-    // Get a buffer from the pool using SCTK
-    //let mut pool = state.pool.as_mut().expect("Memory pool not initialized");
-    
-    // Create a buffer from the pool
-    //let (buffer, canvas) = pool.create_buffer(
-    //    width as i32,
-    //    height as i32,
-    //    stride as i32,
-    //    wl_shm::Format::Argb8888,
-    //).expect("Failed to create buffer");
+    let path = "/dev/shm/wayland-shared-buffer";
+    let file = OpenOptions::new()
+    .read(true)
+    .write(true)
+    .create(true)
+    .open(path)
+    .expect("Failed to open shared memory file");
 
-    // Fill the buffer with red color
-    //for pixel in canvas.chunks_exact_mut(4) {
-    //    pixel[0] = 0x00; // B
-    //    pixel[1] = 0x00; // G
-    //    pixel[2] = 0xFF; // R
-    //    pixel[3] = 0xFF; // A (fully opaque)
-    //}
-    //
-    //// Attach the buffer to the surface
-    //surface.attach(Some(&buffer), 0, 0);
-    //
-    //// Mark the entire surface as damaged (needs redrawing)
-    //surface.damage(0, 0, width as i32, height as i32);
-    //
-    //// Commit the surface to apply changes
-    //surface.commit();
-    let fd = {
-        use std::os::fd::{FromRawFd, AsRawFd};
-        use memmap2::MmapOptions;
-        use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
-        use nix::unistd::ftruncate;
+    file.set_len(size as u64).expect("Failed to set file size");
 
-        // Create anonymous file
-        let mfd = memfd_create("buffer", MemFdCreateFlag::MFD_CLOEXEC)
-            .expect("Failed to create memfd");
-        
-        // Set size
-        ftruncate(mfd.as_raw_fd(), size as i64)
-            .expect("Failed to set memfd size");
-
-        mfd
+    let mut mmap: MmapMut = unsafe {
+    MmapOptions::new()
+        .len(size)
+        .map_mut(&file)
+        .expect("Failed to map the file")
     };
 
-    //let shm = state.shm.as_ref().expect("SHM not initialized");
+    for pixel in mmap.chunks_exact_mut(4) {
+    pixel[0] = 0xFF; // Blue
+    pixel[1] = 0x00; // Green
+    pixel[2] = 0x00; // Red
+    pixel[3] = 0xFF; // Alpha
+}
 
+    let fd = file.as_raw_fd();
+    let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+    // Create a pool from the file descriptor
+    let shm = state.shm.as_ref().expect("SHM not initialized");
+    let pool = shm.create_pool(borrowed_fd, size as i32, &queue.handle(), ());
     
+    // Create a buffer from the pool
+    let buffer = pool.create_buffer(
+        0, width as i32, height as i32,
+        stride as i32, wl_shm::Format::Argb8888,
+        &queue.handle(), ()
+    );
     
+
+    // Save the pool and buffer in state
+    state.pool = Some(pool);
+    state.buffer = Some(buffer.clone());
+
+    // Attach the buffer to the surface
+    surface.attach(Some(&buffer), 0, 0);
+    
+    // Mark the entire surface as damaged (needs redrawing)
+    surface.damage(0, 0, width as i32, height as i32);
+    
+    // Commit the surface to apply changes
+    surface.commit();
+
     // Keep the application running
     loop {
         queue.blocking_dispatch(&mut state).unwrap();
