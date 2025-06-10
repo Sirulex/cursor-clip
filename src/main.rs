@@ -1,5 +1,5 @@
 use wayland_client::{
-    globals::{registry_queue_init, GlobalList, GlobalListContents}, protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface}, Connection, Dispatch, EventQueue, QueueHandle
+    globals::{registry_queue_init, GlobalList, GlobalListContents}, protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface, wl_seat, wl_pointer}, Connection, Dispatch, EventQueue, QueueHandle
 };
 
 use wayland_protocols_wlr::
@@ -19,6 +19,7 @@ use memmap2::{MmapMut,MmapOptions};
 struct State {
     compositor: Option<wl_compositor::WlCompositor>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    pointer: Option<wl_pointer::WlPointer>,
     shm: Option<wl_shm::WlShm>,
     pool: Option<wl_shm_pool::WlShmPool>,
     buffer: Option<wl_buffer::WlBuffer>,
@@ -29,13 +30,16 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(
         _state: &mut State,
         _proxy: &wl_registry::WlRegistry,
-        _event: wl_registry::Event,
+        event: wl_registry::Event,
         _data: &GlobalListContents,
         _conn: &Connection,
         _qhandle: &QueueHandle<State>,
     ) {
         // React to dynamic global events if needed
-        println!("Received registry event: {:?}", _event);
+        //println!("Received registry event: {:?}", _event);
+        if let wl_registry::Event::Global { name, interface, version } = event {
+            println!("[{}] {} (v{})", name, interface, version);
+        }
     }
 }
 
@@ -104,6 +108,53 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
     }
 }
 
+impl Dispatch<wl_seat::WlSeat, ()> for State {
+    fn event(
+        _state: &mut State,
+        _seat: &wl_seat::WlSeat,
+        _event: wl_seat::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle seat events if needed
+        if let wayland_client::protocol::wl_seat::Event::Capabilities { capabilities } = event {
+            if capabilities.contains(wayland_client::protocol::wl_seat::Capability::Pointer) {
+                let pointer = seat.get_pointer(qh, ());
+                self.pointer = Some(pointer);
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for State {
+    fn event(
+        _state: &mut State,
+        _pointer: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        match event {
+            wl_pointer::Event::Enter { serial: _ ,surface, surface_x,surface_y} => {
+                println!("Pointer entered surface: {:?} at ({}, {})", surface, surface_x, surface_y);
+            }
+            wl_pointer::Event::Leave { serial: _, surface } => {
+                println!("Pointer left surface: {:?}", surface);
+            }
+            wl_pointer::Event::Motion { time, surface_x, surface_y } => {
+                println!("Pointer moved to ({}, {}) at time {}", surface_x, surface_y, time);
+            }
+            wl_pointer::Event::Button { serial: _, time, button, state } => {
+                println!("Pointer button {:?} at time {}: {:?}", button, time, state);
+            }
+            _ => {}
+        }
+    }
+}
+
+
 impl Dispatch<wl_shm::WlShm, ()> for State {
     fn event(
         _state: &mut State,
@@ -154,6 +205,7 @@ fn main() {
     let mut state = State {
         compositor: None,
         layer_shell: None,
+        pointer: None,
         shm: None,
         pool: None,
         buffer: None,
@@ -182,12 +234,26 @@ fn main() {
         eprintln!("wl_shm not available");
     }
 
-    // Initialize the SlotPool from SCTK
+    // Bind wl_seat
+    if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
+        // You can use the seat for input handling
+        println!("Bound to wl_seat: {:?}", seat);
+    } else {
+        eprintln!("wl_seat not available");
+    }
+
+    // Bind wl_pointer
+    //if let Ok(pointer) = globals.bind::<wl_pointer::WlPointer, _, _>(&queue.handle(), 1..=4, ()) {
+    //    state.pointer = Some(pointer);
+    //} else {
+    //    eprintln!("wl_pointer not available");
+    //}
 
    
     println!("Wayland client initialized successfully.");
     println!("Compositor: {:?}", state.compositor);
     println!("Layer Shell: {:?}", state.layer_shell);
+    println!("Pointer: {:?}", state.pointer);
 
     let compositor = state.compositor.as_ref().expect("Compositor not initialized");
     let surface = compositor.create_surface(&queue.handle(), ());
