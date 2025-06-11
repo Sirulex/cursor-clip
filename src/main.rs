@@ -1,5 +1,5 @@
 use wayland_client::{
-    globals::{registry_queue_init, GlobalList, GlobalListContents}, protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface, wl_seat, wl_pointer}, Connection, Dispatch, EventQueue, QueueHandle
+    globals::{registry_queue_init, GlobalList, GlobalListContents}, protocol::{wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface}, Connection, Dispatch, EventQueue, QueueHandle, WEnum
 };
 
 use wayland_protocols_wlr::
@@ -101,7 +101,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
             }
             zwlr_layer_surface_v1::Event::Closed => {
                 println!("Layer surface was closed");
-                // You might want to exit the application here
             }
             _ => {}
         }
@@ -110,20 +109,32 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
 
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn event(
-        _state: &mut State,
-        _seat: &wl_seat::WlSeat,
-        _event: wl_seat::Event,
+        state: &mut State,
+        seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<State>,
+        qhandle: &QueueHandle<State>,
     ) {
-        // Handle seat events if needed
-        if let wayland_client::protocol::wl_seat::Event::Capabilities { capabilities } = event {
-            if capabilities.contains(wayland_client::protocol::wl_seat::Capability::Pointer) {
-                let pointer = seat.get_pointer(qh, ());
-                self.pointer = Some(pointer);
+
+        if let wl_seat::Event::Capabilities { capabilities } = event {
+            
+            match capabilities {
+                WEnum::Value(wl_seat::Capability::Pointer) => {
+
+                    let pointer = seat.get_pointer(qhandle, ());
+                    state.pointer = Some(pointer);
+                    println!("Pointer capabilities detected, pointer created.");
+                }
+
+                WEnum::Value(wl_seat::Capability::Keyboard) => {
+                    println!("Keyboard capabilities detected.");
+                }
+                _ => {}
             }
+            
         }
+        //impl release events todo
     }
 }
 
