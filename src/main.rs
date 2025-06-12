@@ -6,6 +6,9 @@ use wayland_protocols_wlr::
     layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1,
 };
 
+use wayland_protocols::
+    wp::{single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1, viewporter::client::{wp_viewport, wp_viewporter}};
+
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 use std::os::fd::BorrowedFd;
@@ -23,6 +26,11 @@ struct State {
     shm: Option<wl_shm::WlShm>,
     pool: Option<wl_shm_pool::WlShmPool>,
     buffer: Option<wl_buffer::WlBuffer>,
+    single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
+    viewport: Option<wp_viewport::WpViewport>,
+    coords_received: bool,
+    surface: Option<wl_surface::WlSurface>,
 }
 
 
@@ -86,19 +94,35 @@ impl Dispatch<wl_surface::WlSurface, ()> for State {
 // Add implementation for zwlr_layer_surface_v1
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
     fn event(
-        _state: &mut State,
+        state: &mut State,
         layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<State>,
+        qhandle: &QueueHandle<State>,
     ) {
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
                 // Acknowledge the configure event
                 layer_surface.ack_configure(serial);
                 println!("Layer surface configured with size: {}x{}", width, height);
+                
+                //create buffer using single pixel buffer manager
+                if let Some(single_pixel_buffer_manager) = &state.single_pixel_buffer_manager {
+                    // Create a single pixel buffer
+                    let single_pixel_buffer = single_pixel_buffer_manager.create_u32_rgba_buffer(255, 0, 0, 255, qhandle, ());
+                    
+                    // Attach the single pixel buffer to the layer surface
+                    //layer_surface.attach(Some(&single_pixel_buffer), 0, 0);
+                } else {
+                    eprintln!("Single pixel buffer manager not available");
+                }
+                // Scale the buffer to match the configured size
+                if let Some(viewport) = &state.viewport {
+                    //viewport.set_destination(width, height); // Use the width and height from configure
+                }
             }
+            
             zwlr_layer_surface_v1::Event::Closed => {
                 println!("Layer surface was closed");
             }
@@ -141,7 +165,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
     fn event(
-        _state: &mut State,
+        state: &mut State,
         _pointer: &wl_pointer::WlPointer,
         event: wl_pointer::Event,
         _data: &(),
@@ -152,6 +176,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         match event {
             wl_pointer::Event::Enter { serial: _ ,surface, surface_x,surface_y} => {
                 println!("Pointer entered surface: {:?} at ({}, {})", surface, surface_x, surface_y);
+                state.coords_received = true; // Set flag when coordinates are received
             }
             wl_pointer::Event::Leave { serial: _, surface } => {
                 println!("Pointer left surface: {:?}", surface);
@@ -210,6 +235,45 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for State {
     }
 }
 
+impl Dispatch<wp_viewporter::WpViewporter, ()> for State {
+    fn event(
+        _state: &mut State,
+        _viewporter: &wp_viewporter::WpViewporter,
+        _event: wp_viewporter::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle viewporter events if needed
+    }
+}
+
+impl Dispatch<wp_viewport::WpViewport, ()> for State {
+    fn event(
+        _state: &mut State,
+        _viewport: &wp_viewport::WpViewport,
+        _event: wp_viewport::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle viewport events if needed
+    }
+}
+
+impl Dispatch<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1, ()> for State {
+    fn event(
+        _state: &mut State,
+        _manager: &wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1,
+        _event: wp_single_pixel_buffer_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle single pixel buffer manager events if needed
+    }
+}
+
 fn main() {
     let conn = Connection::connect_to_env().unwrap();
     let (globals, mut queue): (GlobalList, EventQueue<State>) = registry_queue_init::<State>(&conn).unwrap();
@@ -222,6 +286,11 @@ fn main() {
         shm: None,
         pool: None,
         buffer: None,
+        single_pixel_buffer_manager: None,
+        viewporter: None,
+        viewport: None,
+        coords_received: false,
+        surface: None,
     };  
 
     queue.roundtrip(&mut state).unwrap();
@@ -255,6 +324,22 @@ fn main() {
         eprintln!("wl_seat not available");
     }
 
+    //bind wp_viewporter
+    if let Ok(viewporter) = globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ()) {
+        println!("Bound to wp_viewporter: {:?}", viewporter);
+        state.viewporter = Some(viewporter);
+    } else {
+        eprintln!("wp_viewporter not available");
+    }
+
+    // Bind wp_single_pixel_buffer_manager_v1
+    if let Ok(single_pixel_buffer_manager) = globals.bind::<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1, _, _>(&queue.handle(), 1..=1, ()) {
+        println!("Bound to wp_single_pixel_buffer_manager_v1: {:?}", single_pixel_buffer_manager);
+        state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
+    } else {
+        eprintln!("wp_single_pixel_buffer_manager_v1 not available");
+    }
+
    
     println!("Wayland client initialized successfully.");
     println!("Compositor: {:?}", state.compositor);
@@ -262,7 +347,8 @@ fn main() {
     println!("Pointer: {:?}", state.pointer);
 
     let compositor = state.compositor.as_ref().expect("Compositor not initialized");
-    let surface = compositor.create_surface(&queue.handle(), ());
+    let surface= compositor.create_surface(&queue.handle(), ());
+    state.surface = Some(surface.clone()); //valid as surface is basically a reference to the proxy object
     
     let layer_shell = state.layer_shell.as_ref().expect("Layer Shell not initialized");
     let layer_surface = layer_shell.get_layer_surface(
@@ -273,9 +359,17 @@ fn main() {
         &queue.handle(),
         (), // user data
     );
+
+    if let Some(viewporter) = &state.viewporter {
+        // Create a viewport for the layer surface
+        let viewport = viewporter.get_viewport(&surface, &queue.handle(), ());
+        state.viewport = Some(viewport);
+    } else {
+        eprintln!("Viewporter not available");
+    }
     
     // Configure the layer surface
-    layer_surface.set_size(100, 100); // Width and height in pixels
+    layer_surface.set_size(200, 300); // Width and height in pixels
     layer_surface.set_anchor(
         zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left | 
         zwlr_layer_surface_v1::Anchor::Right | zwlr_layer_surface_v1::Anchor::Bottom
@@ -289,8 +383,8 @@ fn main() {
     queue.roundtrip(&mut state).unwrap();
 
     // Create a buffer with red color
-    let width = 100;
-    let height = 100;
+    let width = 1;
+    let height = 1;
     let stride = width * 4; // 4 bytes per pixel (ARGB8888)
     let size = stride * height;
 
@@ -346,7 +440,7 @@ fn main() {
     surface.commit();
 
     // Keep the application running
-    loop {
+    while !state.coords_received {
         queue.blocking_dispatch(&mut state).unwrap();
-    }
+    } 
 }
