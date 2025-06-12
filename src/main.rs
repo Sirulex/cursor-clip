@@ -116,21 +116,22 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _conn: &Connection,
         qhandle: &QueueHandle<State>,
     ) {
+        println!("WL Seat event received yay: {:?}", event);
+        if let wl_seat::Event::Capabilities { capabilities: cap_event_enum } = event { //detangle Capabilities enum
 
-        if let wl_seat::Event::Capabilities { capabilities } = event {
-            
-            match capabilities {
-                WEnum::Value(wl_seat::Capability::Pointer) => {
-
+            if let WEnum::Value(capabilities) = cap_event_enum {
+                println!("Pointer capabilities detected.");
+                
+                if capabilities.contains(wl_seat::Capability::Pointer) { //no pattern matching as wl_seat::Capability is a bitfield
                     let pointer = seat.get_pointer(qhandle, ());
                     state.pointer = Some(pointer);
                     println!("Pointer capabilities detected, pointer created.");
+                } else {
+                    println!("No pointer capabilities detected.");
                 }
 
-                WEnum::Value(wl_seat::Capability::Keyboard) => {
-                    println!("Keyboard capabilities detected.");
-                }
-                _ => {}
+            } else {
+                println!("Unknown capability enumerator");
             }
             
         }
@@ -147,6 +148,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _conn: &Connection,
         _qhandle: &QueueHandle<State>,
     ) {
+        println!("WL Pointer event received");
         match event {
             wl_pointer::Event::Enter { serial: _ ,surface, surface_x,surface_y} => {
                 println!("Pointer entered surface: {:?} at ({}, {})", surface, surface_x, surface_y);
@@ -252,13 +254,6 @@ fn main() {
     } else {
         eprintln!("wl_seat not available");
     }
-
-    // Bind wl_pointer
-    //if let Ok(pointer) = globals.bind::<wl_pointer::WlPointer, _, _>(&queue.handle(), 1..=4, ()) {
-    //    state.pointer = Some(pointer);
-    //} else {
-    //    eprintln!("wl_pointer not available");
-    //}
 
    
     println!("Wayland client initialized successfully.");
