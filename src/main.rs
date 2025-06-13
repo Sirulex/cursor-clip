@@ -110,17 +110,28 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 //create buffer using single pixel buffer manager
                 if let Some(single_pixel_buffer_manager) = &state.single_pixel_buffer_manager {
                     // Create a single pixel buffer
-                    let single_pixel_buffer = single_pixel_buffer_manager.create_u32_rgba_buffer(255, 0, 0, 255, qhandle, ());
+                    let single_pixel_buffer: wl_buffer::WlBuffer = single_pixel_buffer_manager.create_u32_rgba_buffer(
+                        255, 0, 0, 255, qhandle, ()
+                    );
                     
-                    // Attach the single pixel buffer to the layer surface
-                    //layer_surface.attach(Some(&single_pixel_buffer), 0, 0);
+                    // Attach the single pixel buffer to the surface
+                    if let Some(surface) = &state.surface {
+                        surface.attach(Some(&single_pixel_buffer), 0, 0);
+
+                        // Scale the buffer to match the configured size
+                        if let Some(viewport) = &state.viewport {
+                            viewport.set_destination(width as i32, height as i32);
+                        }
+                        
+                        // Mark the surface for redrawing
+                        surface.damage(0, 0, width as i32, height as i32);
+                        // Commit the changes
+                        surface.commit();
+                    }
                 } else {
                     eprintln!("Single pixel buffer manager not available");
                 }
-                // Scale the buffer to match the configured size
-                if let Some(viewport) = &state.viewport {
-                    //viewport.set_destination(width, height); // Use the width and height from configure
-                }
+                
             }
             
             zwlr_layer_surface_v1::Event::Closed => {
@@ -362,14 +373,15 @@ fn main() {
 
     if let Some(viewporter) = &state.viewporter {
         // Create a viewport for the layer surface
-        let viewport = viewporter.get_viewport(&surface, &queue.handle(), ());
+        let viewport: wp_viewport::WpViewport = viewporter.get_viewport(&surface, &queue.handle(), ());
         state.viewport = Some(viewport);
+        
     } else {
         eprintln!("Viewporter not available");
     }
     
     // Configure the layer surface
-    layer_surface.set_size(200, 300); // Width and height in pixels
+    //layer_surface.set_size(200, 300); // Width and height in pixels
     layer_surface.set_anchor(
         zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left | 
         zwlr_layer_surface_v1::Anchor::Right | zwlr_layer_surface_v1::Anchor::Bottom
