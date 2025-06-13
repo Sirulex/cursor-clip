@@ -9,11 +9,6 @@ use wayland_protocols_wlr::
 use wayland_protocols::
     wp::{single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1, viewporter::client::{wp_viewport, wp_viewporter}};
 
-use std::fs::OpenOptions;
-use std::os::unix::io::AsRawFd;
-use std::os::fd::BorrowedFd;
-use memmap2::{MmapMut,MmapOptions};
-
 //use smithay_client_toolkit::{
 //    shm::{slot::SlotPool, Shm}
 //};
@@ -24,8 +19,6 @@ struct State {
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     pointer: Option<wl_pointer::WlPointer>,
     shm: Option<wl_shm::WlShm>,
-    pool: Option<wl_shm_pool::WlShmPool>,
-    buffer: Option<wl_buffer::WlBuffer>,
     single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     viewporter: Option<wp_viewporter::WpViewporter>,
     viewport: Option<wp_viewport::WpViewport>,
@@ -101,46 +94,44 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
         _conn: &Connection,
         qhandle: &QueueHandle<State>,
     ) {
+
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
-                // Acknowledge the configure event
                 layer_surface.ack_configure(serial);
-                println!("Layer surface configured with size: {}x{}", width, height);
-                
-                //create buffer using single pixel buffer manager
-                if let Some(single_pixel_buffer_manager) = &state.single_pixel_buffer_manager {
-                    // Create a single pixel buffer
-                    let single_pixel_buffer: wl_buffer::WlBuffer = single_pixel_buffer_manager.create_u32_rgba_buffer(
-                        255, 0, 0, 255, qhandle, ()
-                    );
-                    
-                    // Attach the single pixel buffer to the surface
-                    if let Some(surface) = &state.surface {
-                        surface.attach(Some(&single_pixel_buffer), 0, 0);
+                println!("Layer surface configured: {}x{}", width, height);
 
-                        // Scale the buffer to match the configured size
-                        if let Some(viewport) = &state.viewport {
-                            viewport.set_destination(width as i32, height as i32);
-                        }
-                        
-                        // Mark the surface for redrawing
-                        surface.damage(0, 0, width as i32, height as i32);
-                        // Commit the changes
-                        surface.commit();
-                    }
-                } else {
+                let Some(manager) = &state.single_pixel_buffer_manager else {
                     eprintln!("Single pixel buffer manager not available");
+                    return;
+                };
+
+                let Some(surface) = &state.surface else {
+                    eprintln!("Surface not available");
+                    return;
+                };
+
+                let buffer = manager.create_u32_rgba_buffer(0, 0, 0, 0, qhandle, ());
+                surface.attach(Some(&buffer), 0, 0);
+
+                if let Some(viewport) = &state.viewport {
+                    viewport.set_destination(width as i32, height as i32);
                 }
-                
+
+                // Mark the entire surface as damaged (needs redrawing)
+                surface.damage(0, 0, width as i32, height as i32);
+
+                surface.commit();
             }
-            
+
             zwlr_layer_surface_v1::Event::Closed => {
                 println!("Layer surface was closed");
             }
+
             _ => {}
         }
     }
 }
+
 
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn event(
@@ -295,8 +286,6 @@ fn main() {
         layer_shell: None,
         pointer: None,
         shm: None,
-        pool: None,
-        buffer: None,
         single_pixel_buffer_manager: None,
         viewporter: None,
         viewport: None,
@@ -381,75 +370,18 @@ fn main() {
     }
     
     // Configure the layer surface
-    //layer_surface.set_size(200, 300); // Width and height in pixels
+    //layer_surface.set_size(200, 300); // Width and height in pixels (no need due to autoscaling via viewporter)
     layer_surface.set_anchor(
         zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left | 
         zwlr_layer_surface_v1::Anchor::Right | zwlr_layer_surface_v1::Anchor::Bottom
     ); // Anchor to all edges
-    layer_surface.set_exclusive_zone(-1); // -1 means don't reserve space
+    layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
     
-    // Commit the surface to apply the changes
     surface.commit();
     
     // Dispatch events to handle surface configuration
     queue.roundtrip(&mut state).unwrap();
 
-    // Create a buffer with red color
-    let width = 1;
-    let height = 1;
-    let stride = width * 4; // 4 bytes per pixel (ARGB8888)
-    let size = stride * height;
-
-    let path = "/dev/shm/wayland-shared-buffer";
-    let file = OpenOptions::new()
-    .read(true)
-    .write(true)
-    .create(true)
-    .open(path)
-    .expect("Failed to open shared memory file");
-
-    file.set_len(size as u64).expect("Failed to set file size");
-
-    let mut mmap: MmapMut = unsafe {
-    MmapOptions::new()
-        .len(size)
-        .map_mut(&file)
-        .expect("Failed to map the file")
-    };
-
-    for pixel in mmap.chunks_exact_mut(4) {
-    pixel[0] = 0xFF; // Blue
-    pixel[1] = 0x00; // Green
-    pixel[2] = 0x00; // Red
-    pixel[3] = 0xFF; // Alpha
-}
-
-    let fd = file.as_raw_fd();
-    let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
-    // Create a pool from the file descriptor
-    let shm = state.shm.as_ref().expect("SHM not initialized");
-    let pool = shm.create_pool(borrowed_fd, size as i32, &queue.handle(), ());
-    
-    // Create a buffer from the pool
-    let buffer = pool.create_buffer(
-        0, width as i32, height as i32,
-        stride as i32, wl_shm::Format::Argb8888,
-        &queue.handle(), ()
-    );
-    
-
-    // Save the pool and buffer in state
-    state.pool = Some(pool);
-    state.buffer = Some(buffer.clone());
-
-    // Attach the buffer to the surface
-    surface.attach(Some(&buffer), 0, 0);
-    
-    // Mark the entire surface as damaged (needs redrawing)
-    surface.damage(0, 0, width as i32, height as i32);
-    
-    // Commit the surface to apply changes
-    surface.commit();
 
     // Keep the application running
     while !state.coords_received {
