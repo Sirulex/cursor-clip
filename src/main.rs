@@ -2,8 +2,9 @@ use wayland_client::{
     globals::{registry_queue_init, GlobalList, GlobalListContents}, protocol::{wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface}, Connection, Dispatch, EventQueue, QueueHandle, WEnum
 };
 
-use wayland_protocols_wlr::
-    layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1,
+use wayland_protocols_wlr::{
+    layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
+    virtual_pointer::{self, v1::client::{zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1}},
 };
 
 use wayland_protocols::
@@ -19,9 +20,12 @@ struct State {
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     pointer: Option<wl_pointer::WlPointer>,
     shm: Option<wl_shm::WlShm>,
+    seat: Option<wl_seat::WlSeat>,
     single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     viewporter: Option<wp_viewporter::WpViewporter>,
     viewport: Option<wp_viewport::WpViewport>,
+    virtual_pointer_manager: Option<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1>,
+    virtual_pointer: Option<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,
     coords_received: bool,
     surface: Option<wl_surface::WlSurface>,
 }
@@ -121,6 +125,15 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 surface.damage(0, 0, width as i32, height as i32);
 
                 surface.commit();
+
+                //simulate mouse movement to trigger pointer enter event
+                if let Some(virtual_pointer) = &state.virtual_pointer {
+                    virtual_pointer.motion(0, 100.0, 0.0);
+                    virtual_pointer.frame(); //mark end of pointer sequence
+                    println!("Virtual pointer moved with (0.0, 0.0)");
+                } else {
+                    eprintln!("Virtual pointer not available");
+                }
             }
 
             zwlr_layer_surface_v1::Event::Closed => {
@@ -276,6 +289,32 @@ impl Dispatch<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1, (
     }
 }
 
+impl Dispatch<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1, ()> for State {
+    fn event(
+        _state: &mut State,
+        _manager: &zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
+        _event: zwlr_virtual_pointer_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle virtual pointer manager events if needed
+    }
+}
+
+impl Dispatch<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1, ()> for State {
+    fn event(
+        _state: &mut State,
+        _virtual_pointer: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+        _event: zwlr_virtual_pointer_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle virtual pointer events if needed
+    }
+}
+
 fn main() {
     let conn = Connection::connect_to_env().unwrap();
     let (globals, mut queue): (GlobalList, EventQueue<State>) = registry_queue_init::<State>(&conn).unwrap();
@@ -286,9 +325,12 @@ fn main() {
         layer_shell: None,
         pointer: None,
         shm: None,
+        seat: None,
         single_pixel_buffer_manager: None,
         viewporter: None,
         viewport: None,
+        virtual_pointer_manager: None,
+        virtual_pointer: None,
         coords_received: false,
         surface: None,
     };  
@@ -320,6 +362,7 @@ fn main() {
     if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
         // You can use the seat for input handling
         println!("Bound to wl_seat: {:?}", seat);
+        state.seat = Some(seat);
     } else {
         eprintln!("wl_seat not available");
     }
@@ -338,6 +381,19 @@ fn main() {
         state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
     } else {
         eprintln!("wp_single_pixel_buffer_manager_v1 not available");
+    }
+
+    //bind virtual_pointer_manager_v1
+    if let Ok(virtual_pointer_manager) = globals.bind::<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1, _, _>(&queue.handle(), 1..=1, ()) {
+        println!("Bound to zwlr_virtual_pointer_manager_v1: {:?}", virtual_pointer_manager);
+        // Create a virtual pointer
+        if let Some(seat) = &state.seat {
+            let virtual_pointer = virtual_pointer_manager.create_virtual_pointer(Some(seat), &queue.handle(), ());
+            state.virtual_pointer = Some(virtual_pointer);
+        }
+        state.virtual_pointer_manager = Some(virtual_pointer_manager);
+    } else {
+        eprintln!("zwlr_virtual_pointer_manager_v1 not available");
     }
 
    
