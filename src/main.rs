@@ -12,10 +12,10 @@ use wayland_protocols_wlr::{
     virtual_pointer::v1::client::{zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1},
 };
 
-use wayland_protocols::wp::{
+use wayland_protocols::{wp::{
     single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
     viewporter::client::{wp_viewport, wp_viewporter},
-};
+}, xdg::shell::client::{xdg_wm_base,xdg_surface,xdg_toplevel}};
 
 //use smithay_client_toolkit::{
 //    shm::{slot::SlotPool, Shm}
@@ -29,6 +29,7 @@ use std::os::unix::io::AsRawFd;
 struct State {
     compositor: Option<wl_compositor::WlCompositor>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    xdg_wm_base: Option<xdg_wm_base::XdgWmBase>,
     pointer: Option<wl_pointer::WlPointer>,
     shm: Option<wl_shm::WlShm>,
     pool: Option<wl_shm_pool::WlShmPool>,
@@ -103,6 +104,72 @@ impl Dispatch<wl_surface::WlSurface, ()> for State {
         _qhandle: &QueueHandle<State>,
     ) {
         // Handle surface events if needed
+    }
+}
+
+impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
+    fn event(
+        _state: &mut State,
+        _xdg_wm_base: &xdg_wm_base::XdgWmBase,
+        _event: xdg_wm_base::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle xdg_wm_base events if needed
+        match _event {
+            xdg_wm_base::Event::Ping { serial } => {
+                // Respond to ping events
+                _xdg_wm_base.pong(serial);
+                println!("Received ping with serial: {}", serial);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<xdg_surface::XdgSurface, ()> for State {
+    fn event(
+        _state: &mut State,
+        _xdg_surface: &xdg_surface::XdgSurface,
+        _event: xdg_surface::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle xdg_surface events if needed
+        match _event {
+            xdg_surface::Event::Configure { serial } => {
+                // Acknowledge the configure event
+                _xdg_surface.ack_configure(serial);
+                println!("XDG surface configured with serial: {}", serial);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
+    fn event(
+        _state: &mut State,
+        _xdg_toplevel: &xdg_toplevel::XdgToplevel,
+        _event: xdg_toplevel::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<State>,
+    ) {
+        // Handle xdg_toplevel events if needed
+        match _event {
+            xdg_toplevel::Event::Configure { width, height, states } => {
+                // Handle toplevel configuration
+                println!("XDG toplevel configured: {}x{} with states: {:?}", width, height, states);
+            }
+            xdg_toplevel::Event::Close => {
+                // Handle close event
+                println!("XDG toplevel closed");
+            }
+            _ => {}
+        }
     }
 }
 
@@ -441,6 +508,7 @@ fn main() {
     let mut state = State {
         compositor: None,
         layer_shell: None,
+        xdg_wm_base: None,
         pointer: None,
         shm: None,
         seat: None,
@@ -473,6 +541,19 @@ fn main() {
         state.layer_shell = Some(layer_shell);
     } else {
         eprintln!("zwlr_layer_shell_v1 not available");
+    }
+
+    if let Ok(xdg_shell) =
+        globals.bind::<xdg_wm_base::XdgWmBase, _, _>(
+            &queue.handle(),
+            1..=1,
+            (),
+        )
+    {
+        println!("Bound to xdg_wm_base: {:?}", xdg_shell);
+        state.xdg_wm_base = Some(xdg_shell);
+    } else {
+        eprintln!("xdg_wm_base not available");
     }
 
     // Initialize SHM
@@ -552,6 +633,19 @@ fn main() {
         .expect("Compositor not initialized");
     let surface = compositor.create_surface(&queue.handle(), ());
     state.surface = Some(surface.clone()); //valid as surface is basically a reference to the proxy object
+
+    let xdg_wm_base = state
+        .xdg_wm_base
+        .as_ref()
+        .expect("XDG WM Base not initialized");
+
+    //let xdg_surface=xdg_wm_base.get_xdg_surface( //only layer shell or xdg shell can be used at the same time
+    //    &surface,
+    //    &queue.handle(),
+    //    (),
+    //); // Create an xdg surface
+
+    //let xdg_toplevel = xdg_surface.get_toplevel(&queue.handle(), ()); // Create a toplevel surface
 
     let layer_shell = state
         .layer_shell
