@@ -12,10 +12,13 @@ use wayland_protocols_wlr::{
     virtual_pointer::v1::client::{zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1},
 };
 
-use wayland_protocols::{wp::{
-    single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
-    viewporter::client::{wp_viewport, wp_viewporter},
-}, xdg::shell::client::{xdg_wm_base,xdg_surface,xdg_toplevel}};
+use wayland_protocols::{
+    wp::{
+        single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
+        viewporter::client::{wp_viewport, wp_viewporter},
+    },
+    xdg::{shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base}},
+};
 
 //use smithay_client_toolkit::{
 //    shm::{slot::SlotPool, Shm}
@@ -33,16 +36,18 @@ struct State {
     pointer: Option<wl_pointer::WlPointer>,
     shm: Option<wl_shm::WlShm>,
     pool: Option<wl_shm_pool::WlShmPool>,
-    buffer: Option<wl_buffer::WlBuffer>,
     seat: Option<wl_seat::WlSeat>,
     single_pixel_buffer_manager:
-        Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
+    Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     viewporter: Option<wp_viewporter::WpViewporter>,
-    viewport: Option<wp_viewport::WpViewport>,
     virtual_pointer_manager: Option<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1>,
     virtual_pointer: Option<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,
     coords_received: bool,
-    surface: Option<wl_surface::WlSurface>,
+    capture_layer_ready: bool,
+    capture_surface: Option<wl_surface::WlSurface>,
+    capture_buffer: Option<wl_buffer::WlBuffer>,
+    update_surface: Option<wl_surface::WlSurface>,
+    update_buffer: Option<wl_buffer::WlBuffer>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
@@ -151,18 +156,41 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
 
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
     fn event(
-        _state: &mut State,
+        state: &mut State,
         _xdg_toplevel: &xdg_toplevel::XdgToplevel,
         _event: xdg_toplevel::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<State>,
+        qhandle: &QueueHandle<State>,
     ) {
         // Handle xdg_toplevel events if needed
         match _event {
-            xdg_toplevel::Event::Configure { width, height, states } => {
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => {
                 // Handle toplevel configuration
-                println!("XDG toplevel configured: {}x{} with states: {:?}", width, height, states);
+                let Some(update_surface) = &state.update_surface else {
+                    return;
+                };
+
+                if let Some(update_buffer) = &state.update_buffer {
+                    update_surface.attach(Some(update_buffer), 0, 0);
+                }
+
+                let Some(viewporter) = &state.viewporter else {
+                    eprintln!("Viewporter not available");
+                    return;
+                };
+                let viewport: wp_viewport::WpViewport =viewporter.get_viewport(&update_surface, qhandle, ());
+
+                viewport.set_destination(width as i32, height as i32);
+
+                // Mark the entire surface as damaged
+                update_surface.damage(0, 0, width as i32, height as i32);
+
+                update_surface.commit();
             }
             xdg_toplevel::Event::Close => {
                 // Handle close event
@@ -196,94 +224,56 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 let Some(manager) = &state.single_pixel_buffer_manager else {
                     return;
                 };
-                let Some(surface) = &state.surface else {
-                    return;
-                };
+
                 let Some(compositor) = &state.compositor else {
                     return;
                 };
+
+                let Some(capture_surface) = &state.capture_surface else {
+                    return;
+                };
+
+                if let Some(buffer) = &state.capture_buffer {
+                    capture_surface.attach(Some(buffer), 0, 0);
+                }
+
+                let Some(viewporter) = &state.viewporter else {
+                    eprintln!("Viewporter not available");
+                    return;
+                };
+                let viewport: wp_viewport::WpViewport =viewporter.get_viewport(&capture_surface, qhandle, ());
+                viewport.set_destination(width as i32, height as i32);
 
                 // Create and attach the buffer
                 //let buffer = manager.create_u32_rgba_buffer(0xFF, 0x00, 0x00, 0x80, qhandle, ()); //manual buffer alloc
                 //surface.attach(Some(&buffer), 0, 0);
 
-                // Create a buffer with red color
-                let buf_width = 1;
-                let buf_height = 1;
-                let stride = buf_width * 4; // 4 bytes per pixel (ARGB8888)
-                let size = stride * buf_height;
-
-                let path = "/dev/shm/wayland-shared-buffer";
-                let file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .open(path)
-                    .expect("Failed to open shared memory file");
-
-                file.set_len(size as u64).expect("Failed to set file size");
-
-                let mut mmap: MmapMut = unsafe {
-                    MmapOptions::new()
-                        .len(size)
-                        .map_mut(&file)
-                        .expect("Failed to map the file")
-                };
-
-                for pixel in mmap.chunks_exact_mut(4) {
-                    pixel[0] = 0x00; // Blue
-                    pixel[1] = 0x00; // Green-
-                    pixel[2] = 0xFF; // Red
-                    pixel[3] = 0xFF; // Alpha
-                }
-
-                let fd = file.as_raw_fd();
-                let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
-                // Create a pool from the file descriptor
-                let shm = state.shm.as_ref().expect("SHM not initialized");
-                let pool = shm.create_pool(borrowed_fd, size as i32, qhandle, ());
-
-                // Create a buffer from the pool
-                let buffer = pool.create_buffer(
-                    0,
-                    buf_width as i32,
-                    buf_height as i32,
-                    stride as i32,
-                    wl_shm::Format::Argb8888,
-                    qhandle,
-                    (),
-                );
-
-                // Save the pool and buffer in state
-                state.pool = Some(pool);
-                state.buffer = Some(buffer.clone());
-
-                // --- THIS IS THE CRUCIAL NEW PART ---
                 // 1. Create a region object from the compositor.
                 let region = compositor.create_region(qhandle, ());
                 // 2. Add a rectangle to the region that covers the entire surface.
                 region.add(0, 0, width as i32, height as i32);
                 // 3. Set this as the input region for the surface.
-                surface.set_input_region(Some(&region));
+                capture_surface.set_input_region(Some(&region));
                 // 4. The surface now holds the state of the region. We can
                 //    destroy our client-side handle to it.
                 region.destroy();
                 // --- END OF NEW PART ---
-                
-                surface.attach(Some(&buffer), 0, 0);
-                
-                if let Some(viewport) = &state.viewport {
-                    viewport.set_destination(width as i32, height as i32);
-                }
-
+   
                 // Mark the entire surface as damaged
-                surface.damage(0, 0, width as i32, height as i32);
+                capture_surface.damage(0, 0, width as i32, height as i32);
 
                 // Commit all pending state changes at once:
                 // - The attached buffer
                 // - The new input region-
                 // - The damage
-                surface.commit();
+                if (!state.capture_layer_ready) {
+                    state.capture_layer_ready = true; // Set flag to indicate layer is ready
+                    println!("setting bool to true (capture_layer_ready)");
+                } else {
+                    println!("capture_layer_ready is already true, now at update layer surface");
+                }
+
+                capture_surface.commit();
             }
 
             zwlr_layer_surface_v1::Event::Closed => {
@@ -513,14 +503,16 @@ fn main() {
         shm: None,
         seat: None,
         pool: None,
-        buffer: None,
         single_pixel_buffer_manager: None,
         viewporter: None,
-        viewport: None,
         virtual_pointer_manager: None,
         virtual_pointer: None,
         coords_received: false,
-        surface: None,
+        capture_layer_ready: false,
+        capture_surface: None,
+        capture_buffer: None,
+        update_surface: None,
+        update_buffer: None,
     };
 
     queue.roundtrip(&mut state).unwrap();
@@ -543,14 +535,8 @@ fn main() {
         eprintln!("zwlr_layer_shell_v1 not available");
     }
 
-    if let Ok(xdg_shell) =
-        globals.bind::<xdg_wm_base::XdgWmBase, _, _>(
-            &queue.handle(),
-            1..=1,
-            (),
-        )
+    if let Ok(xdg_shell) = globals.bind::<xdg_wm_base::XdgWmBase, _, _>(&queue.handle(), 1..=1, ())
     {
-        println!("Bound to xdg_wm_base: {:?}", xdg_shell);
         state.xdg_wm_base = Some(xdg_shell);
     } else {
         eprintln!("xdg_wm_base not available");
@@ -565,18 +551,13 @@ fn main() {
 
     // Bind wl_seat
     if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
-        // You can use the seat for input handling
-        println!("Bound to wl_seat: {:?}", seat);
         state.seat = Some(seat);
     } else {
         eprintln!("wl_seat not available");
     }
 
     //bind wp_viewporter
-    if let Ok(viewporter) =
-        globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ())
-    {
-        println!("Bound to wp_viewporter: {:?}", viewporter);
+    if let Ok(viewporter) = globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ()) {
         state.viewporter = Some(viewporter);
     } else {
         eprintln!("wp_viewporter not available");
@@ -590,10 +571,6 @@ fn main() {
             (),
         )
     {
-        println!(
-            "Bound to wp_single_pixel_buffer_manager_v1: {:?}",
-            single_pixel_buffer_manager
-        );
         state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
     } else {
         eprintln!("wp_single_pixel_buffer_manager_v1 not available");
@@ -607,11 +584,7 @@ fn main() {
             (),
         )
     {
-        println!(
-            "Bound to zwlr_virtual_pointer_manager_v1: {:?}",
-            virtual_pointer_manager
-        );
-        // Create a virtual pointer
+        // Create a virtual pointer for synthetic input
         if let Some(seat) = &state.seat {
             let virtual_pointer =
                 virtual_pointer_manager.create_virtual_pointer(Some(seat), &queue.handle(), ());
@@ -622,37 +595,93 @@ fn main() {
         eprintln!("zwlr_virtual_pointer_manager_v1 not available");
     }
 
-    println!("Wayland client initialized successfully.");
-    println!("Compositor: {:?}", state.compositor);
-    println!("Layer Shell: {:?}", state.layer_shell);
-    println!("Pointer: {:?}", state.pointer);
-
     let compositor = state
         .compositor
         .as_ref()
         .expect("Compositor not initialized");
-    let surface = compositor.create_surface(&queue.handle(), ());
-    state.surface = Some(surface.clone()); //valid as surface is basically a reference to the proxy object
+
+
+    let capture_surface = compositor.create_surface(&queue.handle(), ());
+    let update_surface = compositor.create_surface(&queue.handle(), ());
+
+    state.capture_surface = Some(capture_surface.clone()); //valid as surface is basically a reference to the proxy object
+    state.update_surface = Some(update_surface.clone());
 
     let xdg_wm_base = state
         .xdg_wm_base
         .as_ref()
         .expect("XDG WM Base not initialized");
 
-    //let xdg_surface=xdg_wm_base.get_xdg_surface( //only layer shell or xdg shell can be used at the same time
-    //    &surface,
-    //    &queue.handle(),
-    //    (),
-    //); // Create an xdg surface
-
-    //let xdg_toplevel = xdg_surface.get_toplevel(&queue.handle(), ()); // Create a toplevel surface
+    let xdg_surface=xdg_wm_base.get_xdg_surface( //only layer shell or xdg shell can be used at the same time
+        &update_surface,
+        &queue.handle(),
+        (),
+    ); // Create an xdg surfac
+    let xdg_toplevel = xdg_surface.get_toplevel(&queue.handle(), ()); // Create a toplevel surface
+    xdg_toplevel.set_title("Cursor Clip".to_string()); // Set the title of the toplevel surface
+    xdg_toplevel.set_app_id("com.sirulex.cursor_clip".to_string()); // Set the app ID
 
     let layer_shell = state
         .layer_shell
         .as_ref()
         .expect("Layer Shell not initialized");
-    let layer_surface = layer_shell.get_layer_surface(
-        &surface,
+
+    // Create a buffer with blue color
+    let buf_width = 1;
+    let buf_height = 1;
+    let stride = buf_width * 4; // 4 bytes per pixel (ARGB8888)
+    let size = stride * buf_height;
+
+    let path = "/dev/shm/wayland-shared-buffer";
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .expect("Failed to open shared memory file");
+
+    file.set_len(size as u64).expect("Failed to set file size");
+
+    let mut mmap: MmapMut = unsafe {
+        MmapOptions::new()
+            .len(size)
+            .map_mut(&file)
+            .expect("Failed to map the file")
+    };
+
+    for pixel in mmap.chunks_exact_mut(4) {
+        pixel[0] = 0xFF; // Blue
+        pixel[1] = 0x00; // Green-
+        pixel[2] = 0x00; // Red
+        pixel[3] = 0xFF; // Alpha
+    }
+
+    let fd = file.as_raw_fd();
+    let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+    // Create a pool from the file descriptor
+    let shm = state.shm.as_ref().expect("SHM not initialized");
+    let pool = shm.create_pool(borrowed_fd, size as i32, &queue.handle(), ());
+
+    // Create a buffer from the pool
+    let capture_buffer = pool.create_buffer(
+        0,
+        buf_width as i32,
+        buf_height as i32,
+        stride as i32,
+        wl_shm::Format::Argb8888,
+        &queue.handle(),
+        (),
+    );
+
+    let update_buffer = capture_buffer.clone();
+    state.update_buffer = Some(update_buffer);
+
+    // Save the pool and buffer in state
+    state.pool = Some(pool);
+    state.capture_buffer = Some(capture_buffer.clone());
+
+    let capture_layer_surface = layer_shell.get_layer_surface(
+        &capture_surface,
         None,                                // output (None means all outputs)
         zwlr_layer_shell_v1::Layer::Overlay, // layer type
         "cursor-clip".to_string(),           // namespace
@@ -660,32 +689,45 @@ fn main() {
         (), // user data
     );
 
-    if let Some(viewporter) = &state.viewporter {
-        // Create a viewport for the layer surface
-        let viewport: wp_viewport::WpViewport =
-            viewporter.get_viewport(&surface, &queue.handle(), ());
-        state.viewport = Some(viewport);
-    } else {
-        eprintln!("Viewporter not available");
-    }
-
     // Configure the layer surface
     //layer_surface.set_size(200, 300); // Width and height in pixels (no need due to autoscaling via viewporter)
-    layer_surface.set_anchor(
+    capture_layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
+    capture_layer_surface.set_anchor(
         zwlr_layer_surface_v1::Anchor::Top
             | zwlr_layer_surface_v1::Anchor::Left
             | zwlr_layer_surface_v1::Anchor::Right
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
-    layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
+    
 
-    surface.commit();
+    
+    //let update_layer_surface = layer_shell.get_layer_surface(
+    //    &update_surface,
+    //    None,                                // output (None means all outputs)
+    //    zwlr_layer_shell_v1::Layer::Overlay, // layer type
+    //    "cursor-clip".to_string(),           // namespace
+    //    &queue.handle(),
+    //    (), // user data
+    //);
+    //
+    //update_layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
+    //update_layer_surface.set_anchor(
+    //    zwlr_layer_surface_v1::Anchor::Top
+    //        | zwlr_layer_surface_v1::Anchor::Left
+    //        | zwlr_layer_surface_v1::Anchor::Right
+    //        | zwlr_layer_surface_v1::Anchor::Bottom,
+    //); // Anchor to all edges
 
-    // Dispatch events to handle surface configuration
-    queue.roundtrip(&mut state).unwrap();
-
+    //capture_surface.commit();
+    
+    update_surface.commit();
+    //update_surface.destroy();;
+    
+    //update_surface.destroy();
+    //capture_layer_surface.destroy();
+    //update_layer_surface.destroy();
     // Keep the application running
-    while !state.coords_received {
+    while true {//!state.coords_received {
         queue.blocking_dispatch(&mut state).unwrap();
     }
 }
