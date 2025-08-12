@@ -3,6 +3,10 @@ name = "cursor-clip"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "cursor-clip"
+path = "src/main.rs"
+
 [dependencies]
 wayland-client = "0.31.10"
 wayland-protocols = { version = "0.32.8", features = ["client","staging"] }

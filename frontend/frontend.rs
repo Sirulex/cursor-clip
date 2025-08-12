@@ -19,9 +19,8 @@ use wayland_protocols::{
     xdg::shell::client::xdg_wm_base,
 };
 
-use crate::state::State;
-use crate::buffer;
-use crate::ipc::{FrontendMessage, BackendMessage, ClipboardItem};
+use crate::shared::{FrontendMessage, BackendMessage, ClipboardItem};
+use crate::frontend::{state::State, buffer, gtk_overlay};
 
 pub struct FrontendClient {
     stream: Option<UnixStream>,
@@ -114,8 +113,8 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create the GTK window in the current thread without async complexity
             // For now, we'll show sample data and implement proper async backend communication later
-            let client_clone = client_arc.clone();
-            if let Err(e) = crate::gtk_overlay::create_clipboard_overlay_sync(x, y) {
+            let _client_clone = client_arc.clone();
+            if let Err(e) = gtk_overlay::create_clipboard_overlay_sync(x, y) {
                 eprintln!("Error creating GTK overlay: {:?}", e);
             }
             
@@ -123,11 +122,11 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
         }
         
         // Handle close requests
-        if gtk_window_created && (crate::gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
+        if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
             println!("Close requested - closing both capture layer and GTK window");
             
             // Close GTK overlay window
-            crate::gtk_overlay::reset_close_flags();
+            gtk_overlay::reset_close_flags();
             
             // Clean up capture layer surface
             if let Some(capture_layer_surface) = &state.capture_layer_surface {

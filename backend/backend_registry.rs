@@ -1,7 +1,7 @@
 use wayland_client::{
     Connection, protocol::wl_registry,
 };
-use crate::backend::BackendState;
+use crate::backend::backend::BackendState;
 
 impl wayland_client::Dispatch<wl_registry::WlRegistry, ()> for BackendState {
     fn event(

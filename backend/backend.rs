@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::ipc::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
+use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
 
 pub struct ClipboardBackend {
     history: Arc<Mutex<Vec<ClipboardItem>>>,

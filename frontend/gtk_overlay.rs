@@ -6,8 +6,8 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::ipc::{ClipboardItem, ClipboardContentType};
-use crate::sync_client::SyncFrontendClient;
+use crate::shared::{ClipboardItem, ClipboardContentType};
+use crate::frontend::sync_client::SyncFrontendClient;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -116,6 +116,17 @@ fn create_overlay_content() -> Box {
     for item in &items {
         let row = create_clipboard_item_from_backend(&item);
         list_box.append(&row);
+    }
+
+        // If no items, show a placeholder
+    if items.is_empty() {
+        let placeholder_row = gtk4::ListBoxRow::new();
+        let placeholder_label = Label::new(Some("No clipboard history yet"));
+        placeholder_label.add_css_class("dim-label");
+        placeholder_label.set_margin_top(20);
+        placeholder_label.set_margin_bottom(20);
+        placeholder_row.set_child(Some(&placeholder_label));
+        list_box.append(&placeholder_row);
     }
 
     // Handle item selection

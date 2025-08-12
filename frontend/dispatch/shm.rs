@@ -1,7 +1,7 @@
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::protocol::{wl_buffer, wl_shm, wl_shm_pool};
 
-use crate::state::State;
+use crate::frontend::state::State;
 
 impl Dispatch<wl_shm::WlShm, ()> for State {
     fn event(

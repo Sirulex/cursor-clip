@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixStream;
 use std::io::{BufRead, BufReader, Write};
-use crate::ipc::{FrontendMessage, BackendMessage, ClipboardItem};
+use crate::shared::{FrontendMessage, BackendMessage, ClipboardItem};
 
 pub struct SyncFrontendClient {
     stream: UnixStream,

@@ -1,13 +1,15 @@
 use clap::{Arg, Command};
 
-mod state;
-mod buffer;
-mod dispatch;
-mod gtk_overlay;
-mod ipc;
+#[path = "../backend/mod.rs"]
 mod backend;
+#[path = "../frontend/mod.rs"] 
 mod frontend;
-mod sync_client;
+#[path = "../shared/mod.rs"]
+mod shared;
+
+use backend::*;
+use frontend::*;
+use shared::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

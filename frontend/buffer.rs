@@ -4,7 +4,7 @@ use std::os::fd::BorrowedFd;
 use std::os::unix::io::AsRawFd;
 use wayland_client::{protocol::{wl_shm, wl_shm_pool, wl_buffer}, QueueHandle};
 
-use crate::state::State;
+use crate::frontend::state::State;
 
 pub fn create_shared_buffer(
     shm: &wl_shm::WlShm,
