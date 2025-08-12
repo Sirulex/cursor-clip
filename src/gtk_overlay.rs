@@ -58,7 +58,7 @@ fn create_overlay_content() -> Box {
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
     clear_button.add_css_class("destructive-action");
-    header_bar.pack_end(&clear_button);
+    header_bar.pack_start(&clear_button);
 
     main_box.append(&header_bar);
 
@@ -172,7 +172,7 @@ fn create_layer_shell_window(app: &Application, x: f64, y: f64) -> adw::Applicat
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Clipboard History")
-        .decorated(false)  // Disable window decorations to avoid duplicate close buttons
+        .decorated(false) 
         //.default_width(600)
         //.default_height(300)
         //.resizable(true)

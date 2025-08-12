@@ -31,7 +31,7 @@ pub fn create_shared_buffer(
         pixel[0] = 0xFF; // Blue
         pixel[1] = 0x00; // Green
         pixel[2] = 0x00; // Red
-        pixel[3] = 0xFF; // Alpha
+        pixel[3] = 0x00; // Alpha 0xFF
     }
 
     let fd = file.as_raw_fd();
@@ -79,7 +79,7 @@ pub fn create_red_buffer(
         pixel[0] = 0x00; // Blue
         pixel[1] = 0x00; // Green
         pixel[2] = 0xFF; // Red
-        pixel[3] = 0xFF; // Alpha
+        pixel[3] = 0x00; // Alpha
     }
 
     let fd = file.as_raw_fd();
