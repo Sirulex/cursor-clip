@@ -2,12 +2,23 @@ use gtk4::prelude::*;
 use gtk4::{Application, Button, Label, Box, Orientation, Align};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
-use std::sync::Once;
+use std::sync::{Once, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::ipc::{ClipboardItem, ClipboardContentType};
-use crate::sync_client::SyncFrontendClient;
+use tokio::sync::Mutex;
+use crate::frontend::FrontendClient;
+use crate::ipc::ClipboardItem;
+
+use gtk4::prelude::*;
+use gtk4::{Application, Button, Label, Box, Orientation, Align};
+use gtk4_layer_shell::{Edge, Layer, LayerShell};
+use libadwaita::{self as adw, prelude::*};
+use std::sync::{Once, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
+use tokio::sync::Mutex;
+use crate::frontend::FrontendClient;
+use crate::ipc::ClipboardItem;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -42,7 +53,7 @@ fn init_application() -> Application {
 }
 
 /// Create a Windows 11-style clipboard history list with backend data
-fn create_overlay_content() -> Box {
+fn create_overlay_content(client: Arc<Mutex<FrontendClient>>) -> Box {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -77,55 +88,49 @@ fn create_overlay_content() -> Box {
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
 
     // Load clipboard items from backend
-    let items = match SyncFrontendClient::new() {
-        Ok(mut client) => {
-            client.get_history().unwrap_or_else(|e| {
-                eprintln!("Error getting clipboard history: {}", e);
-                // Fall back to sample data
-                vec![
-                    ClipboardItem {
-                        id: 1,
-                        content: "Hello, world!".to_string(),
-                        content_type: ClipboardContentType::Text,
-                        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 120,
-                    },
-                    ClipboardItem {
-                        id: 2,
-                        content: "https://github.com/rust-lang/rust".to_string(),
-                        content_type: ClipboardContentType::Url,
-                        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 300,
-                    },
-                ]
-            })
-        }
-        Err(e) => {
-            eprintln!("Error connecting to backend: {}", e);
-            // Fall back to sample data
-            vec![
-                ClipboardItem {
-                    id: 1,
-                    content: "Backend not available - sample data".to_string(),
-                    content_type: ClipboardContentType::Text,
-                    timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 120,
-                },
-            ]
-        }
-    };
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let items = rt.block_on(async {
+        let mut client_lock = client.lock().await;
+        client_lock.get_history().await.unwrap_or_else(|e| {
+            eprintln!("Error getting clipboard history: {}", e);
+            Vec::new()
+        })
+    });
 
-        // Populate the list with clipboard items
+    // Populate list with items from backend
     for item in &items {
         let row = create_clipboard_item_from_backend(&item);
         list_box.append(&row);
     }
 
+    // If no items, show a placeholder
+    if items.is_empty() {
+        let placeholder_row = gtk4::ListBoxRow::new();
+        let placeholder_label = Label::new(Some("No clipboard history yet"));
+        placeholder_label.add_css_class("dim-label");
+        placeholder_label.set_margin_top(20);
+        placeholder_label.set_margin_bottom(20);
+        placeholder_row.set_child(Some(&placeholder_label));
+        list_box.append(&placeholder_row);
+    }
+
     // Handle item selection
+    let client_for_selection = client.clone();
     list_box.connect_row_selected(move |_, row| {
         if let Some(row) = row {
             let index = row.index() as usize;
             if index < items.len() {
-                let content = &items[index].content;
+                let content = items[index].content.clone();
                 println!("Selected clipboard item: {}", content);
-                // TODO: Set clipboard content via backend when we have proper async handling
+                
+                // Set clipboard content via backend
+                let client_clone = client_for_selection.clone();
+                tokio::spawn(async move {
+                    let mut client_lock = client_clone.lock().await;
+                    if let Err(e) = client_lock.set_clipboard(content).await {
+                        eprintln!("Error setting clipboard: {}", e);
+                    }
+                });
             }
         }
     });
@@ -134,9 +139,16 @@ fn create_overlay_content() -> Box {
     main_box.append(&scrolled_window);
 
     // Connect button signals
+    let client_for_clear = client.clone();
     clear_button.connect_clicked(move |_| {
         println!("Clear all clipboard history");
-        // TODO: Clear clipboard history via backend when we have proper async handling
+        let client_clone = client_for_clear.clone();
+        tokio::spawn(async move {
+            let mut client_lock = client_clone.lock().await;
+            if let Err(e) = client_lock.clear_history().await {
+                eprintln!("Error clearing clipboard history: {}", e);
+            }
+        });
     });
 
     close_button.connect_clicked(move |_| {
@@ -153,13 +165,18 @@ fn create_overlay_content() -> Box {
     main_box
 }
 
-/// Sync version of the main entry point for creating the overlay
-pub fn create_clipboard_overlay_sync(x: f64, y: f64) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
+/// Async version of the main entry point for creating the overlay
+pub async fn create_clipboard_overlay_async(
+    x: f64, 
+    y: f64, 
+    client: Arc<Mutex<FrontendClient>>
+) -> Result<(), Box<dyn std::error::Error>> {
     let app = init_application();
     
     let app_clone = app.clone();
+    let client_clone = client.clone();
     app.connect_activate(move |_| {
-        let window = create_layer_shell_window_sync(&app_clone, x, y);
+        let window = create_layer_shell_window(&app_clone, x, y, client_clone.clone());
         
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
@@ -181,11 +198,35 @@ pub fn create_clipboard_overlay_sync(x: f64, y: f64) -> Result<(), std::boxed::B
     Ok(())
 }
 
-/// Create and configure the sync layer shell window
-fn create_layer_shell_window_sync(
+/// Legacy sync version for compatibility
+pub fn create_clipboard_overlay(x: f64, y: f64) {
+    // For the sync version, we'll create a dummy client that shows placeholder data
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = rt.block_on(async {
+        // Try to connect to backend, if it fails, we'll show placeholder data
+        match FrontendClient::new().await {
+            Ok(client) => Arc::new(Mutex::new(client)),
+            Err(_) => {
+                eprintln!("Could not connect to backend, showing placeholder data");
+                // Create a dummy client - this won't work but prevents crashes
+                return None;
+            }
+        }
+    });
+
+    if let Some(client) = client {
+        rt.block_on(async {
+            let _ = create_clipboard_overlay_async(x, y, client).await;
+        });
+    }
+}
+
+/// Create and configure the layer shell window
+fn create_layer_shell_window(
     app: &Application, 
     x: f64, 
-    y: f64
+    y: f64, 
+    client: Arc<Mutex<FrontendClient>>
 ) -> adw::ApplicationWindow {
     // Create the main window using Adwaita ApplicationWindow
     let window = adw::ApplicationWindow::builder()
@@ -218,7 +259,7 @@ fn create_layer_shell_window_sync(
     apply_custom_styling(&window);
 
     // Create and set content
-    let content = create_overlay_content();
+    let content = create_overlay_content(client);
     window.set_content(Some(&content));
 
     // Add focus-out handler to close when clicking outside
@@ -239,13 +280,6 @@ fn create_layer_shell_window_sync(
     });
 
     window
-}
-
-/// Legacy sync version for compatibility
-pub fn create_clipboard_overlay(x: f64, y: f64) {
-    if let Err(e) = create_clipboard_overlay_sync(x, y) {
-        eprintln!("Error creating clipboard overlay: {:?}", e);
-    }
 }
 
 /// Apply custom CSS styling for modern GNOME-style rounded window
@@ -311,6 +345,8 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
     );
 }
 
+
+
 /// Show the overlay if it's hidden
 pub fn show_overlay() {
     OVERLAY_WINDOW.with(|window| {
@@ -330,8 +366,8 @@ pub fn hide_overlay() {
     });
 }
 
-/// Create a clipboard history item row from backend data
-fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow {
+/// Create a clipboard history item row similar to Windows 11 style
+fn create_clipboard_item(content: &str, content_type: &str, time: &str) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
 
@@ -344,15 +380,15 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
     
-    let type_label = Label::new(Some(&item.content_type.get_icon()));
+    let type_label = Label::new(Some(&format!("{}", get_content_type_icon(content_type))));
     type_label.add_css_class("caption");
     
-    let type_text = Label::new(Some(&capitalize_first_letter(item.content_type.to_string())));
+    let type_text = Label::new(Some(&capitalize_first_letter(content_type)));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);
     
-    let time_label = Label::new(Some(&format_timestamp(item.timestamp)));
+    let time_label = Label::new(Some(time));
     time_label.add_css_class("caption");
     time_label.add_css_class("clipboard-time");
     time_label.set_halign(Align::End);
@@ -364,10 +400,10 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     main_box.append(&header_box);
 
     // Content preview
-    let preview_text = if item.content.len() > 100 {
-        format!("{}...", &item.content[..97])
+    let preview_text = if content.len() > 100 {
+        format!("{}...", &content[..97])
     } else {
-        item.content.clone()
+        content.to_string()
     };
 
     let content_label = Label::new(Some(&preview_text));
@@ -385,26 +421,16 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     row
 }
 
-/// Format Unix timestamp to relative time string
-fn format_timestamp(timestamp: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    
-    let diff = now.saturating_sub(timestamp);
-    
-    if diff < 60 {
-        "Just now".to_string()
-    } else if diff < 3600 {
-        let minutes = diff / 60;
-        format!("{} minute{} ago", minutes, if minutes == 1 { "" } else { "s" })
-    } else if diff < 86400 {
-        let hours = diff / 3600;
-        format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })
-    } else {
-        let days = diff / 86400;
-        format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+/// Get icon for content type
+fn get_content_type_icon(content_type: &str) -> &str {
+    match content_type {
+        "text" => "📝",
+        "url" => "🔗", 
+        "code" => "💻",
+        "password" => "🔒",
+        "file" => "📁",
+        "image" => "🖼️",
+        _ => "📄",
     }
 }
 

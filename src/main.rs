@@ -1,219 +1,34 @@
-use wayland_client::{
-    Connection, EventQueue,
-    globals::{GlobalList, registry_queue_init},
-    protocol::{wl_compositor, wl_seat, wl_shm},
-};
-
-use wayland_protocols_wlr::{
-    layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
-    virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1,
-};
-
-use wayland_protocols::{
-    wp::{
-        single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
-        viewporter::client::wp_viewporter,
-    },
-    xdg::shell::client::xdg_wm_base,
-};
+use clap::{Arg, Command};
 
 mod state;
 mod buffer;
 mod dispatch;
 mod gtk_overlay;
+mod ipc;
+mod backend;
+mod frontend;
+mod sync_client;
 
-use state::State;
-
-fn main() {
-    let conn = Connection::connect_to_env().unwrap();
-    let (globals, mut queue): (GlobalList, EventQueue<State>) =
-        registry_queue_init::<State>(&conn).unwrap();
-
-    // Create initial state
-    let mut state = State::new();
-
-    queue.roundtrip(&mut state).unwrap();
-
-    // Bind wl_compositor
-    if let Ok(compositor) =
-        globals.bind::<wl_compositor::WlCompositor, _, _>(&queue.handle(), 4..=5, ())
-    {
-        state.compositor = Some(compositor);
-    } else {
-        eprintln!("wl_compositor not available");
-    }
-
-    // Bind zwlr_layer_shell_v1
-    if let Ok(layer_shell) =
-        globals.bind::<zwlr_layer_shell_v1::ZwlrLayerShellV1, _, _>(&queue.handle(), 4..=4, ())
-    {
-        state.layer_shell = Some(layer_shell);
-    } else {
-        eprintln!("zwlr_layer_shell_v1 not available");
-    }
-
-    if let Ok(xdg_shell) = globals.bind::<xdg_wm_base::XdgWmBase, _, _>(&queue.handle(), 1..=1, ())
-    {
-        state.xdg_wm_base = Some(xdg_shell);
-    } else {
-        eprintln!("xdg_wm_base not available");
-    }
-
-    // Initialize SHM
-    if let Ok(shm) = globals.bind::<wl_shm::WlShm, _, _>(&queue.handle(), 1..=1, ()) {
-        state.shm = Some(shm);
-    } else {
-        eprintln!("wl_shm not available");
-    }
-
-    // Bind wl_seat
-    if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
-        state.seat = Some(seat);
-    } else {
-        eprintln!("wl_seat not available");
-    }
-
-    //bind wp_viewporter
-    if let Ok(viewporter) = globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ()) {
-        state.viewporter = Some(viewporter);
-    } else {
-        eprintln!("wp_viewporter not available");
-    }
-
-    // Bind wp_single_pixel_buffer_manager_v1
-    if let Ok(single_pixel_buffer_manager) =
-        globals.bind::<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1, _, _>(
-            &queue.handle(),
-            1..=1,
-            (),
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let matches = Command::new("cursor-clip")
+        .version("0.1.0")
+        .about("Clipboard manager with GUI overlay")
+        .arg(
+            Arg::new("daemon")
+                .long("daemon")
+                .help("Run as background daemon")
+                .action(clap::ArgAction::SetTrue),
         )
-    {
-        state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
+        .get_matches();
+
+    if matches.get_flag("daemon") {
+        println!("Starting clipboard backend daemon...");
+        backend::run_backend().await?;
     } else {
-        eprintln!("wp_single_pixel_buffer_manager_v1 not available");
+        println!("Starting clipboard frontend...");
+        frontend::run_frontend().await?;
     }
 
-    //bind virtual_pointer_manager_v1
-    if let Ok(virtual_pointer_manager) =
-        globals.bind::<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1, _, _>(
-            &queue.handle(),
-            1..=1,
-            (),
-        )
-    {
-        // Create a virtual pointer for synthetic input
-        if let Some(seat) = &state.seat {
-            let virtual_pointer =
-                virtual_pointer_manager.create_virtual_pointer(Some(seat), &queue.handle(), ());
-            state.virtual_pointer = Some(virtual_pointer);
-        }
-        state.virtual_pointer_manager = Some(virtual_pointer_manager);
-    } else {
-        eprintln!("zwlr_virtual_pointer_manager_v1 not available");
-    }
-
-    let compositor = state
-        .compositor
-        .as_ref()
-        .expect("Compositor not initialized");
-
-    let capture_surface = compositor.create_surface(&queue.handle(), ());
-    let update_surface = compositor.create_surface(&queue.handle(), ());
-
-    state.capture_surface = Some(capture_surface.clone()); //valid as surface is basically a reference to the proxy object
-    state.update_surface = Some(update_surface.clone());
-
-    let layer_shell = state
-        .layer_shell
-        .as_ref()
-        .expect("Layer Shell not initialized");
-
-    // Create buffers using the helper function
-    let shm = state.shm.as_ref().expect("SHM not initialized");
-    let (pool, capture_buffer) = buffer::create_shared_buffer(shm, 1, 1, &queue.handle())
-        .expect("Failed to create shared buffer");
-
-    let update_buffer = capture_buffer.clone();
-    state.update_buffer = Some(update_buffer);
-
-    // Save the pool and buffer in state
-    state.pool = Some(pool);
-    state.capture_buffer = Some(capture_buffer.clone());
-
-    let capture_layer_surface = layer_shell.get_layer_surface(
-        &capture_surface,
-        None,                                // output (None means all outputs)
-        zwlr_layer_shell_v1::Layer::Overlay, // layer type
-        "cursor-clip-capture".to_string(),   // namespace - different from GTK overlay
-        &queue.handle(),
-        (), // user data
-    );
-
-    // Configure the capture layer surface
-    capture_layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
-    capture_layer_surface.set_anchor(
-        zwlr_layer_surface_v1::Anchor::Top
-            | zwlr_layer_surface_v1::Anchor::Left
-            | zwlr_layer_surface_v1::Anchor::Right
-            | zwlr_layer_surface_v1::Anchor::Bottom,
-    ); // Anchor to all edges
-
-    //capture_layer_surface.set_margin(100, 100, 200, 100);
-    
-    // Store the capture layer surface in state
-    state.capture_layer_surface = Some(capture_layer_surface);
-
-    // Commit the capture surface to trigger the configure event
-    capture_surface.commit();
-    
-    // Keep the application running
-    let mut gtk_window_created = false;
-    loop {
-        // Process Wayland events
-        queue.blocking_dispatch(&mut state).unwrap();
-
-        // Create GTK overlay window when coordinates are received
-        if state.coords_received && !gtk_window_created {
-    
-            println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", state.received_x, state.received_y);
-
-            // Create the GTK window at the coordinates (capture layer remains active)
-            gtk_overlay::create_clipboard_overlay(state.received_x, state.received_y);
-            gtk_window_created = true;
-           
-        }
-        
-        // Handle close requests from either source:
-        // 1. Close button in GTK overlay (top-right corner)  
-        // 2. Focus lost (clicking outside the GTK overlay)
-        // 3. Left mouse click on capture layer (if it receives events)
-        // All actions will close both the GTK overlay and capture layer
-        if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
-            println!("Close requested - closing both capture layer and GTK window");
-            println!("  Close reason: gtk_overlay={}, capture_layer={}", 
-                     gtk_overlay::is_close_requested(), state.capture_layer_clicked);
-            
-            // Close GTK overlay window
-            gtk_overlay::reset_close_flags();
-            
-            // Clean up capture layer surface
-            if let Some(capture_layer_surface) = &state.capture_layer_surface {
-                capture_layer_surface.destroy();
-                println!("Capture layer surface destroyed");
-            }
-            state.capture_layer_surface = None;
-            state.capture_layer_clicked = false;
-            
-            break; // Exit the main loop
-        }
-        
-        // Process GTK events if window has been created
-        if gtk_window_created {
-            // Process pending GTK events without blocking
-            gtk4::glib::MainContext::default().iteration(false);
-        }
-        
-        // Small sleep to prevent busy waiting
-        //std::thread::sleep(std::time::Duration::from_millis(16));
-    }
+    Ok(())
 }
