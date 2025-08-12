@@ -144,7 +144,7 @@ fn main() {
         &capture_surface,
         None,                                // output (None means all outputs)
         zwlr_layer_shell_v1::Layer::Overlay, // layer type
-        "cursor-clip".to_string(),           // namespace
+        "cursor-clip-capture".to_string(),   // namespace - different from GTK overlay
         &queue.handle(),
         (), // user data
     );
@@ -172,7 +172,7 @@ fn main() {
         // Process Wayland events
         queue.blocking_dispatch(&mut state).unwrap();
 
-        // Create GTK overlay window when capture layer is ready (not when coords are received)
+        // Create GTK overlay window when coordinates are received
         if state.coords_received && !gtk_window_created {
     
             println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", state.received_x, state.received_y);
@@ -180,36 +180,30 @@ fn main() {
             // Create the GTK window at the coordinates (capture layer remains active)
             gtk_overlay::create_clipboard_overlay(state.received_x, state.received_y);
             gtk_window_created = true;
-            //queue.dispatch_pending(&mut state).unwrap();
-            //gtk4::glib::MainContext::default().iteration(false);
+           
         }
         
-        // Handle close requests from either mouse click or button click
-        if gtk_window_created && gtk_overlay::is_close_requested() {
-            if gtk_overlay::is_gtk_close_only() {
-                // Only GTK window close was requested (button click) - keep capture layer
-                println!("GTK close button pressed - keeping capture layer active");
-                gtk_overlay::reset_close_flags();
-                gtk_window_created = false; // Allow creating a new GTK window if coords received again
-            } else {
-                // Full close was requested (mouse click on capture layer) - close everything
-                println!("Left mouse click detected - closing both capture layer and GTK window");
-                if let Some(capture_layer_surface) = &state.capture_layer_surface {
-                    capture_layer_surface.destroy();
-                }
-                state.capture_layer_surface = None;
-                gtk_overlay::reset_close_flags();
-                break; // Exit the main loop
-            }
-        }
-        
-        // If capture layer was clicked directly, close everything
-        if state.capture_layer_clicked {
-            println!("Capture layer click detected - closing everything");
+        // Handle close requests from either source:
+        // 1. Close button in GTK overlay (top-right corner)  
+        // 2. Focus lost (clicking outside the GTK overlay)
+        // 3. Left mouse click on capture layer (if it receives events)
+        // All actions will close both the GTK overlay and capture layer
+        if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
+            println!("Close requested - closing both capture layer and GTK window");
+            println!("  Close reason: gtk_overlay={}, capture_layer={}", 
+                     gtk_overlay::is_close_requested(), state.capture_layer_clicked);
+            
+            // Close GTK overlay window
+            gtk_overlay::reset_close_flags();
+            
+            // Clean up capture layer surface
             if let Some(capture_layer_surface) = &state.capture_layer_surface {
                 capture_layer_surface.destroy();
+                println!("Capture layer surface destroyed");
             }
             state.capture_layer_surface = None;
+            state.capture_layer_clicked = false;
+            
             break; // Exit the main loop
         }
         

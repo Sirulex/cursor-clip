@@ -8,7 +8,6 @@ use std::cell::RefCell;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
-pub static GTK_CLOSE_ONLY: AtomicBool = AtomicBool::new(false);
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
@@ -20,13 +19,8 @@ pub fn is_close_requested() -> bool {
     CLOSE_REQUESTED.load(Ordering::Relaxed)
 }
 
-pub fn is_gtk_close_only() -> bool {
-    GTK_CLOSE_ONLY.load(Ordering::Relaxed)
-}
-
 pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
-    GTK_CLOSE_ONLY.store(false, Ordering::Relaxed);
 }
 
 /// Initialize the GTK/Libadwaita application
@@ -52,6 +46,14 @@ fn create_overlay_content() -> Box {
     // Header bar with title
     let header_bar = adw::HeaderBar::new();
     header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
+    header_bar.set_show_end_title_buttons(false); // Disable default close button
+    header_bar.set_show_start_title_buttons(false); // Disable default buttons on the left too
+
+    // Add close button to header (upper right corner)
+    let close_button = Button::new();
+    close_button.set_icon_name("window-close-symbolic");
+    close_button.add_css_class("circular");
+    header_bar.pack_end(&close_button);
     
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
@@ -64,7 +66,7 @@ fn create_overlay_content() -> Box {
     let scrolled_window = gtk4::ScrolledWindow::new();
     scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     scrolled_window.set_min_content_width(200);
-    scrolled_window.set_min_content_height(400);
+    scrolled_window.set_min_content_height(300);
 
     // Create list box for clipboard items
     let list_box = gtk4::ListBox::new();
@@ -97,14 +99,7 @@ fn create_overlay_content() -> Box {
     scrolled_window.set_child(Some(&list_box));
     main_box.append(&scrolled_window);
 
-    // Footer with action buttons
-    //let footer_box = Box::new(Orientation::Horizontal, 12);
-    //footer_box.set_margin_top(12);
-    //footer_box.set_margin_bottom(12);
-    //footer_box.set_margin_start(12);
-    //footer_box.set_margin_end(12);
-    //footer_box.set_halign(Align::End);
-//
+
     //let close_button = Button::with_label("Close");
     //close_button.add_css_class("suggested-action");
 //
@@ -115,6 +110,18 @@ fn create_overlay_content() -> Box {
     clear_button.connect_clicked(move |_| {
         println!("Clear all clipboard history");
         // Here you would clear the clipboard history
+    });
+
+    close_button.connect_clicked(move |_| {
+        println!("Close button clicked - closing both overlay and capture layer");
+        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+        // Don't set GTK_CLOSE_ONLY to true - we want to close everything
+        
+        OVERLAY_WINDOW.with(|window| {
+            if let Some(ref win) = *window.borrow() {
+                win.close();
+            }
+        });
     });
 
     //close_button.connect_clicked(move |_| {
@@ -165,6 +172,7 @@ fn create_layer_shell_window(app: &Application, x: f64, y: f64) -> adw::Applicat
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Clipboard History")
+        .decorated(false)  // Disable window decorations to avoid duplicate close buttons
         //.default_width(600)
         //.default_height(300)
         //.resizable(true)
@@ -187,10 +195,12 @@ fn create_layer_shell_window(app: &Application, x: f64, y: f64) -> adw::Applicat
     window.set_margin(Edge::Top, y as i32);
     window.set_margin(Edge::Left, x as i32);
     
-    window.set_exclusive_zone(-1);
+    //-1 means no exclusive zone, allowing clicks through
+    // 0 means exclusive zone is the size of the window -> moves the window down
+    window.set_exclusive_zone(-1); 
 
     // Make window keyboard interactive
-    //window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
+    window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
 
     // Apply custom styling
     apply_custom_styling(&window);
@@ -198,6 +208,23 @@ fn create_layer_shell_window(app: &Application, x: f64, y: f64) -> adw::Applicat
     // Create and set content
     let content = create_overlay_content();
     window.set_content(Some(&content));
+
+    // Add focus-out handler to close when clicking outside
+    window.connect_is_active_notify(|window| {
+        println!("inside GTK window focus handler (checking outsite)");
+        if !window.is_active() {
+            println!("GTK window lost focus - closing both overlay and capture layer");
+            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+            window.close();
+        }
+    });
+
+    // Add close request handler to ensure any window close goes through our logic
+    window.connect_close_request(|_window| {
+        println!("Window close requested - ensuring both overlay and capture layer close");
+        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+        gtk4::glib::Propagation::Proceed
+    });
 
     window
 }
