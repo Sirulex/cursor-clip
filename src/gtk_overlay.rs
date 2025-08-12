@@ -44,15 +44,8 @@ fn init_application() -> Application {
     app.upcast()
 }
 
-/// Create the main overlay window content
-fn create_overlay_content() -> Box {
-    // You can choose between simple and enhanced content
-    // For demonstration purposes, let's use the enhanced version
-    create_enhanced_content_simple()
-}
-
 /// Create a Windows 11-style clipboard history list with regular libadwaita styling
-fn create_enhanced_content_simple() -> Box {
+fn create_overlay_content() -> Box {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -70,8 +63,8 @@ fn create_enhanced_content_simple() -> Box {
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
     scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-    scrolled_window.set_min_content_height(300);
-    scrolled_window.set_min_content_width(400);
+    scrolled_window.set_min_content_width(200);
+    scrolled_window.set_min_content_height(400);
 
     // Create list box for clipboard items
     let list_box = gtk4::ListBox::new();
@@ -105,18 +98,18 @@ fn create_enhanced_content_simple() -> Box {
     main_box.append(&scrolled_window);
 
     // Footer with action buttons
-    let footer_box = Box::new(Orientation::Horizontal, 12);
-    footer_box.set_margin_top(12);
-    footer_box.set_margin_bottom(12);
-    footer_box.set_margin_start(12);
-    footer_box.set_margin_end(12);
-    footer_box.set_halign(Align::End);
-
-    let close_button = Button::with_label("Close");
-    close_button.add_css_class("suggested-action");
-
-    footer_box.append(&close_button);
-    main_box.append(&footer_box);
+    //let footer_box = Box::new(Orientation::Horizontal, 12);
+    //footer_box.set_margin_top(12);
+    //footer_box.set_margin_bottom(12);
+    //footer_box.set_margin_start(12);
+    //footer_box.set_margin_end(12);
+    //footer_box.set_halign(Align::End);
+//
+    //let close_button = Button::with_label("Close");
+    //close_button.add_css_class("suggested-action");
+//
+    //footer_box.append(&close_button);
+    //main_box.append(&footer_box);
 
     // Connect button signals
     clear_button.connect_clicked(move |_| {
@@ -124,30 +117,57 @@ fn create_enhanced_content_simple() -> Box {
         // Here you would clear the clipboard history
     });
 
-    close_button.connect_clicked(move |_| {
-        println!("Close clipboard history window");
-        GTK_CLOSE_ONLY.store(true, Ordering::Relaxed);
-        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-        
-        OVERLAY_WINDOW.with(|window| {
-            if let Some(ref win) = *window.borrow() {
-                win.close();
-            }
-        });
-    });
+    //close_button.connect_clicked(move |_| {
+    //    println!("Close clipboard history window");
+    //    GTK_CLOSE_ONLY.store(true, Ordering::Relaxed);
+    //    CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+    //    
+    //    OVERLAY_WINDOW.with(|window| {
+    //        if let Some(ref win) = *window.borrow() {
+    //            win.close();
+    //        }
+    //    });
+    //});
 
     main_box
 }
 
+/// Main entry point for creating the overlay
+pub fn create_clipboard_overlay(x: f64, y: f64) {
+    let app = init_application();
+    
+    let app_clone = app.clone();
+    app.connect_activate(move |_| {
+        let window = create_layer_shell_window(&app_clone, x, y);
+        
+        // Store the window in our thread-local storage
+        OVERLAY_WINDOW.with(|w| {
+            *w.borrow_mut() = Some(window.clone());
+        });
+        
+        OVERLAY_APP.with(|a| {
+            *a.borrow_mut() = Some(app_clone.clone());
+        });
+        
+        // Show the window
+        window.present();
+        
+        println!("Libadwaita overlay window created and shown at ({}, {})", x, y);
+    });
+
+    // Run the application
+    app.run_with_args::<String>(&[]);
+}
+
 /// Create and configure the layer shell window
-fn create_layer_shell_window_impl(app: &Application, x: f64, y: f64) -> adw::ApplicationWindow {
+fn create_layer_shell_window(app: &Application, x: f64, y: f64) -> adw::ApplicationWindow {
     // Create the main window using Adwaita ApplicationWindow
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Clipboard History")
-        .default_width(450)
-        .default_height(400)
-        .resizable(true)
+        //.default_width(600)
+        //.default_height(300)
+        //.resizable(true)
         .build();
 
     // Initialize layer shell for this window
@@ -160,18 +180,17 @@ fn create_layer_shell_window_impl(app: &Application, x: f64, y: f64) -> adw::App
     // Anchor to top-left corner for precise positioning
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
-    window.set_anchor(Edge::Bottom, false);
-    window.set_anchor(Edge::Right, false);
+    //window.set_anchor(Edge::Bottom, false);
+    //window.set_anchor(Edge::Right, false);
     
     // Set margins to position the window at the specified coordinates
     window.set_margin(Edge::Top, y as i32);
     window.set_margin(Edge::Left, x as i32);
     
-    // Don't reserve space on the desktop
-    window.set_exclusive_zone(0);
+    window.set_exclusive_zone(-1);
 
     // Make window keyboard interactive
-    window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
+    //window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
 
     // Apply custom styling
     apply_custom_styling(&window);
@@ -183,11 +202,34 @@ fn create_layer_shell_window_impl(app: &Application, x: f64, y: f64) -> adw::App
     window
 }
 
-/// Apply minimal custom CSS styling for the clipboard list
+/// Apply custom CSS styling for modern GNOME-style rounded window
 fn apply_custom_styling(window: &adw::ApplicationWindow) {
     let css_provider = gtk4::CssProvider::new();
     css_provider.load_from_data(
         "
+        /* Modern GNOME-style rounded window */
+        window {
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+        }
+        
+        /* Ensure the window content also respects the rounded corners */
+        window > box {
+            border-radius: 12px;
+        }
+        
+        /* Header bar rounded corners */
+        headerbar {
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+        }
+        
+        /* Last child element rounded bottom corners */
+        window > box > scrolledwindow {
+            border-bottom-left-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }
+        
         /* Minimal styling for clipboard items */
         .clipboard-item {
             padding: 8px 12px;
@@ -223,173 +265,7 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
     );
 }
 
-/// Create additional content widgets using libadwaita components
-fn create_enhanced_content() -> Box {
-    let main_container = Box::new(Orientation::Vertical, 0);
-    
-    // Create a modern header bar with libadwaita styling
-    let header_bar = adw::HeaderBar::new();
-    header_bar.set_title_widget(Some(&Label::new(Some("Cursor Clip"))));
-    
-    // Add menu button to header
-    let menu_button = Button::from_icon_name("open-menu-symbolic");
-    menu_button.add_css_class("flat");
-    header_bar.pack_end(&menu_button);
-    
-    // Create a preferences group for settings
-    let preferences_page = adw::PreferencesPage::new();
-    
-    // Main settings group
-    let settings_group = adw::PreferencesGroup::new();
-    settings_group.set_title("Settings");
-    settings_group.set_description(Some("Configure clipboard behavior"));
-    
-    // Create some action rows
-    let auto_copy_row = adw::ActionRow::new();
-    auto_copy_row.set_title("Auto Copy");
-    auto_copy_row.set_subtitle("Automatically copy selected text");
-    
-    let auto_copy_switch = gtk4::Switch::new();
-    auto_copy_switch.set_active(true);
-    auto_copy_row.add_suffix(&auto_copy_switch);
-    
-    let history_row = adw::ActionRow::new();
-    history_row.set_title("Clipboard History");
-    history_row.set_subtitle("Enable clipboard history tracking");
-    
-    let history_switch = gtk4::Switch::new();
-    history_switch.set_active(false);
-    history_row.add_suffix(&history_switch);
-    
-    // Create a simple row for history size
-    let history_size_row = adw::ActionRow::new();
-    history_size_row.set_title("History Size");
-    history_size_row.set_subtitle("Number of items to keep in history");
-    
-    let history_size_entry = gtk4::Entry::new();
-    history_size_entry.set_text("10");
-    history_size_entry.set_input_purpose(gtk4::InputPurpose::Number);
-    history_size_entry.set_width_chars(5);
-    history_size_entry.set_valign(Align::Center);
-    history_size_row.add_suffix(&history_size_entry);
-    
-    settings_group.add(&auto_copy_row);
-    settings_group.add(&history_row);
-    settings_group.add(&history_size_row);
-    
-    // Create a second group for appearance
-    let appearance_group = adw::PreferencesGroup::new();
-    appearance_group.set_title("Appearance");
-    
-    let theme_row = adw::ComboRow::new();
-    theme_row.set_title("Theme");
-    theme_row.set_subtitle("Choose application theme");
-    
-    let theme_model = gtk4::StringList::new(&["Auto", "Light", "Dark"]);
-    theme_row.set_model(Some(&theme_model));
-    
-    appearance_group.add(&theme_row);
-    
-    preferences_page.add(&settings_group);
-    preferences_page.add(&appearance_group);
-    
-    // Create action buttons group
-    let action_group = adw::PreferencesGroup::new();
-    action_group.set_title("Actions");
-    
-    let clear_history_row = adw::ActionRow::new();
-    clear_history_row.set_title("Clear History");
-    clear_history_row.set_subtitle("Remove all clipboard history");
-    
-    let clear_button = Button::with_label("Clear");
-    clear_button.add_css_class("destructive-action");
-    clear_button.set_valign(Align::Center);
-    clear_history_row.add_suffix(&clear_button);
-    
-    action_group.add(&clear_history_row);
-    preferences_page.add(&action_group);
-    
-    // Add everything to main container
-    main_container.append(&header_bar);
-    main_container.append(&preferences_page);
-    
-    // Connect signals
-    clear_button.connect_clicked(move |_| {
-        println!("Clear history button clicked");
-        // Here you would implement actual history clearing
-    });
-    
-    auto_copy_switch.connect_state_set(|_, state| {
-        println!("Auto copy toggled: {}", state);
-        gtk4::glib::Propagation::Proceed
-    });
-    
-    history_switch.connect_state_set(|_, state| {
-        println!("History tracking toggled: {}", state);
-        gtk4::glib::Propagation::Proceed
-    });
-    
-    theme_row.connect_selected_notify(|row| {
-        let selected = row.selected();
-        let theme = match selected {
-            0 => "Auto",
-            1 => "Light", 
-            2 => "Dark",
-            _ => "Auto",
-        };
-        println!("Theme changed to: {}", theme);
-        
-        // Apply theme change
-        let style_manager = adw::StyleManager::default();
-        match selected {
-            1 => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
-            2 => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
-            _ => style_manager.set_color_scheme(adw::ColorScheme::Default),
-        }
-    });
-    
-    main_container
-}
 
-/// Create a toast overlay for notifications
-fn create_toast_overlay(child: &impl IsA<gtk4::Widget>) -> adw::ToastOverlay {
-    let toast_overlay = adw::ToastOverlay::new();
-    toast_overlay.set_child(Some(child));
-    toast_overlay
-}
-
-/// Show a toast notification
-pub fn show_toast(message: &str) {
-    // This would need to be called from the main thread with access to the toast overlay
-    println!("Toast: {}", message);
-}
-
-/// Main entry point for creating the overlay
-pub fn create_layer_shell_window(x: f64, y: f64) {
-    let app = init_application();
-    
-    let app_clone = app.clone();
-    app.connect_activate(move |_| {
-        let window = create_layer_shell_window_impl(&app_clone, x, y);
-        
-        // Store the window in our thread-local storage
-        OVERLAY_WINDOW.with(|w| {
-            *w.borrow_mut() = Some(window.clone());
-        });
-        
-        OVERLAY_APP.with(|a| {
-            *a.borrow_mut() = Some(app_clone.clone());
-        });
-        
-        // Show the window
-        window.present();
-        
-        println!("Libadwaita overlay window created and shown at ({}, {})", x, y);
-    });
-
-    // Run the application
-    app.run_with_args::<String>(&[]);
-}
 
 /// Show the overlay if it's hidden
 pub fn show_overlay() {

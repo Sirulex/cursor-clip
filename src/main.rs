@@ -158,7 +158,7 @@ fn main() {
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    capture_layer_surface.set_margin(100, 100, 200, 100);
+    //capture_layer_surface.set_margin(100, 100, 200, 100);
     
     // Store the capture layer surface in state
     state.capture_layer_surface = Some(capture_layer_surface);
@@ -174,14 +174,11 @@ fn main() {
 
         // Create GTK overlay window when capture layer is ready (not when coords are received)
         if state.coords_received && !gtk_window_created {
-            // Use default coordinates (center of screen) if no coordinates received yet
-            let x = if state.coords_received { state.received_x } else { 500.0 };
-            let y = if state.coords_received { state.received_y } else { 500.0 };
-            
-            println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", x, y);
-            
+    
+            println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", state.received_x, state.received_y);
+
             // Create the GTK window at the coordinates (capture layer remains active)
-            gtk_overlay::create_layer_shell_window(x, y);
+            gtk_overlay::create_clipboard_overlay(state.received_x, state.received_y);
             gtk_window_created = true;
             //queue.dispatch_pending(&mut state).unwrap();
             //gtk4::glib::MainContext::default().iteration(false);

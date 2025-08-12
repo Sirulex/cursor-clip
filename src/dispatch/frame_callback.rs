@@ -101,7 +101,7 @@ fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) 
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    update_layer_surface.set_margin(200, 200, 200, 200);
+    //update_layer_surface.set_margin(200, 200, 200, 200);
 
     // Store the layer surface in state
     state.update_layer_surface = Some(update_layer_surface);
