@@ -122,20 +122,6 @@ fn main() {
     state.capture_surface = Some(capture_surface.clone()); //valid as surface is basically a reference to the proxy object
     state.update_surface = Some(update_surface.clone());
 
-    let xdg_wm_base = state
-        .xdg_wm_base
-        .as_ref()
-        .expect("XDG WM Base not initialized");
-
-    let xdg_surface=xdg_wm_base.get_xdg_surface( //only layer shell or xdg shell can be used at the same time
-        &update_surface,
-        &queue.handle(),
-        (),
-    ); // Create an xdg surface
-    let xdg_toplevel = xdg_surface.get_toplevel(&queue.handle(), ()); // Create a toplevel surface
-    xdg_toplevel.set_title("Cursor Clip".to_string()); // Set the title of the toplevel surface
-    xdg_toplevel.set_app_id("com.sirulex.cursor_clip".to_string()); // Set the app ID
-
     let layer_shell = state
         .layer_shell
         .as_ref()
@@ -162,8 +148,7 @@ fn main() {
         (), // user data
     );
 
-    // Configure the layer surface
-    //layer_surface.set_size(200, 300); // Width and height in pixels (no need due to autoscaling via viewporter)
+    // Configure the capture layer surface
     capture_layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
     capture_layer_surface.set_anchor(
         zwlr_layer_surface_v1::Anchor::Top
@@ -172,27 +157,12 @@ fn main() {
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    capture_layer_surface.set_margin(100, 100 , 100, 100);
+    //capture_layer_surface.set_margin(100, 100, 100, 100);
     
+    // Store the capture layer surface in state
+    state.capture_layer_surface = Some(capture_layer_surface);
 
-    
-    //let update_layer_surface = layer_shell.get_layer_surface(
-    //    &update_surface,
-    //    None,                                // output (None means all outputs)
-    //    zwlr_layer_shell_v1::Layer::Overlay, // layer type
-    //    "cursor-clip".to_string(),           // namespace
-    //    &queue.handle(),
-    //    (), // user data
-    //);
-    //
-    //update_layer_surface.set_exclusive_zone(-1); // -1 -> don't reserve space
-    //update_layer_surface.set_anchor(
-    //    zwlr_layer_surface_v1::Anchor::Top
-    //        | zwlr_layer_surface_v1::Anchor::Left
-    //        | zwlr_layer_surface_v1::Anchor::Right
-    //        | zwlr_layer_surface_v1::Anchor::Bottom,
-    //); // Anchor to all edges
-
+    // Commit the capture surface to trigger the configure event
     capture_surface.commit();
     
     // Keep the application running

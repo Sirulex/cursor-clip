@@ -1,9 +1,9 @@
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_pointer, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_pointer, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 
 use wayland_protocols_wlr::{
-    layer_shell::v1::client::zwlr_layer_shell_v1,
+    layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
     virtual_pointer::v1::client::{zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1},
 };
 
@@ -32,8 +32,12 @@ pub struct State {
     pub capture_layer_ready: bool,
     pub capture_surface: Option<wl_surface::WlSurface>,
     pub capture_buffer: Option<wl_buffer::WlBuffer>,
+    pub capture_layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    pub capture_frame_callback: Option<wl_callback::WlCallback>,
     pub update_surface: Option<wl_surface::WlSurface>,
     pub update_buffer: Option<wl_buffer::WlBuffer>,
+    pub update_layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    pub update_frame_callback: Option<wl_callback::WlCallback>,
 }
 
 impl State {
@@ -54,8 +58,12 @@ impl State {
             capture_layer_ready: false,
             capture_surface: None,
             capture_buffer: None,
+            capture_layer_surface: None,
+            capture_frame_callback: None,
             update_surface: None,
             update_buffer: None,
+            update_layer_surface: None,
+            update_frame_callback: None,
         }
     }
 }

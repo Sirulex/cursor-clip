@@ -5,6 +5,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 
 use crate::state::State;
+use crate::dispatch::frame_callback::FrameCallbackData;
 
 impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for State {
     fn event(
@@ -86,12 +87,45 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 // - The damage
                 if !state.capture_layer_ready {
                     state.capture_layer_ready = true; // Set flag to indicate layer is ready
-                    println!("setting bool to true (capture_layer_ready)");
+                    println!("Setting capture_layer_ready to true");
+                    
+                    // Create frame callback for capture layer to know when it's shown
+                    let frame_callback = capture_surface.frame(qhandle, FrameCallbackData::CaptureLayer);
+                    state.capture_frame_callback = Some(frame_callback);
+                    
+                    capture_surface.commit();
                 } else {
-                    println!("capture_layer_ready is already true, now at update layer surface");
+                    // This is the update layer surface configuration
+                    println!("Update layer surface configured");
+                    
+                    // Create frame callback for update layer to know when it's shown
+                    if let Some(update_surface) = &state.update_surface {
+                        if let Some(update_buffer) = &state.update_buffer {
+                            update_surface.attach(Some(update_buffer), 0, 0);
+                        }
+                        
+                        // Create viewport for update surface
+                        if let Some(viewporter) = &state.viewporter {
+                            let update_viewport = viewporter.get_viewport(update_surface, qhandle, ());
+                            update_viewport.set_destination(width as i32, height as i32);
+                        }
+                        
+                        // Create input region for update surface
+                        let update_region = compositor.create_region(qhandle, ());
+                        update_region.add(0, 0, width as i32, height as i32);
+                        update_surface.set_input_region(Some(&update_region));
+                        update_region.destroy();
+                        
+                        // Mark damage
+                        update_surface.damage(0, 0, width as i32, height as i32);
+                        
+                        // Create frame callback for update surface
+                        let update_frame_callback = update_surface.frame(qhandle, FrameCallbackData::UpdateLayer);
+                        state.update_frame_callback = Some(update_frame_callback);
+                        
+                        update_surface.commit();
+                    }
                 }
-
-                capture_surface.commit();
             }
 
             zwlr_layer_surface_v1::Event::Closed => {
