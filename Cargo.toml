@@ -7,6 +7,10 @@ edition = "2024"
 wayland-client = "0.31.10"
 wayland-protocols = { version = "0.32.8", features = ["client","staging"] }
 wayland-protocols-wlr = { version = "0.3.8", features = ["client"] }
+gtk4 = "0.9"
+gtk4-layer-shell = "0.5.0"
+libadwaita = "0.7"
+gio = "0.20"
 memmap2 = "0.9.5"
 #smithay-client-toolkit = "0.19.2"
 #nix = { version = "0.26.0"}

@@ -20,6 +20,7 @@ use wayland_protocols::{
 mod state;
 mod buffer;
 mod dispatch;
+mod gtk_overlay;
 
 use state::State;
 
@@ -157,7 +158,7 @@ fn main() {
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    capture_layer_surface.set_margin(100, 100, 100, 100);
+    capture_layer_surface.set_margin(100, 100, 200, 100);
     
     // Store the capture layer surface in state
     state.capture_layer_surface = Some(capture_layer_surface);
@@ -166,7 +167,62 @@ fn main() {
     capture_surface.commit();
     
     // Keep the application running
-    while !state.coords_received {
+    let mut gtk_window_created = false;
+    loop {
+        // Process Wayland events
         queue.blocking_dispatch(&mut state).unwrap();
+
+        // Create GTK overlay window when capture layer is ready (not when coords are received)
+        if state.coords_received && !gtk_window_created {
+            // Use default coordinates (center of screen) if no coordinates received yet
+            let x = if state.coords_received { state.received_x } else { 500.0 };
+            let y = if state.coords_received { state.received_y } else { 500.0 };
+            
+            println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", x, y);
+            
+            // Create the GTK window at the coordinates (capture layer remains active)
+            gtk_overlay::create_layer_shell_window(x, y);
+            gtk_window_created = true;
+            //queue.dispatch_pending(&mut state).unwrap();
+            //gtk4::glib::MainContext::default().iteration(false);
+        }
+        
+        // Handle close requests from either mouse click or button click
+        if gtk_window_created && gtk_overlay::is_close_requested() {
+            if gtk_overlay::is_gtk_close_only() {
+                // Only GTK window close was requested (button click) - keep capture layer
+                println!("GTK close button pressed - keeping capture layer active");
+                gtk_overlay::reset_close_flags();
+                gtk_window_created = false; // Allow creating a new GTK window if coords received again
+            } else {
+                // Full close was requested (mouse click on capture layer) - close everything
+                println!("Left mouse click detected - closing both capture layer and GTK window");
+                if let Some(capture_layer_surface) = &state.capture_layer_surface {
+                    capture_layer_surface.destroy();
+                }
+                state.capture_layer_surface = None;
+                gtk_overlay::reset_close_flags();
+                break; // Exit the main loop
+            }
+        }
+        
+        // If capture layer was clicked directly, close everything
+        if state.capture_layer_clicked {
+            println!("Capture layer click detected - closing everything");
+            if let Some(capture_layer_surface) = &state.capture_layer_surface {
+                capture_layer_surface.destroy();
+            }
+            state.capture_layer_surface = None;
+            break; // Exit the main loop
+        }
+        
+        // Process GTK events if window has been created
+        if gtk_window_created {
+            // Process pending GTK events without blocking
+            gtk4::glib::MainContext::default().iteration(false);
+        }
+        
+        // Small sleep to prevent busy waiting
+        //std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }

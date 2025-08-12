@@ -59,6 +59,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                     surface, surface_x, surface_y
                 );
                 state.coords_received = true; // Set flag when coordinates are received
+                state.received_x = surface_x;
+                state.received_y = surface_y;
             }
             wl_pointer::Event::Leave { serial: _, surface } => {
                 println!("Pointer left surface: {:?}", surface);
@@ -72,14 +74,25 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                     "Pointer moved to ({}, {}) at time {}",
                     surface_x, surface_y, time
                 );
+                // Update stored coordinates on motion
+                //state.received_x = surface_x;
+                //state.received_y = surface_y;
             }
             wl_pointer::Event::Button {
                 serial: _,
                 time,
                 button,
-                state,
+                state: button_state,
             } => {
-                println!("Pointer button {:?} at time {}: {:?}", button, time, state);
+                println!("Pointer button {:?} at time {}: {:?}", button, time, button_state);
+                
+                // Check for left mouse button click (button 272 is left click)
+                if button == 272 {
+                    if let WEnum::Value(wl_pointer::ButtonState::Pressed) = button_state {
+                        println!("Left mouse button clicked on capture layer - requesting full close");
+                        state.capture_layer_clicked = true; // This will trigger cleanup in main loop
+                    }
+                }
             }
             _ => {}
         }
