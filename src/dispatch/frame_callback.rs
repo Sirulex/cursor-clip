@@ -1,7 +1,6 @@
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::protocol::wl_callback;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
-use std::{thread, time::Duration};
 
 use crate::state::State;
 use crate::buffer;
@@ -10,6 +9,7 @@ use crate::buffer;
 pub enum FrameCallbackData {
     CaptureLayer,
     UpdateLayer,
+    UpdateLayerFrameCount(u8), // Track frame count for minimal delay
 }
 
 impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
@@ -32,14 +32,24 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
                         create_update_layer_surface(state, qhandle);
                     }
                     FrameCallbackData::UpdateLayer => {
-                        println!("Update layer frame callback received - waiting 2 seconds before cleanup");
+                        println!("Update layer frame callback received - starting frame counting");
                         state.update_frame_callback = None;
                         
-                        // Wait 2 seconds before cleaning up
-                        thread::sleep(Duration::from_secs(1));
+                        // Start frame counting to ensure surface is rendered
+                        schedule_next_frame_check(state, qhandle, 0);
+                    }
+                    FrameCallbackData::UpdateLayerFrameCount(frame_count) => {
+                        println!("Update layer frame {} received", frame_count + 1);
                         
-                        // Close and cleanup update layer resources
-                        cleanup_update_layer(state);
+                        // Wait for 2 frames to ensure the surface is actually rendered
+                        if *frame_count < 2 {
+                            // Schedule next frame callback
+                            schedule_next_frame_check(state, qhandle, frame_count + 1);
+                        } else {
+                            println!("Minimal frames elapsed - cleaning up update layer");
+                            // Close and cleanup update layer resources
+                            cleanup_update_layer(state);
+                        }
                     }
                 }
             }
@@ -128,4 +138,17 @@ fn cleanup_update_layer(state: &mut State) {
     }
     
     println!("Update layer cleanup completed");
+}
+
+fn schedule_next_frame_check(state: &mut State, qhandle: &QueueHandle<State>, frame_count: u8) {
+    if let Some(update_surface) = &state.update_surface {
+        println!("Scheduling frame check #{}", frame_count + 1);
+        let frame_callback = update_surface.frame(qhandle, FrameCallbackData::UpdateLayerFrameCount(frame_count));
+        state.update_frame_callback = Some(frame_callback);
+        
+        // Commit to trigger the next frame
+        update_surface.commit();
+    } else {
+        eprintln!("Update surface not available for frame check");
+    }
 }
