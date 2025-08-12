@@ -1,6 +1,7 @@
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::protocol::wl_callback;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use std::{thread, time::Duration};
 
 use crate::state::State;
 use crate::buffer;
@@ -31,9 +32,14 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
                         create_update_layer_surface(state, qhandle);
                     }
                     FrameCallbackData::UpdateLayer => {
-                        println!("Update layer frame callback received - surface is shown");
+                        println!("Update layer frame callback received - waiting 2 seconds before cleanup");
                         state.update_frame_callback = None;
-                        // Add any additional logic needed when update surface is shown
+                        
+                        // Wait 2 seconds before cleaning up
+                        thread::sleep(Duration::from_secs(1));
+                        
+                        // Close and cleanup update layer resources
+                        cleanup_update_layer(state);
                     }
                 }
             }
@@ -85,11 +91,41 @@ fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) 
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    update_layer_surface.set_margin(100, 100, 100, 100);
+    update_layer_surface.set_margin(200, 200, 200, 200);
 
     // Store the layer surface in state
     state.update_layer_surface = Some(update_layer_surface);
 
     // Commit the update surface to trigger the configure event
     update_surface.commit();
+}
+
+fn cleanup_update_layer(state: &mut State) {
+    println!("Cleaning up update layer resources");
+    
+    // Destroy the update layer surface if it exists
+    if let Some(update_layer_surface) = state.update_layer_surface.take() {
+        println!("Destroying update layer surface");
+        update_layer_surface.destroy();
+    }
+    
+    // Clean up the update surface
+    if let Some(update_surface) = state.update_surface.take() {
+        println!("Destroying update surface");
+        update_surface.destroy();
+    }
+    
+    // Clean up the update buffer
+    if let Some(update_buffer) = state.update_buffer.take() {
+        println!("Destroying update buffer");
+        update_buffer.destroy();
+    }
+    
+    // Clear the update frame callback reference (callbacks are auto-cleaned)
+    if state.update_frame_callback.is_some() {
+        println!("Clearing update frame callback reference");
+        state.update_frame_callback = None;
+    }
+    
+    println!("Update layer cleanup completed");
 }

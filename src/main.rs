@@ -157,7 +157,7 @@ fn main() {
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    //capture_layer_surface.set_margin(100, 100, 100, 100);
+    capture_layer_surface.set_margin(100, 100, 100, 100);
     
     // Store the capture layer surface in state
     state.capture_layer_surface = Some(capture_layer_surface);
