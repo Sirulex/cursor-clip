@@ -203,6 +203,7 @@ dependencies = [
  "gtk4",
  "gtk4-layer-shell",
  "libadwaita",
+ "libc",
  "memmap2",
  "serde",
  "serde_json",

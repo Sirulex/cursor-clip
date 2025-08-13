@@ -4,12 +4,15 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
+use super::wayland_clipboard::WaylandClipboardMonitor;
 
+#[derive(Debug)]
 pub struct ClipboardBackend {
     history: Arc<Mutex<Vec<ClipboardItem>>>,
     next_id: Arc<Mutex<u64>>,
 }
 
+#[derive(Debug)]
 pub struct BackendState {
     backend: Arc<Mutex<ClipboardBackend>>,
 }
@@ -84,6 +87,22 @@ pub async fn run_backend() -> Result<(), Box<dyn std::error::Error>> {
 
     // Simple state for testing
     let state = Arc::new(Mutex::new(BackendState::new()));
+
+    // Start Wayland clipboard monitoring in a separate task
+    let wayland_state = state.clone();
+    tokio::spawn(async move {
+        match WaylandClipboardMonitor::new(wayland_state) {
+            Ok(mut monitor) => {
+                if let Err(e) = monitor.start_monitoring().await {
+                    eprintln!("Wayland clipboard monitoring error: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to create Wayland clipboard monitor: {}", e);
+                println!("Continuing without Wayland clipboard monitoring...");
+            }
+        }
+    });
 
     // Add some sample data
     {

@@ -24,6 +24,20 @@ A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**
 - **Multi-output Support**: Works across multiple monitors
 <!-- - **Non-intrusive**: Doesn't steal focus or interfere with other applications -->
 
+### 📂 **Automatic Clipboard Monitoring (Wayland)**
+- The backend uses `zwlr_data_control_manager_v1` to automatically monitor clipboard content.
+- Supports:
+  - Text/Plain
+  - Primary selection (mouse selection)
+  - Normal clipboard (Ctrl+C)
+- Automatic classification of content types:
+  - 📝 Text
+  - 🔗 URLs
+  - 💻 Code
+  - 🔒 Passwords
+  - 📁 File paths
+- Stores the last 100 copied items and removes duplicates.
+
 ## Architecture
 
 ```
