@@ -1,10 +1,7 @@
 use clap::{Arg, Command};
 
-#[path = "../backend/mod.rs"]
 mod backend;
-#[path = "../frontend/mod.rs"] 
 mod frontend;
-#[path = "../shared/mod.rs"]
 mod shared;
 
 use backend::*;
