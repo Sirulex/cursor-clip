@@ -197,7 +197,7 @@ async fn handle_client(
                 // These are handled by the frontend, not the backend
                 continue;
             }
-        };<
+        };
 
         let response_json = serde_json::to_string(&response)?;
         writer.write_all(response_json.as_bytes()).await?;

@@ -291,13 +291,6 @@ fn create_layer_shell_window_sync(
     window
 }
 
-/// Legacy sync version for compatibility
-pub fn create_clipboard_overlay(x: f64, y: f64) {
-    if let Err(e) = create_clipboard_overlay_sync(x, y) {
-        eprintln!("Error creating clipboard overlay: {:?}", e);
-    }
-}
-
 /// Apply custom CSS styling for modern GNOME-style rounded window
 fn apply_custom_styling(window: &adw::ApplicationWindow) {
     let css_provider = gtk4::CssProvider::new();
