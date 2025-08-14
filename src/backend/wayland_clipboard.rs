@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use wayland_client::protocol::{wl_registry, wl_seat, wl_display};
 use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
+use wayland_client::backend::ObjectId;
 use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1}, 
     zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1}, 
@@ -24,7 +25,7 @@ struct ClipboardState {
     data_control_manager: Option<ZwlrDataControlManagerV1>,
     data_control_device: Option<ZwlrDataControlDeviceV1>,
     seat: Option<wl_seat::WlSeat>,
-    offers: HashMap<u32, DataOffer>,
+    offers: HashMap<ObjectId, DataOffer>,
     current_selection: Option<DataOffer>,
 }
 
@@ -166,29 +167,29 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
     ) {
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
-                let protocol_id = id.id().protocol_id();
+                let object_id = id.id();
 
-                println!("New data offer received with ID: {}", protocol_id);
+                println!("New data offer received with ID: {:?}", object_id);
                 // The id is already bound to our event queue, we just need to store it
-                let offer = DataOffer {
+                let data_offer = DataOffer {
                     offer: id,
                     mime_types: Vec::new(),
                 };
-                state.offers.insert(protocol_id, offer);
+                state.offers.insert(object_id, data_offer);
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
                 if let Some(offer_id) = id {
-                    let protocol_id = offer_id.id().protocol_id();
-                    println!("Selection changed to offer ID: {}", protocol_id);
-                    if let Some(offer) = state.offers.get(&protocol_id).cloned() {
-                        println!("New clipboard content available with {} MIME types", offer.mime_types.len());
+                    let object_id = offer_id.id();
+                    println!("Selection changed to offer ID: {:?}", object_id);
+                    if let Some(data_offer) = state.offers.get(&object_id).cloned() {
+                        println!("New clipboard content available with {} MIME types", data_offer.mime_types.len());
                         
                         // Only process if we haven't already processed this offer
-                        if state.current_selection.as_ref().map(|s| s.offer.id().protocol_id()) != Some(protocol_id) {
-                            state.current_selection = Some(offer.clone());
+                        if state.current_selection.as_ref().map(|s| s.offer.id()) != Some(object_id) {
+                            state.current_selection = Some(data_offer.clone());
                             
                             // Use the new read_offer function similar to the example
-                            read_offer(&offer.offer, &offer.mime_types, conn, state.backend_state.clone());
+                            read_offer(&data_offer.offer, &data_offer.mime_types, conn, state.backend_state.clone());
                         }
                     }
                 } else {
@@ -229,8 +230,8 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for ClipboardState {
         _: &QueueHandle<ClipboardState>,
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-            let protocol_id = offer.id().protocol_id();
-            if let Some(data_offer) = state.offers.get_mut(&protocol_id) {
+            let object_id = offer.id();
+            if let Some(data_offer) = state.offers.get_mut(&object_id) {
                 data_offer.mime_types.push(mime_type);
                 //println!("Offer supports MIME type: {}", data_offer.mime_types.last().unwrap());
             }
