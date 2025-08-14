@@ -1,7 +1,3 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::net::UnixStream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use wayland_client::{
     Connection, EventQueue,
     globals::{GlobalList, registry_queue_init},
@@ -19,70 +15,9 @@ use wayland_protocols::{
     xdg::shell::client::xdg_wm_base,
 };
 
-use crate::shared::{FrontendMessage, BackendMessage, ClipboardItem};
 use crate::frontend::{state::State, buffer, gtk_overlay};
 
-pub struct FrontendClient {
-    stream: Option<UnixStream>,
-}
-
-impl FrontendClient {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let stream = UnixStream::connect("/tmp/cursor-clip.sock").await?;
-        Ok(Self {
-            stream: Some(stream),
-        })
-    }
-
-    pub async fn send_message(&mut self, message: FrontendMessage) -> Result<BackendMessage, Box<dyn std::error::Error>> {
-        if let Some(ref mut stream) = self.stream {
-            let message_json = serde_json::to_string(&message)?;
-            stream.write_all(message_json.as_bytes()).await?;
-            stream.write_all(b"\n").await?;
-
-            let mut lines = BufReader::new(stream).lines();
-            
-            if let Some(line) = lines.next_line().await? {
-                let response: BackendMessage = serde_json::from_str(&line)?;
-                return Ok(response);
-            }
-        }
-        
-        Err("No connection to backend".into())
-    }
-
-    pub async fn get_history(&mut self) -> Result<Vec<ClipboardItem>, Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::GetHistory).await?;
-        match response {
-            BackendMessage::History { items } => Ok(items),
-            BackendMessage::Error { message } => Err(message.into()),
-            _ => Err("Unexpected response".into()),
-        }
-    }
-
-    pub async fn set_clipboard(&mut self, content: String) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::SetClipboard { content }).await?;
-        match response {
-            BackendMessage::ClipboardSet => Ok(()),
-            BackendMessage::Error { message } => Err(message.into()),
-            _ => Err("Unexpected response".into()),
-        }
-    }
-
-    pub async fn clear_history(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::ClearHistory).await?;
-        match response {
-            BackendMessage::HistoryCleared => Ok(()),
-            BackendMessage::Error { message } => Err(message.into()),
-            _ => Err("Unexpected response".into()),
-        }
-    }
-}
-
 pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to backend
-    let client = FrontendClient::new().await?;
-    
     // Initialize Wayland for layer shell capture
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (GlobalList, EventQueue<State>) =
@@ -91,7 +26,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::new();
     queue.roundtrip(&mut state)?;
 
-    // Initialize Wayland protocols (same as before)
+    // Initialize Wayland protocols
     init_wayland_protocols(&globals, &queue, &mut state)?;
 
     // Create capture surfaces for mouse coordinate detection
@@ -99,7 +34,6 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main event loop
     let mut gtk_window_created = false;
-    let client_arc = Arc::new(Mutex::new(client));
     
     loop {
         // Process Wayland events
@@ -111,9 +45,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
             let y = state.received_y;
             println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", x, y);
 
-            // Create the GTK window in the current thread without async complexity
-            // For now, we'll show sample data and implement proper async backend communication later
-            let _client_clone = client_arc.clone();
+            // Create the GTK window using the unified client backend communication
             if let Err(e) = gtk_overlay::create_clipboard_overlay_sync(x, y) {
                 eprintln!("Error creating GTK overlay: {:?}", e);
             }

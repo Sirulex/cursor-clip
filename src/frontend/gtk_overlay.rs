@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::shared::{ClipboardItem, ClipboardContentType};
-use crate::frontend::sync_client::SyncFrontendClient;
+use crate::frontend::client::SyncFrontendClient;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -130,13 +130,34 @@ fn create_overlay_content() -> Box {
     }
 
     // Handle item selection
+    let items_for_selection = items.clone();
     list_box.connect_row_selected(move |_, row| {
         if let Some(row) = row {
             let index = row.index() as usize;
-            if index < items.len() {
-                let content = &items[index].content;
-                println!("Selected clipboard item: {}", content);
-                // TODO: Set clipboard content via backend when we have proper async handling
+            if index < items_for_selection.len() {
+                let item = &items_for_selection[index];
+                println!("Selected clipboard item ID {}: {}", item.id, item.content);
+                
+                // Use ID-based clipboard operation
+                match SyncFrontendClient::new() {
+                    Ok(mut client) => {
+                        if let Err(e) = client.set_clipboard_by_id(item.id) {
+                            eprintln!("Error setting clipboard by ID: {}", e);
+                        } else {
+                            println!("Successfully set clipboard content by ID: {}", item.id);
+                            // Close the overlay after successful selection
+                            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                            OVERLAY_WINDOW.with(|window| {
+                                if let Some(ref win) = *window.borrow() {
+                                    win.close();
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error creating frontend client: {}", e);
+                    }
+                }
             }
         }
     });
@@ -147,7 +168,25 @@ fn create_overlay_content() -> Box {
     // Connect button signals
     clear_button.connect_clicked(move |_| {
         println!("Clear all clipboard history");
-        // TODO: Clear clipboard history via backend when we have proper async handling
+        match SyncFrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.clear_history() {
+                    eprintln!("Error clearing clipboard history: {}", e);
+                } else {
+                    println!("Successfully cleared clipboard history");
+                    // Close the overlay after clearing
+                    CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                    OVERLAY_WINDOW.with(|window| {
+                        if let Some(ref win) = *window.borrow() {
+                            win.close();
+                        }
+                    });
+                }
+            }
+            Err(e) => {
+                eprintln!("Error creating frontend client: {}", e);
+            }
+        }
     });
 
     close_button.connect_clicked(move |_| {

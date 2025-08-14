@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use wayland_client::{Connection, protocol::wl_registry};
 
 use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
 use super::wayland_clipboard::WaylandClipboardMonitor;
@@ -62,6 +63,12 @@ impl BackendState {
         history.clone()
     }
 
+    pub fn get_item_by_id(&self, id: u64) -> Option<ClipboardItem> {
+        let backend = self.backend.lock().unwrap();
+        let history = backend.history.lock().unwrap();
+        history.iter().find(|item| item.id == id).cloned()
+    }
+
     pub fn clear_history(&mut self) {
         let backend = self.backend.lock().unwrap();
         let mut history = backend.history.lock().unwrap();
@@ -73,6 +80,30 @@ impl BackendState {
         // In a real implementation, this would set the system clipboard
         println!("Setting clipboard content: {}", content);
         Ok(())
+    }
+
+    pub fn set_clipboard_by_id(&self, id: u64) -> Result<(), String> {
+        if let Some(item) = self.get_item_by_id(id) {
+            println!("Setting clipboard content by ID {}: {}", id, item.content);
+            // In a real implementation, this would set the system clipboard
+            Ok(())
+        } else {
+            Err(format!("No clipboard item found with ID: {}", id))
+        }
+    }
+}
+
+// Wayland registry dispatch implementation
+impl wayland_client::Dispatch<wl_registry::WlRegistry, ()> for BackendState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: <wl_registry::WlRegistry as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        // Handle registry events for backend
     }
 }
 
@@ -150,6 +181,13 @@ async fn handle_client(
                     Err(e) => BackendMessage::Error { message: e },
                 }
             }
+            FrontendMessage::SetClipboardById { id } => {
+                let state = state.lock().unwrap();
+                match state.set_clipboard_by_id(id) {
+                    Ok(_) => BackendMessage::ClipboardSet,
+                    Err(e) => BackendMessage::Error { message: e },
+                }
+            }
             FrontendMessage::ClearHistory => {
                 let mut state = state.lock().unwrap();
                 state.clear_history();
@@ -159,7 +197,7 @@ async fn handle_client(
                 // These are handled by the frontend, not the backend
                 continue;
             }
-        };
+        };<
 
         let response_json = serde_json::to_string(&response)?;
         writer.write_all(response_json.as_bytes()).await?;
