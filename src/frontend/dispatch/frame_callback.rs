@@ -2,7 +2,7 @@ use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::protocol::wl_callback;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 use crate::frontend::buffer;
 
 #[derive(Debug, Clone)]

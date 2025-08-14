@@ -4,7 +4,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 use crate::frontend::dispatch::frame_callback::FrameCallbackData;
 
 impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for State {

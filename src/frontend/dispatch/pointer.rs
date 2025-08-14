@@ -1,7 +1,7 @@
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_client::protocol::{wl_pointer, wl_seat};
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn event(

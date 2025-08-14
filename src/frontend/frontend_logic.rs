@@ -15,7 +15,7 @@ use wayland_protocols::{
     xdg::shell::client::xdg_wm_base,
 };
 
-use crate::frontend::{state::State, buffer, gtk_overlay};
+use crate::frontend::{frontend_state::State, buffer, gtk_overlay};
 use crate::shared::WaylandConnectionManager;
 
 pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {

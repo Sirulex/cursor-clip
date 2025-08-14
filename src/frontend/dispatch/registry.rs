@@ -4,7 +4,7 @@ use wayland_client::{
     protocol::wl_registry,
 };
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(

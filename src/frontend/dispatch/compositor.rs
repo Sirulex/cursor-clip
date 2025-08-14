@@ -3,7 +3,7 @@ use wayland_client::{
     protocol::{wl_compositor, wl_region, wl_surface},
 };
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 
 impl Dispatch<wl_compositor::WlCompositor, ()> for State {
     fn event(

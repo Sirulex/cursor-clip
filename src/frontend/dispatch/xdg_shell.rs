@@ -2,7 +2,7 @@ use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
     fn event(

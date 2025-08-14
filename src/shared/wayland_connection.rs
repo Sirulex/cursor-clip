@@ -53,11 +53,11 @@ impl WaylandConnectionManager {
             .map_err(|e| format!("Failed to connect to Wayland: {}", e))?;
         
         // Get globals using a temporary state for discovery
-        let (globals, mut queue): (GlobalList, EventQueue<crate::frontend::state::State>) = 
-            registry_queue_init::<crate::frontend::state::State>(&connection)?;
+        let (globals, mut queue): (GlobalList, EventQueue<crate::frontend::frontend_state::State>) = 
+            registry_queue_init::<crate::frontend::frontend_state::State>(&connection)?;
         
         // Create temporary state for initial roundtrip
-        let mut temp_state = crate::frontend::state::State::new();
+        let mut temp_state = crate::frontend::frontend_state::State::new();
         queue.roundtrip(&mut temp_state)?;
         
         let manager = WaylandConnectionManager {

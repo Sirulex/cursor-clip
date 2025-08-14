@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::shared::{ClipboardItem, ClipboardContentType};
-use crate::frontend::client::SyncFrontendClient;
+use crate::frontend::frontend_client::SyncFrontendClient;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);

@@ -2,7 +2,7 @@ use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1;
 
-use crate::frontend::state::State;
+use crate::frontend::frontend_state::State;
 
 impl Dispatch<wp_viewporter::WpViewporter, ()> for State {
     fn event(
