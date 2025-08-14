@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::os::fd::AsFd;
 use std::collections::HashMap;
 use std::io::Read;
-use wayland_client::protocol::{wl_registry, wl_seat, wl_display};
+use wayland_client::protocol::{wl_seat, wl_display};
 use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
 use wayland_client::backend::ObjectId;
 use wayland_protocols_wlr::data_control::v1::client::{
@@ -13,6 +13,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
 };
 
 use super::BackendState;
+use crate::shared::WaylandConnectionManager;
 
 pub struct WaylandClipboardMonitor {
     backend_state: Arc<Mutex<BackendState>>,
@@ -21,7 +22,6 @@ pub struct WaylandClipboardMonitor {
 #[derive(Debug)]
 struct ClipboardState {
     backend_state: Arc<Mutex<BackendState>>,
-    registry_state: RegistryState,
     data_control_manager: Option<ZwlrDataControlManagerV1>,
     data_control_device: Option<ZwlrDataControlDeviceV1>,
     seat: Option<wl_seat::WlSeat>,
@@ -35,20 +35,12 @@ struct DataOffer {
     mime_types: Vec<String>,
 }
 
-#[derive(Debug)]
-struct RegistryState {
-    data_control_manager_id: Option<u32>,
-    seat_id: Option<u32>,
-}
+
 
 impl ClipboardState {
     fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
         Self {
             backend_state,
-            registry_state: RegistryState {
-                data_control_manager_id: None,
-                seat_id: None,
-            },
             data_control_manager: None,
             data_control_device: None,
             seat: None,
@@ -68,28 +60,45 @@ impl WaylandClipboardMonitor {
     pub async fn start_monitoring(&mut self) -> Result<(), String> {
         println!("Starting clipboard monitor...");
 
-        let conn = Connection::connect_to_env()
-            .map_err(|e| format!("Failed to connect to Wayland: {}", e))?;
-        let display = conn.display();
+        // Get shared connection and bound objects
+        let shared_conn = WaylandConnectionManager::get_global()
+            .ok_or("No shared Wayland connection available")?;
         
-        let mut event_queue = conn.new_event_queue();
-        let qh = event_queue.handle();
+        let (manager, seat, mut event_queue) = {
+            let mut manager_guard = shared_conn.lock().unwrap();
+            
+            // Create event queue from shared connection
+            let event_queue = manager_guard.new_event_queue();
+            let qh = event_queue.handle();
+            
+            // Bind backend protocols if not already bound
+            manager_guard.bind_backend_protocols(&qh)
+                .map_err(|e| format!("Failed to bind backend protocols: {}", e))?;
+            
+            let manager = manager_guard.data_control_manager.as_ref()
+                .ok_or("Data control manager not bound")?
+                .clone();
+            let seat = manager_guard.seat.as_ref()
+                .ok_or("Seat not bound")?
+                .clone();
+            
+            (manager, seat, event_queue)
+        };
+        
+        println!("Using shared Wayland connection and bound objects for clipboard monitoring");
         
         let mut state = ClipboardState::new(self.backend_state.clone());
         
-        let _registry = display.get_registry(&qh, ());
+        // Use the already bound objects instead of discovering them
+        state.data_control_manager = Some(manager.clone());
+        state.seat = Some(seat.clone());
         
-        event_queue.blocking_dispatch(&mut state)
-            .map_err(|e| format!("Failed to dispatch events: {}", e))?;
+        // Set up data control device using the shared bound objects
+        println!("Setting up data control device...");
+        let qh = event_queue.handle();
+        let device = manager.get_data_device(&seat, &qh, ());
+        state.data_control_device = Some(device);
         
-        // Set up data control device once we have both manager and seat
-        if let (Some(manager), Some(seat)) = (&state.data_control_manager, &state.seat) {
-            println!("Setting up data control device...");
-            let device = manager.get_data_device(seat, &qh, ());
-            state.data_control_device = Some(device);
-        } else {
-            return Err("Failed to find required Wayland interfaces. Make sure you're running under a Wayland compositor that supports zwlr_data_control_manager_v1".into());
-        }
         println!("✅ Successfully connected to Wayland data control interface");
         println!("🔍 Monitoring clipboard changes...\n");
         
@@ -101,34 +110,7 @@ impl WaylandClipboardMonitor {
     }
 }
 
-impl Dispatch<wl_registry::WlRegistry, ()> for ClipboardState {
-    fn event(
-        state: &mut Self,
-        registry: &wl_registry::WlRegistry,
-        event: wl_registry::Event,
-        _: &(),
-        _: &Connection,
-        qh: &QueueHandle<ClipboardState>,
-    ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
-            match interface.as_str() {
-                "zwlr_data_control_manager_v1" => {
-                    println!("Found data control manager interface");
-                    let manager = registry.bind::<ZwlrDataControlManagerV1, _, _>(name, version, qh, ());
-                    state.data_control_manager = Some(manager);
-                    state.registry_state.data_control_manager_id = Some(name);
-                }
-                "wl_seat" => {
-                    println!("Found seat interface");
-                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 1, qh, ());
-                    state.seat = Some(seat);
-                    state.registry_state.seat_id = Some(name);
-                }
-                _ => {}
-            }
-        }
-    }
-}
+
 
 impl Dispatch<ZwlrDataControlManagerV1, ()> for ClipboardState {
     fn event(

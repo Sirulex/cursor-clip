@@ -16,28 +16,74 @@ use wayland_protocols::{
 };
 
 use crate::frontend::{state::State, buffer, gtk_overlay};
+use crate::shared::WaylandConnectionManager;
 
 pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize Wayland for layer shell capture
-    let conn = Connection::connect_to_env()?;
-    let (globals, mut queue): (GlobalList, EventQueue<State>) =
-        registry_queue_init::<State>(&conn)?;
+    // Try to use shared Wayland connection first
+    if let Some(shared_connection) = WaylandConnectionManager::get_global() {
+        println!("Using shared Wayland connection from backend...");
+        return run_frontend_with_shared_connection(shared_connection).await;
+    } else {
+        println!("No shared Wayland connection found, creating standalone connection...");
+        return run_frontend_standalone().await;
+    }
+}
 
+async fn run_frontend_with_shared_connection(
+    wayland_connection: std::sync::Arc<std::sync::Mutex<WaylandConnectionManager>>
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Using shared Wayland connection and bound objects from backend...");
+    
+    // Create event queue from shared connection and get bound objects
+    let mut queue = {
+        let mut manager = wayland_connection.lock().unwrap();
+        let queue = manager.new_event_queue();
+        let qh = queue.handle();
+        
+        // Bind frontend protocols if not already bound
+        manager.bind_frontend_protocols(&qh)
+            .map_err(|e| format!("Failed to bind frontend protocols: {}", e))?;
+        
+        queue
+    };
+    
     let mut state = State::new();
     queue.roundtrip(&mut state)?;
 
-    // Initialize Wayland protocols
-    init_wayland_protocols(&globals, &queue, &mut state)?;
+    // Use the already bound objects from shared connection instead of binding new ones
+    {
+        let manager = wayland_connection.lock().unwrap();
+        state.compositor = manager.compositor.clone();
+        state.layer_shell = manager.layer_shell.clone();
+        state.xdg_wm_base = manager.xdg_wm_base.clone();
+        state.shm = manager.shm.clone();
+        state.seat = manager.seat.clone();
+        state.viewporter = manager.viewporter.clone();
+        state.single_pixel_buffer_manager = manager.single_pixel_buffer_manager.clone();
+        state.virtual_pointer_manager = manager.virtual_pointer_manager.clone();
+    }
+
+    // Verify we have required protocols
+    if state.compositor.is_none() || state.layer_shell.is_none() {
+        return Err("Required Wayland protocols not available from shared connection".into());
+    }
 
     // Create capture surfaces for mouse coordinate detection
     setup_capture_layer(&mut state, &queue)?;
 
-    // Main event loop
+    // Main event loop (reuse existing implementation)
+    run_main_event_loop(&mut state, &mut queue).await
+}
+
+async fn run_main_event_loop(
+    state: &mut State, 
+    queue: &mut EventQueue<State>
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut gtk_window_created = false;
     
     loop {
         // Process Wayland events
-        queue.blocking_dispatch(&mut state)?;
+        queue.blocking_dispatch(state)?;
 
         // Create GTK overlay window when coordinates are received
         if state.coords_received && !gtk_window_created {
@@ -78,6 +124,26 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+//Fallback to standalone Wayland connection if shared connection is not available
+async fn run_frontend_standalone() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize Wayland for layer shell capture
+    let conn = Connection::connect_to_env()?;
+    let (globals, mut queue): (GlobalList, EventQueue<State>) =
+        registry_queue_init::<State>(&conn)?;
+
+    let mut state = State::new();
+    queue.roundtrip(&mut state)?;
+
+    // Initialize Wayland protocols
+    init_wayland_protocols(&globals, &queue, &mut state)?;
+
+    // Create capture surfaces for mouse coordinate detection
+    setup_capture_layer(&mut state, &queue)?;
+
+    // Main event loop (reuse existing implementation)
+    run_main_event_loop(&mut state, &mut queue).await
 }
 
 fn init_wayland_protocols(

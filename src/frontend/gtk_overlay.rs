@@ -437,7 +437,7 @@ fn format_timestamp(timestamp: u64) -> String {
     
     let diff = now.saturating_sub(timestamp);
     
-    if diff < 60 {
+    if diff < 30 {
         "Just now".to_string()
     } else if diff < 3600 {
         let minutes = diff / 60;

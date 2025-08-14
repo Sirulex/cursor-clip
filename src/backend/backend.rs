@@ -4,7 +4,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use wayland_client::{Connection, protocol::wl_registry};
 
-use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
+use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType, WaylandConnectionManager};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 
 #[derive(Debug)]
@@ -107,10 +107,23 @@ impl wayland_client::Dispatch<wl_registry::WlRegistry, ()> for BackendState {
     }
 }
 
-pub async fn run_backend() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_backend() -> Result<(), Box<dyn std::error::Error>> { 
     // Remove existing socket if it exists
     let socket_path = "/tmp/cursor-clip.sock";
     let _ = std::fs::remove_file(socket_path);
+
+    // Initialize shared Wayland connection once at startup
+    let _wayland_connection = match WaylandConnectionManager::initialize() {
+        Ok(connection) => {
+            println!("✅ Shared Wayland connection initialized successfully");
+            Some(connection)
+        }
+        Err(e) => {
+            eprintln!("⚠ Failed to initialize shared Wayland connection: {}", e);
+            eprintln!("Continuing without Wayland support...");
+            None
+        }
+    };
 
     // Create Unix socket for IPC
     let listener = UnixListener::bind(socket_path)?;
