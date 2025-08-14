@@ -4,11 +4,8 @@ mod backend;
 mod frontend;
 mod shared;
 
-use backend::*;
-use frontend::*;
-use shared::*;
-
-#[tokio::main]
+//#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("cursor-clip")
         .version("0.1.0")

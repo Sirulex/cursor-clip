@@ -1,10 +1,14 @@
 use std::sync::{Arc, Mutex};
-use std::os::unix::io::{FromRawFd, RawFd, BorrowedFd};
+use std::os::fd::AsFd;
+use std::collections::HashMap;
 use std::io::Read;
-use wayland_client::protocol::{wl_registry, wl_seat};
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_client::protocol::{wl_registry, wl_seat, wl_display};
+use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
 use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_manager_v1, zwlr_data_control_device_v1, zwlr_data_control_offer_v1,
+    zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1}, 
+    zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1}, 
+    zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
+    zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
 
 use super::BackendState;
@@ -13,13 +17,44 @@ pub struct WaylandClipboardMonitor {
     backend_state: Arc<Mutex<BackendState>>,
 }
 
-pub struct ClipboardState {
+#[derive(Debug)]
+struct ClipboardState {
     backend_state: Arc<Mutex<BackendState>>,
-    data_control_manager: Option<zwlr_data_control_manager_v1::ZwlrDataControlManagerV1>,
-    data_control_device: Option<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1>,
+    registry_state: RegistryState,
+    data_control_manager: Option<ZwlrDataControlManagerV1>,
+    data_control_device: Option<ZwlrDataControlDeviceV1>,
     seat: Option<wl_seat::WlSeat>,
-    current_offer: Option<zwlr_data_control_offer_v1::ZwlrDataControlOfferV1>,
+    offers: HashMap<u32, DataOffer>,
+    current_selection: Option<DataOffer>,
+}
+
+#[derive(Debug, Clone)]
+struct DataOffer {
+    offer: ZwlrDataControlOfferV1,
     mime_types: Vec<String>,
+}
+
+#[derive(Debug)]
+struct RegistryState {
+    data_control_manager_id: Option<u32>,
+    seat_id: Option<u32>,
+}
+
+impl ClipboardState {
+    fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
+        Self {
+            backend_state,
+            registry_state: RegistryState {
+                data_control_manager_id: None,
+                seat_id: None,
+            },
+            data_control_manager: None,
+            data_control_device: None,
+            seat: None,
+            offers: HashMap::new(),
+            current_selection: None,
+        }
+    }
 }
 
 impl WaylandClipboardMonitor {
@@ -30,30 +65,34 @@ impl WaylandClipboardMonitor {
     }
 
     pub async fn start_monitoring(&mut self) -> Result<(), String> {
-        println!("Starting Wayland clipboard monitoring...");
-        
-        let connection = Connection::connect_to_env()
+        println!("Starting clipboard monitor...");
+
+        let conn = Connection::connect_to_env()
             .map_err(|e| format!("Failed to connect to Wayland: {}", e))?;
-        let display = connection.display();
+        let display = conn.display();
         
-        let mut event_queue = connection.new_event_queue();
+        let mut event_queue = conn.new_event_queue();
         let qh = event_queue.handle();
         
-        let mut state = ClipboardState {
-            backend_state: self.backend_state.clone(),
-            data_control_manager: None,
-            data_control_device: None,
-            seat: None,
-            current_offer: None,
-            mime_types: Vec::new(),
-        };
-
+        let mut state = ClipboardState::new(self.backend_state.clone());
+        
         let _registry = display.get_registry(&qh, ());
         
-        // Initial roundtrip to get globals
-        event_queue.roundtrip(&mut state)
-            .map_err(|e| format!("Failed to roundtrip: {}", e))?;
-
+        event_queue.blocking_dispatch(&mut state)
+            .map_err(|e| format!("Failed to dispatch events: {}", e))?;
+        
+        // Set up data control device once we have both manager and seat
+        if let (Some(manager), Some(seat)) = (&state.data_control_manager, &state.seat) {
+            println!("Setting up data control device...");
+            let device = manager.get_data_device(seat, &qh, ());
+            state.data_control_device = Some(device);
+        } else {
+            return Err("Failed to find required Wayland interfaces. Make sure you're running under a Wayland compositor that supports zwlr_data_control_manager_v1".into());
+        }
+        println!("✅ Successfully connected to Wayland data control interface");
+        println!("🔍 Monitoring clipboard changes...\n");
+        
+        // Main event loop
         loop {
             event_queue.blocking_dispatch(&mut state)
                 .map_err(|e| format!("Failed to dispatch events: {}", e))?;
@@ -68,43 +107,38 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClipboardState {
         event: wl_registry::Event,
         _: &(),
         _: &Connection,
-        qh: &QueueHandle<Self>,
+        qh: &QueueHandle<ClipboardState>,
     ) {
         if let wl_registry::Event::Global { name, interface, version } = event {
             match interface.as_str() {
                 "zwlr_data_control_manager_v1" => {
-                    println!("Found data control manager");
-                    let manager = registry.bind::<zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, _, _>(
-                        name, version.min(2), qh, ()
-                    );
+                    println!("Found data control manager interface");
+                    let manager = registry.bind::<ZwlrDataControlManagerV1, _, _>(name, version, qh, ());
                     state.data_control_manager = Some(manager);
-                    
-                    // Try to create device if we have a seat
-                    if let Some(seat) = &state.seat {
-                        if let Some(manager) = &state.data_control_manager {
-                            let device = manager.get_data_device(seat, qh, ());
-                            state.data_control_device = Some(device);
-                            println!("Created data control device");
-                        }
-                    }
+                    state.registry_state.data_control_manager_id = Some(name);
                 }
                 "wl_seat" => {
-                    println!("Found seat");
-                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(
-                        name, version.min(1), qh, ()
-                    );
-                    state.seat = Some(seat.clone());
-                    
-                    // Try to create device if we have a manager
-                    if let Some(manager) = &state.data_control_manager {
-                        let device = manager.get_data_device(&seat, qh, ());
-                        state.data_control_device = Some(device);
-                        println!("Created data control device");
-                    }
+                    println!("Found seat interface");
+                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 1, qh, ());
+                    state.seat = Some(seat);
+                    state.registry_state.seat_id = Some(name);
                 }
                 _ => {}
             }
         }
+    }
+}
+
+impl Dispatch<ZwlrDataControlManagerV1, ()> for ClipboardState {
+    fn event(
+        _: &mut Self,
+        _: &ZwlrDataControlManagerV1,
+        _: zwlr_data_control_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<ClipboardState>,
+    ) {
+        // No events for the manager
     }
 }
 
@@ -115,53 +149,55 @@ impl Dispatch<wl_seat::WlSeat, ()> for ClipboardState {
         _: wl_seat::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<Self>,
+        _: &QueueHandle<ClipboardState>,
     ) {
-        // Seat events are not needed for our clipboard monitoring
+        // We don't need to handle seat events for this application
     }
 }
 
-impl Dispatch<zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, ()> for ClipboardState {
-    fn event(
-        _: &mut Self,
-        _: &zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
-        _: zwlr_data_control_manager_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // No events from the manager
-    }
-}
-
-impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()> for ClipboardState {
+impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
     fn event(
         state: &mut Self,
-        _: &zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
+        _: &ZwlrDataControlDeviceV1,
         event: zwlr_data_control_device_v1::Event,
         _: &(),
-        _: &Connection,
-        _qh: &QueueHandle<Self>,
+        conn: &Connection,
+        _qh: &QueueHandle<ClipboardState>,
     ) {
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
-                println!("New data offer received");
-                state.current_offer = Some(id);
-                state.mime_types.clear(); // Reset MIME types for new offer
+                let protocol_id = id.id().protocol_id();
+
+                println!("New data offer received with ID: {}", protocol_id);
+                // The id is already bound to our event queue, we just need to store it
+                let offer = DataOffer {
+                    offer: id,
+                    mime_types: Vec::new(),
+                };
+                state.offers.insert(protocol_id, offer);
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
-                println!("Clipboard selection changed");
-                if let Some(_offer) = id {
-                    // We'll handle the actual data reading when we get the MIME types
-                    println!("Selection offer available");
+                if let Some(offer_id) = id {
+                    let protocol_id = offer_id.id().protocol_id();
+                    println!("Selection changed to offer ID: {}", protocol_id);
+                    if let Some(offer) = state.offers.get(&protocol_id).cloned() {
+                        println!("New clipboard content available with {} MIME types", offer.mime_types.len());
+                        
+                        // Only process if we haven't already processed this offer
+                        if state.current_selection.as_ref().map(|s| s.offer.id().protocol_id()) != Some(protocol_id) {
+                            state.current_selection = Some(offer.clone());
+                            
+                            // Use the new read_offer function similar to the example
+                            read_offer(&offer.offer, &offer.mime_types, conn, state.backend_state.clone());
+                        }
+                    }
+                } else {
+                    println!("Selection cleared");
+                    state.current_selection = None;
                 }
             }
-            zwlr_data_control_device_v1::Event::PrimarySelection { id } => {
-                println!("Primary selection changed");
-                if let Some(_offer) = id {
-                    // We'll handle the actual data reading when we get the MIME types
-                    println!("Primary selection offer available");
-                }
+            zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {
+                // We ignore primary selection as requested
             }
             _ => {}
         }
@@ -174,7 +210,7 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()> for Clip
         match opcode {
             0 => {
                 // DataOffer event - create a data offer object data
-                qhandle.make_data::<zwlr_data_control_offer_v1::ZwlrDataControlOfferV1, ()>(())
+                qhandle.make_data::<ZwlrDataControlOfferV1, ()>(())
             }
             _ => {
                 panic!("Unknown child object for opcode {}", opcode);
@@ -183,79 +219,111 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()> for Clip
     }
 }
 
-impl Dispatch<zwlr_data_control_offer_v1::ZwlrDataControlOfferV1, ()> for ClipboardState {
+impl Dispatch<ZwlrDataControlOfferV1, ()> for ClipboardState {
     fn event(
         state: &mut Self,
-        offer: &zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
+        offer: &ZwlrDataControlOfferV1,
         event: zwlr_data_control_offer_v1::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<Self>,
+        _: &QueueHandle<ClipboardState>,
     ) {
-        match event {
-            zwlr_data_control_offer_v1::Event::Offer { mime_type } => {
-                println!("Data offer available for MIME type: {}", mime_type);
-                state.mime_types.push(mime_type.clone());
-                
-                // If it's text/plain, request the data immediately
-                if mime_type == "text/plain" {
-                    println!("Requesting text/plain clipboard data");
-                    
-                    // Create a pipe to receive the data
-                    match create_pipe() {
-                        Ok((read_fd, write_fd)) => {
-                            use std::os::unix::io::BorrowedFd;
-                            let borrowed_fd = unsafe { BorrowedFd::borrow_raw(write_fd) };
-                            offer.receive(mime_type, borrowed_fd);
-                            close_fd(write_fd);
-                            
-                            // Read clipboard content in background
-                            let backend_state = state.backend_state.clone();
-                            tokio::spawn(async move {
-                                read_clipboard_data(read_fd, backend_state).await;
-                            });
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to create pipe: {}", e);
-                        }
-                    }
-                }
+        if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
+            let protocol_id = offer.id().protocol_id();
+            if let Some(data_offer) = state.offers.get_mut(&protocol_id) {
+                data_offer.mime_types.push(mime_type);
+                //println!("Offer supports MIME type: {}", data_offer.mime_types.last().unwrap());
             }
-            _ => {}
         }
     }
 }
 
-fn create_pipe() -> Result<(RawFd, RawFd), Box<dyn std::error::Error>> {
+impl Dispatch<ZwlrDataControlSourceV1, ()> for ClipboardState {
+    fn event(
+        _: &mut Self,
+        _: &ZwlrDataControlSourceV1,
+        _: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<ClipboardState>,
+    ) {
+        // We don't use data control source in this app
+    }
+}
+
+impl Dispatch<wl_display::WlDisplay, ()> for ClipboardState {
+    fn event(
+        _: &mut Self,
+        _: &wl_display::WlDisplay,
+        _: wl_display::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<ClipboardState>,
+    ) {
+        // Handle display events if needed
+    }
+}
+
+/// Create a pipe for reading clipboard data
+fn create_pipes() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::Error>> {
     let mut fds = [0; 2];
     let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if result == 0 {
-        Ok((fds[0], fds[1]))
-    } else {
-        Err("Failed to create pipe".into())
+    if result != 0 {
+        return Err("Failed to create pipe".into());
     }
+    
+    // Convert file descriptors to Files for easier handling
+    use std::os::fd::FromRawFd;
+    let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+    
+    Ok((reader, writer))
 }
 
-fn close_fd(fd: RawFd) {
-    unsafe {
-        libc::close(fd);
-    }
-}
-
-async fn read_clipboard_data(read_fd: RawFd, backend_state: Arc<Mutex<BackendState>>) {
-    tokio::task::spawn_blocking(move || {
-        let mut file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-        let mut buffer = Vec::new();
-        
-        if let Ok(_) = file.read_to_end(&mut buffer) {
-            if let Ok(content) = String::from_utf8(buffer) {
-                let content = content.trim().to_string();
-                if !content.is_empty() {
-                    println!("Received clipboard content: {}", content);
-                    let mut backend = backend_state.lock().unwrap();
-                    backend.add_clipboard_item(content);
+/// Read data from a clipboard offer
+fn read_offer(
+    data_offer: &ZwlrDataControlOfferV1,
+    mime_types: &[String],
+    conn: &Connection,
+    backend_state: Arc<Mutex<BackendState>>,
+) {
+    // Prioritize text/plain over other types, similar to the example
+    for mime_type in mime_types {
+        if mime_type == "text/plain" || mime_type == "text/plain;charset=utf-8" {
+            let (mut reader, writer) = match create_pipes() {
+                Ok((reader, writer)) => (reader, writer),
+                Err(err) => {
+                    eprintln!("Could not open pipe to read data: {:?}", err);
+                    continue;
+                }
+            };
+            
+            println!("Requesting {} content...", mime_type);
+            data_offer.receive(mime_type.clone(), writer.as_fd());
+            drop(writer); // We won't write anything, the selection client will.
+            
+            // Flush to ensure data is sent
+            conn.flush().expect("Failed to flush connection");
+            
+            // Read the data synchronously
+            let mut content = String::new();
+            match reader.read_to_string(&mut content) {
+                Ok(_) => {
+                    if !content.trim().is_empty() {
+                        println!("📋 Clipboard content: {}", content.trim());
+                        
+                        // Add to backend state
+                        let mut backend = backend_state.lock().unwrap();
+                        backend.add_clipboard_item(content.trim().to_string());
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Failed to read clipboard content: {:?}", err);
                 }
             }
+            
+            // Only read from the first suitable mime type
+            break;
         }
-    }).await.ok();
+    }
 }
