@@ -82,17 +82,17 @@ A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**
 #### Ubuntu/Debian:
 ```bash
 sudo apt update
-sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev
+sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev gtk4-layer-shell
 ```
 
 #### Fedora:
 ```bash
-sudo dnf install gtk4-devel libadwaita-devel
+sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
 ```
 
 #### Arch Linux:
 ```bash
-sudo pacman -S gtk4 libadwaita
+sudo pacman -S gtk4 libadwaita gtk4-layer-shell
 ```
 
 ### Compile and Run
