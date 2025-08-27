@@ -69,14 +69,4 @@ impl SyncFrontendClient {
     pub fn send_message(&mut self, message: FrontendMessage) -> Result<BackendMessage, Box<dyn std::error::Error>> {
         self.send_message_sync(message)
     }
-
-    /// Set clipboard by content (legacy compatibility method)
-    pub fn set_clipboard(&mut self, content: String) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message_sync(FrontendMessage::SetClipboard { content })?;
-        match response {
-            BackendMessage::ClipboardSet => Ok(()),
-            BackendMessage::Error { message } => Err(message.into()),
-            _ => Err("Unexpected response".into()),
-        }
-    }
 }

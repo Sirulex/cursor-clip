@@ -75,13 +75,6 @@ impl BackendState {
         history.clear();
     }
 
-    pub fn set_clipboard(&self, content: String) -> Result<(), String> {
-        // For now, just add it to history as a placeholder
-        // In a real implementation, this would set the system clipboard
-        println!("Setting clipboard content: {}", content);
-        Ok(())
-    }
-
     pub fn set_clipboard_by_id(&self, id: u64) -> Result<(), String> {
         if let Some(item) = self.get_item_by_id(id) {
             println!("Setting clipboard content by ID {}: {}", id, item.content);
@@ -186,13 +179,6 @@ async fn handle_client(
                 let state = state.lock().unwrap();
                 let items = state.get_history();
                 BackendMessage::History { items }
-            }
-            FrontendMessage::SetClipboard { content } => {
-                let state = state.lock().unwrap();
-                match state.set_clipboard(content) {
-                    Ok(_) => BackendMessage::ClipboardSet,
-                    Err(e) => BackendMessage::Error { message: e },
-                }
             }
             FrontendMessage::SetClipboardById { id } => {
                 let state = state.lock().unwrap();

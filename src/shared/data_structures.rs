@@ -23,9 +23,7 @@ pub enum ClipboardContentType {
 pub enum FrontendMessage {
     /// Request clipboard history
     GetHistory,
-    /// Set clipboard content by string
-    SetClipboard { content: String },
-    /// Set clipboard content by ID (preferred method)
+    /// Set clipboard content by ID
     SetClipboardById { id: u64 },
     /// Clear all clipboard history
     ClearHistory,
