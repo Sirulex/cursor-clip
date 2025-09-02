@@ -32,7 +32,7 @@ impl WaylandClipboardMonitor {
         println!("Starting unified Wayland clipboard monitor...");
 
         // Establish Wayland connection
-        let connection = Connection::connect_to_env()
+    let connection = Connection::connect_to_env()
             .map_err(|e| format!("Failed to connect to Wayland: {}", e))?;
         let (globals, mut event_queue): (GlobalList, EventQueue<SharedBackendStateWrapper>) =
             registry_queue_init::<SharedBackendStateWrapper>(&connection)
@@ -51,6 +51,7 @@ impl WaylandClipboardMonitor {
         {
             let mut state = self.backend_state.lock().unwrap();
             state.qh = Some(qh.clone());
+            state.connection = Some(connection.clone());
         }
 
         // Bind seat
@@ -82,6 +83,9 @@ impl WaylandClipboardMonitor {
         println!("🔍 Monitoring clipboard changes...\n");
 
         loop {
+            // First drain any already queued events (e.g., triggered after we set selection & flushed)
+            if let Err(e) = event_queue.dispatch_pending(&mut shared_state_wrapper) { return Err(format!("Failed to dispatch pending events: {e}")); }
+            // Then block waiting for new ones
             event_queue.blocking_dispatch(&mut shared_state_wrapper)
                 .map_err(|e| format!("Failed to dispatch events: {}", e))?;
         }
@@ -235,6 +239,7 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
         
         match event {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
+                println!("Data source Send event for MIME type: {}", mime_type);
                 if mime_type == "text/plain" {
                     if let Some(item_id) = state.current_source_id {
                         if let Some(item) = state.get_item_by_id(item_id) {

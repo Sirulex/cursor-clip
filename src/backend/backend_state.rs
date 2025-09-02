@@ -9,7 +9,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
 use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
-use wayland_client::QueueHandle;
+use wayland_client::{QueueHandle, Connection};
 
 use crate::shared::{ClipboardItem, ClipboardContentType};
 
@@ -44,6 +44,8 @@ pub struct BackendState {
     // event loop. This flag suppresses reading the very next selection so we
     // avoid blocking on our own source.
     pub suppress_next_selection_read: bool,
+    // Connection handle so we can flush after setting a selection
+    pub connection: Option<Connection>,
 }
 
 impl Default for BackendState {
@@ -66,6 +68,7 @@ impl BackendState {
             current_source_id: None,
             qh: None,
             suppress_next_selection_read: false,
+            connection: None,
         }
     }
 
@@ -81,7 +84,7 @@ impl BackendState {
         };
 
         // Remove previous occurrence of identical content
-        // self.history.retain(|existing| existing.content != item.content);
+        self.history.retain(|existing| existing.content != item.content);
         self.history.insert(0, item);
         if self.history.len() > 100 { 
             self.history.truncate(100); 
@@ -113,10 +116,14 @@ impl BackendState {
         let source = manager.create_data_source(&qh, ());
         source.offer("text/plain".into());
         device.set_selection(Some(&source));
-        self.current_source_object = Some(source.clone());
+        self.current_source_object = Some(source);
         self.current_source_id = Some(id);
         // Prevent reading back our own just-set selection (would deadlock)
         self.suppress_next_selection_read = true;
+        // Flush the Wayland connection so the compositor sees our selection (very important)
+        if let Some(conn) = &self.connection {
+            if let Err(e) = conn.flush() { eprintln!("Failed to flush Wayland connection after setting selection: {e}"); }
+        }
         println!("✅ Created clipboard source and set selection (id {})", id);
         Ok(())
     }
