@@ -2,13 +2,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_seat;
-use wayland_client::QueueHandle;
 use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, 
     zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, 
     zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
     zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
+use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
+use wayland_client::QueueHandle;
 
 use crate::shared::{ClipboardItem, ClipboardContentType};
 
@@ -22,7 +23,7 @@ pub struct DataOffer {
 pub struct BackendState {
     // Clipboard history and management
     pub history: Vec<ClipboardItem>,
-    pub next_id: u64,
+    pub id_for_next_entry: u64,
     
     // Wayland objects for clipboard operations
     pub data_control_manager: Option<ZwlrDataControlManagerV1>,
@@ -32,8 +33,17 @@ pub struct BackendState {
     // Current clipboard data
     pub offers: HashMap<ObjectId, DataOffer>,
     pub current_selection: Option<DataOffer>,
-    pub current_source: Option<ZwlrDataControlSourceV1>,
-    pub pending_clipboard_text: Option<String>,
+    pub current_source_object: Option<ZwlrDataControlSourceV1>,
+    pub current_source_id: Option<u64>,
+    // Queue handle (for creating data sources) tied to wrapper state type
+    pub qh: Option<QueueHandle<SharedBackendStateWrapper>>,
+    // When we programmatically set the selection, the compositor will echo it
+    // back as a new offer/selection. If we immediately try to read that offer
+    // inside the dispatch callback, we deadlock because the Send event for our
+    // own ZwlrDataControlSourceV1 cannot be processed until we return to the
+    // event loop. This flag suppresses reading the very next selection so we
+    // avoid blocking on our own source.
+    pub suppress_next_selection_read: bool,
 }
 
 impl Default for BackendState {
@@ -46,20 +56,22 @@ impl BackendState {
     pub fn new() -> Self {
         Self {
             history: Vec::new(),
-            next_id: 1,
+            id_for_next_entry: 1,
             data_control_manager: None,
             data_control_device: None,
             seat: None,
             offers: HashMap::new(),
             current_selection: None,
-            current_source: None,
-            pending_clipboard_text: None,
+            current_source_object: None,
+            current_source_id: None,
+            qh: None,
+            suppress_next_selection_read: false,
         }
     }
 
     pub fn add_clipboard_item(&mut self, content: String) {
         let item = ClipboardItem {
-            id: self.next_id,
+            id: self.id_for_next_entry,
             content_type: ClipboardContentType::from_content(&content),
             content,
             timestamp: SystemTime::now()
@@ -69,12 +81,12 @@ impl BackendState {
         };
 
         // Remove previous occurrence of identical content
-        self.history.retain(|existing| existing.content != item.content);
+        // self.history.retain(|existing| existing.content != item.content);
         self.history.insert(0, item);
         if self.history.len() > 100 { 
             self.history.truncate(100); 
         }
-        self.next_id += 1;
+        self.id_for_next_entry += 1;
     }
 
     pub fn get_history(&self) -> Vec<ClipboardItem> { 
@@ -90,39 +102,22 @@ impl BackendState {
     }
 
     pub fn set_clipboard_by_id(&mut self, id: u64) -> Result<(), String> {
-        if let Some(item) = self.get_item_by_id(id) {
-            println!("Setting clipboard content by ID {}: {}", id, item.content);
-            
-            // Store the text to be set when the next data source event occurs
-            self.pending_clipboard_text = Some(item.content);
-            
-            // If we have the necessary objects, the event loop will handle creating the source
-            // Otherwise, return an error
-            if self.data_control_manager.is_some() && self.data_control_device.is_some() {
-                Ok(())
-            } else {
-                Err("Wayland clipboard objects not available".into())
-            }
-        } else { 
-            Err(format!("No clipboard item found with ID: {}", id)) 
-        }
-    }
+        let item = self.get_item_by_id(id).ok_or_else(|| format!("No clipboard item found with ID: {}", id))?;
+        println!("Setting clipboard content by ID {}: {}", id, item.content);
 
-    /// Create a new data source for setting clipboard content
-    pub fn create_clipboard_source(&mut self, qh: &QueueHandle<BackendState>) -> Result<(), String> {
-        if let Some(pending_text) = &self.pending_clipboard_text {
-            if let (Some(manager), Some(device)) = (&self.data_control_manager, &self.data_control_device) {
-                let source = manager.create_data_source(qh, ());
-                source.offer("text/plain".into());
-                source.offer("text/plain;charset=utf-8".into());
-                
-                self.current_source = Some(source.clone());
-                device.set_selection(Some(&source));
-                
-                println!("✅ Created clipboard source for: {}", pending_text);
-                return Ok(());
-            }
-        }
-        Err("Cannot create clipboard source".into())
+        let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
+            (Some(m), Some(d), Some(q)) => (m.clone(), d.clone(), q.clone()),
+            _ => return Err("Wayland clipboard objects not available yet".into()),
+        };
+
+        let source = manager.create_data_source(&qh, ());
+        source.offer("text/plain".into());
+        device.set_selection(Some(&source));
+        self.current_source_object = Some(source.clone());
+        self.current_source_id = Some(id);
+        // Prevent reading back our own just-set selection (would deadlock)
+        self.suppress_next_selection_read = true;
+        println!("✅ Created clipboard source and set selection (id {})", id);
+        Ok(())
     }
 }
