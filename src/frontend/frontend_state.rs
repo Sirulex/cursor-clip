@@ -23,8 +23,7 @@ pub struct State {
     pub shm: Option<wl_shm::WlShm>,
     pub pool: Option<wl_shm_pool::WlShmPool>,
     pub seat: Option<wl_seat::WlSeat>,
-    pub single_pixel_buffer_manager:
-        Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
+    pub single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
     pub virtual_pointer_manager: Option<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1>,
     pub virtual_pointer: Option<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,

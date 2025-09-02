@@ -60,5 +60,3 @@ impl FrontendClient {
         }
     }
 }
-
-// (Removed legacy SyncFrontendClient alias and duplicate wrapper)

@@ -73,8 +73,6 @@ impl WaylandClipboardMonitor {
                 state.data_control_device = Some(device);
             }
             
-            // Store a compatible queue handle - we'll need to address this type mismatch
-            // For now, we'll handle clipboard setting through a different mechanism
         } else {
             return Err("zwlr_data_control_manager_v1 not available".into());
         }
@@ -163,9 +161,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
                         println!("New clipboard content available with {} MIME types", data_offer.mime_types.len());
                         
                         if state.suppress_next_selection_read {
-                            // Do NOT reset the flag here anymore. We keep suppressing until the
-                            // compositor sends a Cancelled event for our source. This avoids
-                            // races where we might prematurely read our own offer and block.
+                            //We keep suppressing until the compositor sends a Cancelled event for our source
                             state.current_data_offer = Some(data_offer.clone());
                             println!("(Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads)");
                             return;
