@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::shared::{ClipboardItem, ClipboardContentType};
-use crate::frontend::frontend_client::SyncFrontendClient;
+use crate::frontend::frontend_client::FrontendClient;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -77,7 +77,7 @@ fn create_overlay_content() -> Box {
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
 
     // Load clipboard items from backend
-    let items = match SyncFrontendClient::new() {
+    let items = match FrontendClient::new() {
         Ok(mut client) => {
             client.get_history().unwrap_or_else(|e| {
                 eprintln!("Error getting clipboard history: {}", e);
@@ -139,7 +139,7 @@ fn create_overlay_content() -> Box {
                 println!("Selected clipboard item ID {}: {}", item.id, item.content);
                 
                 // Use ID-based clipboard operation
-                match SyncFrontendClient::new() {
+                match FrontendClient::new() {
                     Ok(mut client) => {
                         if let Err(e) = client.set_clipboard_by_id(item.id) {
                             eprintln!("Error setting clipboard by ID: {}", e);
@@ -168,7 +168,7 @@ fn create_overlay_content() -> Box {
     // Connect button signals
     clear_button.connect_clicked(move |_| {
         println!("Clear all clipboard history");
-        match SyncFrontendClient::new() {
+    match FrontendClient::new() {
             Ok(mut client) => {
                 if let Err(e) = client.clear_history() {
                     eprintln!("Error clearing clipboard history: {}", e);

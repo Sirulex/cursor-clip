@@ -17,7 +17,7 @@ impl FrontendClient {
     }
 
     /// Send a message and get response
-    pub fn send_message_sync(&mut self, message: FrontendMessage) -> Result<BackendMessage, Box<dyn std::error::Error>> {
+    pub fn send_message(&mut self, message: FrontendMessage) -> Result<BackendMessage, Box<dyn std::error::Error>> {
         let message_json = serde_json::to_string(&message)?;
         self.stream.write_all(message_json.as_bytes())?;
         self.stream.write_all(b"\n")?;
@@ -32,7 +32,7 @@ impl FrontendClient {
 
     /// Get clipboard history
     pub fn get_history(&mut self) -> Result<Vec<ClipboardItem>, Box<dyn std::error::Error>> {
-        let response = self.send_message_sync(FrontendMessage::GetHistory)?;
+    let response = self.send_message(FrontendMessage::GetHistory)?;
         match response {
             BackendMessage::History { items } => Ok(items),
             BackendMessage::Error { message } => Err(message.into()),
@@ -42,7 +42,7 @@ impl FrontendClient {
 
     /// Set clipboard by ID (preferred method)
     pub fn set_clipboard_by_id(&mut self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message_sync(FrontendMessage::SetClipboardById { id })?;
+    let response = self.send_message(FrontendMessage::SetClipboardById { id })?;
         match response {
             BackendMessage::ClipboardSet => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),
@@ -52,7 +52,7 @@ impl FrontendClient {
 
     /// Clear history
     pub fn clear_history(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message_sync(FrontendMessage::ClearHistory)?;
+    let response = self.send_message(FrontendMessage::ClearHistory)?;
         match response {
             BackendMessage::HistoryCleared => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),
@@ -61,12 +61,4 @@ impl FrontendClient {
     }
 }
 
-/// Convenience alias for backward compatibility
-pub type SyncFrontendClient = FrontendClient;
-
-impl SyncFrontendClient {
-    /// Send a message and get response (compatibility method)
-    pub fn send_message(&mut self, message: FrontendMessage) -> Result<BackendMessage, Box<dyn std::error::Error>> {
-        self.send_message_sync(message)
-    }
-}
+// (Removed legacy SyncFrontendClient alias and duplicate wrapper)
