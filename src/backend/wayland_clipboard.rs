@@ -229,7 +229,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
 impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
     fn event(
         wrapper: &mut Self,
-        _source: &ZwlrDataControlSourceV1,
+        source: &ZwlrDataControlSourceV1,
         event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
         _: &(),
         _: &Connection,
@@ -269,13 +269,20 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
                 } else {
                     println!("🛑 Data source cancelled. (No text stored)");
                 }
-                // Clear current source info now that compositor cancelled it
-                state.current_source_object = None;
-                state.current_source_id = None;
-                // Now that our own source is cancelled, allow reading the next external selection
-                if state.suppress_next_selection_read {
+                let cancelled_id = source.id();
+                // If the cancelled source is our currently active one, clear it
+                if state.current_source_object.as_ref().map(|s| s.id()) == Some(cancelled_id.clone()) {
+                    state.current_source_object = None;
+                    state.current_source_id = None;
+                }
+                // Only re-enable reading if this cancelled source matches the suppressed source
+                if state.suppress_next_selection_read && state.suppressed_source_id == Some(cancelled_id.clone()) {
                     state.suppress_next_selection_read = false;
-                    println!("🔄 Re-enabled selection reading after source cancellation");
+                    state.suppressed_source_id = None;
+                    println!("🔄 Re-enabled selection reading after suppressed source cancellation");
+                } else if state.suppressed_source_id != Some(cancelled_id.clone()) {
+                    // Cancellation of an older source we replaced; keep suppression
+                    println!("(Ignored cancellation of non-suppressed source {:?}; still suppressing)", cancelled_id);
                 }
             }
             _ => {}

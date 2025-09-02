@@ -9,7 +9,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
 use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
-use wayland_client::{QueueHandle, Connection};
+use wayland_client::{QueueHandle, Connection, Proxy};
 
 use crate::shared::{ClipboardItem, ClipboardContentType};
 
@@ -46,6 +46,8 @@ pub struct BackendState {
     pub suppress_next_selection_read: bool,
     // Connection handle so we can flush after setting a selection
     pub connection: Option<Connection>,
+    // The source object id whose echoed selection we are currently suppressing
+    pub suppressed_source_id: Option<wayland_client::backend::ObjectId>,
 }
 
 impl Default for BackendState {
@@ -69,6 +71,7 @@ impl BackendState {
             qh: None,
             suppress_next_selection_read: false,
             connection: None,
+            suppressed_source_id: None,
         }
     }
 
@@ -116,10 +119,12 @@ impl BackendState {
         let source = manager.create_data_source(&qh, ());
         source.offer("text/plain".into());
         device.set_selection(Some(&source));
-        self.current_source_object = Some(source);
+        self.current_source_object = Some(source.clone());
         self.current_source_id = Some(id);
         // Prevent reading back our own just-set selection (would deadlock)
         self.suppress_next_selection_read = true;
+        // Track which source's offer we are suppressing
+        self.suppressed_source_id = Some(source.id());
         // Flush the Wayland connection so the compositor sees our selection (very important)
         if let Some(conn) = &self.connection {
             if let Err(e) = conn.flush() { eprintln!("Failed to flush Wayland connection after setting selection: {e}"); }
