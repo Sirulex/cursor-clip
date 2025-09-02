@@ -307,8 +307,9 @@ fn read_offer(
                         println!("📋 Clipboard content: {}", content.trim());
                         
                         // Add to backend state
-                        let mut backend = backend_state.lock().unwrap();
-                        backend.add_clipboard_item(content.trim().to_string());
+                        if let Ok(mut backend) = backend_state.lock() {
+                            backend.add_clipboard_item(content.trim().to_string());
+                        }
                     }
                 }
                 Err(err) => {

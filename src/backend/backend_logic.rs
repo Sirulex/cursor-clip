@@ -7,34 +7,18 @@ use wayland_client::{Connection, protocol::wl_registry};
 use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 
-#[derive(Debug)]
-pub struct ClipboardBackend {
-    history: Arc<Mutex<Vec<ClipboardItem>>>,
-    next_id: Arc<Mutex<u64>>,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct BackendState {
-    backend: Arc<Mutex<ClipboardBackend>>,
+    history: Vec<ClipboardItem>,
+    next_id: u64,
 }
 
 impl BackendState {
-    pub fn new() -> Self {
-        Self {
-            backend: Arc::new(Mutex::new(ClipboardBackend {
-                history: Arc::new(Mutex::new(Vec::new())),
-                next_id: Arc::new(Mutex::new(1)),
-            })),
-        }
-    }
+    pub fn new() -> Self { Self { history: Vec::new(), next_id: 1 } }
 
     pub fn add_clipboard_item(&mut self, content: String) {
-        let backend = self.backend.lock().unwrap();
-        let mut history = backend.history.lock().unwrap();
-        let mut next_id = backend.next_id.lock().unwrap();
-
         let item = ClipboardItem {
-            id: *next_id,
+            id: self.next_id,
             content_type: ClipboardContentType::from_content(&content),
             content,
             timestamp: SystemTime::now()
@@ -43,46 +27,21 @@ impl BackendState {
                 .as_secs(),
         };
 
-        // Remove duplicate if it exists
-        history.retain(|existing| existing.content != item.content);
-        
-        // Add to front
-        history.insert(0, item);
-        
-        // Keep only last 100 items
-        if history.len() > 100 {
-            history.truncate(100);
-        }
-
-        *next_id += 1;
+        // Remove previous occurrence of identical content
+        self.history.retain(|existing| existing.content != item.content);
+        self.history.insert(0, item);
+        if self.history.len() > 100 { self.history.truncate(100); }
+        self.next_id += 1;
     }
 
-    pub fn get_history(&self) -> Vec<ClipboardItem> {
-        let backend = self.backend.lock().unwrap();
-        let history = backend.history.lock().unwrap();
-        history.clone()
-    }
-
-    pub fn get_item_by_id(&self, id: u64) -> Option<ClipboardItem> {
-        let backend = self.backend.lock().unwrap();
-        let history = backend.history.lock().unwrap();
-        history.iter().find(|item| item.id == id).cloned()
-    }
-
-    pub fn clear_history(&mut self) {
-        let backend = self.backend.lock().unwrap();
-        let mut history = backend.history.lock().unwrap();
-        history.clear();
-    }
-
+    pub fn get_history(&self) -> Vec<ClipboardItem> { self.history.clone() }
+    pub fn get_item_by_id(&self, id: u64) -> Option<ClipboardItem> { self.history.iter().find(|i| i.id == id).cloned() }
+    pub fn clear_history(&mut self) { self.history.clear(); }
     pub fn set_clipboard_by_id(&self, id: u64) -> Result<(), String> {
         if let Some(item) = self.get_item_by_id(id) {
             println!("Setting clipboard content by ID {}: {}", id, item.content);
-            // In a real implementation, this would set the system clipboard
             Ok(())
-        } else {
-            Err(format!("No clipboard item found with ID: {}", id))
-        }
+        } else { Err(format!("No clipboard item found with ID: {}", id)) }
     }
 }
 
@@ -133,11 +92,13 @@ pub async fn run_backend() -> Result<(), Box<dyn std::error::Error>> {
     // Add some sample data
     {
         let mut state_lock = state.lock().unwrap();
-        state_lock.add_clipboard_item("Hello, world Jannik!".to_string());
-        state_lock.add_clipboard_item("https://github.com/rust-lang/rust".to_string());
-        state_lock.add_clipboard_item("Sample clipboard content for testing the clipboard manager".to_string());
-        state_lock.add_clipboard_item("impl Display for MyStruct {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"MyStruct\")\n    }\n}".to_string());
-        state_lock.add_clipboard_item("Password4234!Jannik".to_string());
+        for sample in [
+            "Hello, world Jannik!",
+            "https://github.com/rust-lang/rust",
+            "Sample clipboard content for testing the clipboard manager",
+            "impl Display for MyStruct {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"MyStruct\")\n    }\n}",
+            "Password4234!Jannik",
+        ] { state_lock.add_clipboard_item(sample.to_string()); }
     }
 
     // Handle IPC connections
@@ -166,8 +127,7 @@ async fn handle_client(
         let response = match message {
             FrontendMessage::GetHistory => {
                 let state = state.lock().unwrap();
-                let items = state.get_history();
-                BackendMessage::History { items }
+                BackendMessage::History { items: state.get_history() }
             }
             FrontendMessage::SetClipboardById { id } => {
                 let state = state.lock().unwrap();
