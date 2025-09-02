@@ -28,15 +28,15 @@ pub struct BackendState {
     // Wayland objects for clipboard operations
     pub data_control_manager: Option<ZwlrDataControlManagerV1>,
     pub data_control_device: Option<ZwlrDataControlDeviceV1>,
+    pub qh: Option<QueueHandle<SharedBackendStateWrapper>>,
     pub seat: Option<wl_seat::WlSeat>,
+    pub connection: Option<Connection>,
     
     // Current clipboard data
     pub offers: HashMap<ObjectId, DataOffer>,
-    pub current_selection: Option<DataOffer>,
+    pub current_data_offer: Option<DataOffer>,
     pub current_source_object: Option<ZwlrDataControlSourceV1>,
-    pub current_source_id: Option<u64>,
-    // Queue handle (for creating data sources) tied to wrapper state type
-    pub qh: Option<QueueHandle<SharedBackendStateWrapper>>,
+    pub current_source_entry_id: Option<u64>,
     // When we programmatically set the selection, the compositor will echo it
     // back as a new offer/selection. If we immediately try to read that offer
     // inside the dispatch callback, we deadlock because the Send event for our
@@ -44,10 +44,6 @@ pub struct BackendState {
     // event loop. This flag suppresses reading the very next selection so we
     // avoid blocking on our own source.
     pub suppress_next_selection_read: bool,
-    // Connection handle so we can flush after setting a selection
-    pub connection: Option<Connection>,
-    // The source object id whose echoed selection we are currently suppressing
-    pub suppressed_source_id: Option<wayland_client::backend::ObjectId>,
 }
 
 impl Default for BackendState {
@@ -65,13 +61,12 @@ impl BackendState {
             data_control_device: None,
             seat: None,
             offers: HashMap::new(),
-            current_selection: None,
+            current_data_offer: None,
             current_source_object: None,
-            current_source_id: None,
+            current_source_entry_id: None,
             qh: None,
             suppress_next_selection_read: false,
             connection: None,
-            suppressed_source_id: None,
         }
     }
 
@@ -107,9 +102,9 @@ impl BackendState {
         self.history.clear(); 
     }
 
-    pub fn set_clipboard_by_id(&mut self, id: u64) -> Result<(), String> {
-        let item = self.get_item_by_id(id).ok_or_else(|| format!("No clipboard item found with ID: {}", id))?;
-        println!("Setting clipboard content by ID {}: {}", id, item.content);
+    pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
+        let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {}", entry_id))?;
+        println!("Setting clipboard content by ID {}: {}", entry_id, item.content);
 
         let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
             (Some(m), Some(d), Some(q)) => (m.clone(), d.clone(), q.clone()),
@@ -120,16 +115,14 @@ impl BackendState {
         source.offer("text/plain".into());
         device.set_selection(Some(&source));
         self.current_source_object = Some(source.clone());
-        self.current_source_id = Some(id);
-        // Prevent reading back our own just-set selection (would deadlock)
+        self.current_source_entry_id = Some(entry_id);
+        // Prevent reading back our own just-set selection (would deadlock due to event queue handling)
         self.suppress_next_selection_read = true;
-        // Track which source's offer we are suppressing
-        self.suppressed_source_id = Some(source.id());
         // Flush the Wayland connection so the compositor sees our selection (very important)
         if let Some(conn) = &self.connection {
             if let Err(e) = conn.flush() { eprintln!("Failed to flush Wayland connection after setting selection: {e}"); }
         }
-        println!("✅ Created clipboard source and set selection (id {})", id);
+        println!("✅ Created clipboard source and set selection (id {})", entry_id);
         Ok(())
     }
 }

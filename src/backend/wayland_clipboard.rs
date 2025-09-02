@@ -166,14 +166,14 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
                             // Do NOT reset the flag here anymore. We keep suppressing until the
                             // compositor sends a Cancelled event for our source. This avoids
                             // races where we might prematurely read our own offer and block.
-                            state.current_selection = Some(data_offer.clone());
+                            state.current_data_offer = Some(data_offer.clone());
                             println!("(Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads)");
                             return;
                         }
 
                         // Only process if we haven't already processed this offer
-                        if state.current_selection.as_ref().map(|s| s.offer.id()) != Some(object_id) {
-                            state.current_selection = Some(data_offer.clone());
+                        if state.current_data_offer.as_ref().map(|s| s.offer.id()) != Some(object_id) {
+                            state.current_data_offer = Some(data_offer.clone());
                             
                             // Read the clipboard content
                             read_clipboard_offer(&data_offer.offer, &data_offer.mime_types, conn, &mut *state);
@@ -181,7 +181,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
                     }
                 } else {
                     println!("Selection cleared");
-                    state.current_selection = None;
+                    state.current_data_offer = None;
                 }
             }
             zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {
@@ -229,7 +229,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
 impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
     fn event(
         wrapper: &mut Self,
-        source: &ZwlrDataControlSourceV1,
+        event_source: &ZwlrDataControlSourceV1,
         event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
         _: &(),
         _: &Connection,
@@ -241,7 +241,7 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
                 println!("Data source Send event for MIME type: {}", mime_type);
                 if mime_type == "text/plain" {
-                    if let Some(item_id) = state.current_source_id {
+                    if let Some(item_id) = state.current_source_entry_id {
                         if let Some(item) = state.get_item_by_id(item_id) {
                             use std::os::unix::io::{IntoRawFd, FromRawFd};
                             let raw_fd = fd.into_raw_fd();
@@ -260,30 +260,15 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
                 }
             }
             zwlr_data_control_source_v1::Event::Cancelled => {
-                if let Some(item_id) = state.current_source_id {
-                    if let Some(item) = state.get_item_by_id(item_id) {
-                        println!("🛑 Data source cancelled. Last offered content (id {}): {}", item_id, item.content);
-                    } else {
-                        println!("🛑 Data source cancelled. (id {} not found in history)", item_id);
-                    }
-                } else {
-                    println!("🛑 Data source cancelled. (No text stored)");
-                }
-                let cancelled_id = source.id();
-                // If the cancelled source is our currently active one, clear it
-                if state.current_source_object.as_ref().map(|s| s.id()) == Some(cancelled_id.clone()) {
-                    state.current_source_object = None;
-                    state.current_source_id = None;
-                }
-                // Only re-enable reading if this cancelled source matches the suppressed source
-                if state.suppress_next_selection_read && state.suppressed_source_id == Some(cancelled_id.clone()) {
+                println!("🛑 Data source cancelled. Last offered content (id {})", event_source.id());
+                //Re-enabled reading new selections if currently active selection is cancelled, therefore external client took over 
+                //if the cancelled event is not for the currently active selection, it was our previous selection -> new entry chosen within clipboard manager
+                if state.current_source_object.as_ref().map(|s| s.id()) == Some(event_source.id()) {
                     state.suppress_next_selection_read = false;
-                    state.suppressed_source_id = None;
-                    println!("🔄 Re-enabled selection reading after suppressed source cancellation");
-                } else if state.suppressed_source_id != Some(cancelled_id.clone()) {
-                    // Cancellation of an older source we replaced; keep suppression
-                    println!("(Ignored cancellation of non-suppressed source {:?}; still suppressing)", cancelled_id);
+                    state.current_source_object = None;
+                    println!("🔄 Re-enabled selection reading (external client took over)");
                 }
+                event_source.destroy();
             }
             _ => {}
         }
