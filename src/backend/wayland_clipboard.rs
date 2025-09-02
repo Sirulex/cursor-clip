@@ -1,55 +1,20 @@
 use std::sync::{Arc, Mutex};
-use std::os::fd::AsFd;
 use std::collections::HashMap;
-use std::io::Read;
-use wayland_client::protocol::{wl_seat, wl_display};
-use wayland_client::protocol::wl_registry;
-use wayland_client::globals::GlobalListContents;
-use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
-use wayland_client::backend::ObjectId;
+use wayland_client::{Connection, EventQueue, Dispatch, QueueHandle, Proxy};
+use wayland_client::globals::{GlobalList, registry_queue_init, GlobalListContents};
+use wayland_client::protocol::{wl_seat, wl_display, wl_registry};
 use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1}, 
-    zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1}, 
+    zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1},
+    zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
     zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
+use std::sync::Arc as StdArc; // for event_created_child return type clarity
 
-use super::BackendState;
-use wayland_client::{globals::{GlobalList, registry_queue_init}, EventQueue};
+use super::backend_state::{BackendState, DataOffer};
 
 pub struct WaylandClipboardMonitor {
     backend_state: Arc<Mutex<BackendState>>,
-}
-
-#[derive(Debug)]
-struct ClipboardState {
-    backend_state: Arc<Mutex<BackendState>>,
-    data_control_manager: Option<ZwlrDataControlManagerV1>,
-    data_control_device: Option<ZwlrDataControlDeviceV1>,
-    seat: Option<wl_seat::WlSeat>,
-    offers: HashMap<ObjectId, DataOffer>,
-    current_selection: Option<DataOffer>,
-}
-
-#[derive(Debug, Clone)]
-struct DataOffer {
-    offer: ZwlrDataControlOfferV1,
-    mime_types: Vec<String>,
-}
-
-
-
-impl ClipboardState {
-    fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
-        Self {
-            backend_state,
-            data_control_manager: None,
-            data_control_device: None,
-            seat: None,
-            offers: HashMap::new(),
-            current_selection: None,
-        }
-    }
 }
 
 impl WaylandClipboardMonitor {
@@ -60,34 +25,49 @@ impl WaylandClipboardMonitor {
     }
 
     pub async fn start_monitoring(&mut self) -> Result<(), String> {
-        println!("Starting clipboard monitor with its own Wayland connection...");
+        println!("Starting unified Wayland clipboard monitor...");
 
-        // Establish independent connection
+        // Establish Wayland connection
         let connection = Connection::connect_to_env()
             .map_err(|e| format!("Failed to connect to Wayland: {}", e))?;
-        let (globals, mut event_queue): (GlobalList, EventQueue<ClipboardState>) =
-            registry_queue_init::<ClipboardState>(&connection)
+        let (globals, mut event_queue): (GlobalList, EventQueue<BackendState>) =
+            registry_queue_init::<BackendState>(&connection)
                 .map_err(|e| format!("Failed to init registry: {}", e))?;
 
-        let mut state = ClipboardState::new(self.backend_state.clone());
+        // Get the state from the Arc<Mutex<>> for initialization
+        let mut state = {
+            let state_guard = self.backend_state.lock().unwrap();
+            BackendState {
+                history: state_guard.history.clone(),
+                next_id: state_guard.next_id,
+                data_control_manager: None,
+                data_control_device: None,
+                seat: None,
+                offers: HashMap::new(),
+                current_selection: None,
+                current_source: None,
+                pending_clipboard_text: None,
+            }
+        };
 
         // Roundtrip once for globals
         event_queue.roundtrip(&mut state)
             .map_err(|e| format!("Initial roundtrip failed: {}", e))?;
 
-        // Bind required globals: wl_seat (for device) and data control manager
+        // Bind required globals
         let qh = event_queue.handle();
 
         // Bind seat
-        if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=9, ()) {
+        if let Ok(seat) = globals.bind::<wayland_client::protocol::wl_seat::WlSeat, _, _>(&qh, 1..=9, ()) {
             state.seat = Some(seat.clone());
         } else {
             return Err("wl_seat not available".into());
         }
 
         // Bind data control manager
-        if let Ok(data_control_manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
+        if let Ok(data_control_manager) = globals.bind::<wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
             state.data_control_manager = Some(data_control_manager.clone());
+            
             // Create device now that we have seat
             if let Some(seat) = &state.seat {
                 let device = data_control_manager.get_data_device(seat, &qh, ());
@@ -97,73 +77,94 @@ impl WaylandClipboardMonitor {
             return Err("zwlr_data_control_manager_v1 not available".into());
         }
 
-        println!("✅ Wayland clipboard monitor initialized (independent connection)");
+        println!("✅ Unified Wayland clipboard monitor initialized");
         println!("🔍 Monitoring clipboard changes...\n");
+
+        // Update the shared state with the initialized Wayland objects
+        {
+            let mut shared_state = self.backend_state.lock().unwrap();
+            shared_state.data_control_manager = state.data_control_manager.clone();
+            shared_state.data_control_device = state.data_control_device.clone();
+            shared_state.seat = state.seat.clone();
+        }
 
         loop {
             event_queue.blocking_dispatch(&mut state)
                 .map_err(|e| format!("Failed to dispatch events: {}", e))?;
+                
+            // Sync clipboard history back to shared state
+            {
+                let mut shared_state = self.backend_state.lock().unwrap();
+                shared_state.history = state.history.clone();
+                shared_state.next_id = state.next_id;
+                
+                // Check if there's a pending clipboard operation
+                if let Some(pending_text) = shared_state.pending_clipboard_text.take() {
+                    state.pending_clipboard_text = Some(pending_text);
+                    if let Err(e) = state.create_clipboard_source(&qh) {
+                        eprintln!("Failed to create clipboard source: {}", e);
+                    }
+                }
+            }
         }
     }
 }
 
+// ================= Dispatch Implementations =================
 
-
-impl Dispatch<ZwlrDataControlManagerV1, ()> for ClipboardState {
+impl Dispatch<ZwlrDataControlManagerV1, ()> for BackendState {
     fn event(
         _: &mut Self,
         _: &ZwlrDataControlManagerV1,
         _: zwlr_data_control_manager_v1::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<ClipboardState>,
+        _: &QueueHandle<BackendState>,
     ) {
         // No events for the manager
     }
 }
 
-// Required so registry_queue_init can populate globals (must use GlobalListContents user data)
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClipboardState {
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for BackendState {
     fn event(
         _state: &mut Self,
         _proxy: &wl_registry::WlRegistry,
         _event: wl_registry::Event,
         _data: &GlobalListContents,
         _conn: &Connection,
-        _qhandle: &QueueHandle<ClipboardState>,
+        _qhandle: &QueueHandle<BackendState>,
     ) {
         // GlobalList handles population; nothing else to do.
     }
 }
 
-impl Dispatch<wl_seat::WlSeat, ()> for ClipboardState {
+impl Dispatch<wl_seat::WlSeat, ()> for BackendState {
     fn event(
         _: &mut Self,
         _: &wl_seat::WlSeat,
         _: wl_seat::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<ClipboardState>,
+        _: &QueueHandle<BackendState>,
     ) {
         // We don't need to handle seat events for this application
     }
 }
 
-impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
+impl Dispatch<ZwlrDataControlDeviceV1, ()> for BackendState {
     fn event(
         state: &mut Self,
         _: &ZwlrDataControlDeviceV1,
         event: zwlr_data_control_device_v1::Event,
         _: &(),
         conn: &Connection,
-        _qh: &QueueHandle<ClipboardState>,
+        _qh: &QueueHandle<BackendState>,
     ) {
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
                 let object_id = id.id();
-
                 println!("New data offer received with ID: {:?}", object_id);
-                // The id is already bound to our event queue, we just need to store it
+                
                 let data_offer = DataOffer {
                     offer: id,
                     mime_types: Vec::new(),
@@ -181,8 +182,8 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
                         if state.current_selection.as_ref().map(|s| s.offer.id()) != Some(object_id) {
                             state.current_selection = Some(data_offer.clone());
                             
-                            // Use the new read_offer function similar to the example
-                            read_offer(&data_offer.offer, &data_offer.mime_types, conn, state.backend_state.clone());
+                            // Read the clipboard content
+                            read_clipboard_offer(&data_offer.offer, &data_offer.mime_types, conn, state);
                         }
                     }
                 } else {
@@ -191,7 +192,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
                 }
             }
             zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {
-                // We ignore primary selection as requested
+                // We ignore primary selection
             }
             _ => {}
         }
@@ -200,7 +201,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
     fn event_created_child(
         opcode: u16,
         qhandle: &QueueHandle<Self>,
-    ) -> Arc<dyn wayland_client::backend::ObjectData> {
+    ) -> StdArc<dyn wayland_client::backend::ObjectData> {
         match opcode {
             0 => {
                 // DataOffer event - create a data offer object data
@@ -213,50 +214,64 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for ClipboardState {
     }
 }
 
-impl Dispatch<ZwlrDataControlOfferV1, ()> for ClipboardState {
+impl Dispatch<ZwlrDataControlOfferV1, ()> for BackendState {
     fn event(
         state: &mut Self,
         offer: &ZwlrDataControlOfferV1,
         event: zwlr_data_control_offer_v1::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<ClipboardState>,
+        _: &QueueHandle<BackendState>,
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             let object_id = offer.id();
             if let Some(data_offer) = state.offers.get_mut(&object_id) {
                 data_offer.mime_types.push(mime_type);
-                //println!("Offer supports MIME type: {}", data_offer.mime_types.last().unwrap());
             }
         }
     }
 }
 
-impl Dispatch<ZwlrDataControlSourceV1, ()> for ClipboardState {
+impl Dispatch<ZwlrDataControlSourceV1, ()> for BackendState {
     fn event(
-        _: &mut Self,
-        _: &ZwlrDataControlSourceV1,
-        _: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
+        state: &mut Self,
+        _source: &ZwlrDataControlSourceV1,
+        event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<ClipboardState>,
+        _: &QueueHandle<Self>,
     ) {
-        // We don't use data control source in this app
+        if let zwlr_data_control_source_v1::Event::Send { mime_type, fd } = event {
+            if mime_type == "text/plain" || mime_type == "text/plain;charset=utf-8" {
+                if let Some(text) = &state.pending_clipboard_text {
+                    use std::os::unix::io::{IntoRawFd, FromRawFd};
+                    let raw_fd = fd.into_raw_fd();
+                    let mut file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+                    if let Err(e) = std::io::Write::write_all(&mut file, text.as_bytes()) {
+                        eprintln!("Failed writing selection data: {e}");
+                    } else {
+                        println!("✅ Successfully wrote clipboard data: {}", text);
+                    }
+                }
+            }
+        }
     }
 }
 
-impl Dispatch<wl_display::WlDisplay, ()> for ClipboardState {
+impl Dispatch<wl_display::WlDisplay, ()> for BackendState {
     fn event(
         _: &mut Self,
         _: &wl_display::WlDisplay,
         _: wl_display::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<ClipboardState>,
+        _: &QueueHandle<BackendState>,
     ) {
         // Handle display events if needed
     }
 }
+
+// ================= Helper functions =================
 
 /// Create a pipe for reading clipboard data
 fn create_pipes() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::Error>> {
@@ -275,13 +290,16 @@ fn create_pipes() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::
 }
 
 /// Read data from a clipboard offer
-fn read_offer(
+fn read_clipboard_offer(
     data_offer: &ZwlrDataControlOfferV1,
     mime_types: &[String],
     conn: &Connection,
-    backend_state: Arc<Mutex<BackendState>>,
+    backend_state: &mut BackendState,
 ) {
-    // Prioritize text/plain over other types, similar to the example
+    use std::os::fd::AsFd;
+    use std::io::Read;
+    
+    // Prioritize text/plain over other types
     for mime_type in mime_types {
         if mime_type == "text/plain" || mime_type == "text/plain;charset=utf-8" {
             let (mut reader, writer) = match create_pipes() {
@@ -305,11 +323,7 @@ fn read_offer(
                 Ok(_) => {
                     if !content.trim().is_empty() {
                         println!("📋 Clipboard content: {}", content.trim());
-                        
-                        // Add to backend state
-                        if let Ok(mut backend) = backend_state.lock() {
-                            backend.add_clipboard_item(content.trim().to_string());
-                        }
+                        backend_state.add_clipboard_item(content.trim().to_string());
                     }
                 }
                 Err(err) => {
@@ -323,176 +337,4 @@ fn read_offer(
     }
 }
 
-// ================= Clipboard Source Creation (Setting Selection) =================
 
-// Separate state for providing (setting) a clipboard selection.
-struct SelectionState {
-    manager: Option<ZwlrDataControlManagerV1>,
-    seat: Option<wl_seat::WlSeat>,
-    device: Option<ZwlrDataControlDeviceV1>,
-    source: Option<ZwlrDataControlSourceV1>,
-    text: String,
-}
-
-impl SelectionState {
-    fn new(text: String) -> Self {
-        Self { manager: None, seat: None, device: None, source: None, text }
-    }
-}
-
-impl Dispatch<wl_registry::WlRegistry, ()> for SelectionState {
-    fn event(
-        state: &mut Self,
-        registry: &wl_registry::WlRegistry,
-        event: wl_registry::Event,
-        _: &(),
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-    ) {
-        if let wl_registry::Event::Global { name, interface, version: _ } = event {
-            match interface.as_str() {
-                "zwlr_data_control_manager_v1" => {
-                    let manager = registry.bind::<ZwlrDataControlManagerV1, _, _>(name, 2, qh, ());
-                    state.manager = Some(manager);
-                }
-                "wl_seat" => {
-                    // Use version 1 (we only need basic seat for data device)
-                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 1, qh, ());
-                    state.seat = Some(seat);
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-impl Dispatch<ZwlrDataControlManagerV1, ()> for SelectionState {
-    fn event(
-        _state: &mut Self,
-        _proxy: &ZwlrDataControlManagerV1,
-        _event: zwlr_data_control_manager_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // No events
-    }
-}
-
-impl Dispatch<wl_seat::WlSeat, ()> for SelectionState {
-    fn event(
-        _state: &mut Self,
-        _seat: &wl_seat::WlSeat,
-        _event: wl_seat::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // Not needed
-    }
-}
-
-impl Dispatch<ZwlrDataControlDeviceV1, ()> for SelectionState {
-    fn event(
-        _state: &mut Self,
-        _device: &ZwlrDataControlDeviceV1,
-        _event: zwlr_data_control_device_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // We only set selection; ignore device events.
-    }
-
-    fn event_created_child(opcode: u16, qhandle: &QueueHandle<Self>) -> Arc<dyn wayland_client::backend::ObjectData> {
-        match opcode {
-            0 => qhandle.make_data::<ZwlrDataControlOfferV1, ()>(()),
-            _ => panic!("Unexpected child opcode {} for SelectionState", opcode),
-        }
-    }
-}
-
-impl Dispatch<ZwlrDataControlSourceV1, ()> for SelectionState {
-    fn event(
-        state: &mut Self,
-        _source: &ZwlrDataControlSourceV1,
-    event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let zwlr_data_control_source_v1::Event::Send { mime_type, fd } = event {
-            if mime_type == "text/plain" || mime_type == "text/plain;charset=utf-8" {
-                use std::os::unix::io::{IntoRawFd, FromRawFd};
-                let raw_fd = fd.into_raw_fd();
-                let mut file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-                if let Err(e) = std::io::Write::write_all(&mut file, state.text.as_bytes()) {
-                    eprintln!("Failed writing selection data: {e}");
-                }
-            }
-        }
-    }
-}
-
-impl Dispatch<ZwlrDataControlOfferV1, ()> for SelectionState {
-    fn event(
-        _state: &mut Self,
-        _offer: &ZwlrDataControlOfferV1,
-        _event: zwlr_data_control_offer_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // Not used for providing clipboard
-    }
-}
-
-/// Public helper to create a Wayland selection providing a fixed test string.
-/// Spawns a background thread that keeps the selection alive and serves Send events.
-pub fn create_selection() -> Result<(), String> {
-    std::thread::Builder::new()
-        .name("clipboard-selection-provider".into())
-        .spawn(move || {
-            if let Err(e) = selection_thread() {
-                eprintln!("Selection provider thread error: {e}");
-            }
-        })
-        .map_err(|e| format!("Failed to spawn selection thread: {e}"))?;
-    Ok(())
-}
-
-fn selection_thread() -> Result<(), String> {
-    let conn = Connection::connect_to_env().map_err(|e| format!("Wayland connect failed: {e}"))?;
-    let display = conn.display();
-    let mut event_queue = conn.new_event_queue();
-    let qh = event_queue.handle();
-    let _registry = display.get_registry(&qh, ());
-
-    let mut state = SelectionState::new("hello from clipman".to_string());
-    event_queue.roundtrip(&mut state).map_err(|e| format!("Initial roundtrip failed: {e}"))?;
-
-    let manager = state.manager.as_ref().ok_or("zwlr_data_control_manager_v1 not available")?;
-    let seat = state.seat.as_ref().ok_or("wl_seat not available")?;
-
-    let device = manager.get_data_device(seat, &qh, ());
-    state.device = Some(device.clone());
-
-    let source = manager.create_data_source(&qh, ());
-    source.offer("text/plain".into());
-    source.offer("text/plain;charset=utf-8".into());
-    state.source = Some(source.clone());
-    device.set_selection(Some(&source));
-
-    // Roundtrip to send selection to compositor
-    event_queue.roundtrip(&mut state).map_err(|e| format!("Failed to set selection: {e}"))?;
-    println!("✅ Wayland clipboard selection set to test string 'hello from clipman'");
-    println!("📋 Selection provider running (thread) - it will serve requests until process exits");
-
-    loop {
-        if let Err(e) = event_queue.blocking_dispatch(&mut state) {
-            eprintln!("Selection provider dispatch error: {e}");
-            // brief sleep to avoid tight error loop
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
-    }
-}
