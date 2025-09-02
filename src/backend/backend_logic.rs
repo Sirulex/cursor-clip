@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use wayland_client::{Connection, protocol::wl_registry};
 
 use crate::shared::{BackendMessage, FrontendMessage, ClipboardItem, ClipboardContentType};
-use super::wayland_clipboard::WaylandClipboardMonitor;
+use super::wayland_clipboard::{WaylandClipboardMonitor, create_selection};
 
 #[derive(Debug, Default)]
 pub struct BackendState {
@@ -40,6 +40,9 @@ impl BackendState {
     pub fn set_clipboard_by_id(&self, id: u64) -> Result<(), String> {
         if let Some(item) = self.get_item_by_id(id) {
             println!("Setting clipboard content by ID {}: {}", id, item.content);
+            // TEST: also spawn a fixed selection provider using create_selection
+            if let Err(e) = create_selection() { eprintln!("Failed to start test selection provider: {e}"); }
+            
             Ok(())
         } else { Err(format!("No clipboard item found with ID: {}", id)) }
     }
