@@ -10,7 +10,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
 };
 use std::sync::Arc as StdArc; // for event_created_child return type clarity
 
-use super::backend_state::{BackendState, DataOffer};
+use super::backend_state::BackendState;
 use indexmap::IndexMap;
 
 // Wrapper struct that holds the shared backend state for dispatch implementations
@@ -147,32 +147,22 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
                 let object_id = id.id();
                 println!("New data offer received with ID: {:?}", object_id);
-                
-                let data_offer = DataOffer {
-                    offer: id,
-                    mime_types: Vec::new(),
-                };
-                state.mime_type_offers.insert(object_id, data_offer);
+                state.mime_type_offers.insert(object_id, Vec::new());
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
                 if let Some(offer_id) = id {
-                    let object_id = offer_id.id();
-                    println!("Selection changed to offer ID: {:?}", object_id);
-                    if let Some(data_offer) = state.mime_type_offers.get(&object_id).cloned() {
-                        println!("New clipboard content available with {} MIME types", data_offer.mime_types.len());
-                        
-                        if state.suppress_next_selection_read {
-                            //We keep suppressing until the compositor sends a Cancelled event for our source
-                            state.current_data_offer = Some(data_offer.clone());
-                            println!("(Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads)");
-                            return;
-                        }
+                    let offer_key = offer_id.id();
+                    println!("Selection changed to offer ID: {:?}", offer_key);
 
-                        // Only process if we haven't already processed this offer
-                        if state.current_data_offer.as_ref().map(|s| s.offer.id()) != Some(object_id) {
-                            state.current_data_offer = Some(data_offer.clone());
-                            
-                            read_all_data_formats(&data_offer.offer, &data_offer.mime_types, conn, &mut *state);
+                    let already_current = state.current_data_offer.as_ref().map(|o| o == &offer_key).unwrap_or(false);
+                    if let Some(mime_list) = state.mime_type_offers.get(&offer_key).cloned() {
+                        println!("New clipboard content available with {} MIME types", mime_list.len());
+                        if state.suppress_next_selection_read {
+                            state.current_data_offer = Some(offer_key.clone());
+                            println!("(Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads)");
+                        } else if !already_current {
+                            state.current_data_offer = Some(offer_key.clone());
+                            read_all_data_formats(&offer_id, &mime_list, conn, &mut *state);
                         }
                     }
                 } else {
@@ -216,9 +206,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
             let object_id = offer.id();
             println!("Offer event: MIME type offered: {}", mime_type.clone());
             let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(data_offer) = state.mime_type_offers.get_mut(&object_id) {
-                data_offer.mime_types.push(mime_type);
-            }
+            if let Some(mimes) = state.mime_type_offers.get_mut(&object_id) { mimes.push(mime_type); }
         }
     }
 }

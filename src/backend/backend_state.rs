@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_seat;
 use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, 
-    zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, 
-    zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
+    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+    zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
     zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
 use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
@@ -13,12 +12,6 @@ use wayland_client::{QueueHandle, Connection};
 
 use crate::shared::{ClipboardItem, ClipboardContentType};
 use indexmap::IndexMap;
-
-#[derive(Debug, Clone)]
-pub struct DataOffer {
-    pub offer: ZwlrDataControlOfferV1,
-    pub mime_types: Vec<String>,
-}
 
 #[derive(Debug)]
 pub struct BackendState {
@@ -34,8 +27,10 @@ pub struct BackendState {
     pub connection: Option<Connection>,
     
     // Current clipboard data
-    pub mime_type_offers: HashMap<ObjectId, DataOffer>,
-    pub current_data_offer: Option<DataOffer>,
+    // Mapping of offer ObjectId -> list of MIME types provided by that offer
+    pub mime_type_offers: HashMap<ObjectId, Vec<String>>,
+    // Currently selected offer id (if any)
+    pub current_data_offer: Option<ObjectId>,
     pub current_source_object: Option<ZwlrDataControlSourceV1>,
     pub current_source_entry_id: Option<u64>,
     // When we programmatically set the selection, the compositor will echo it
