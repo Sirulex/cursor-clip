@@ -163,6 +163,8 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
                         } else if !already_current {
                             state.current_data_offer = Some(offer_key.clone());
                             read_all_data_formats(&offer_id, &mime_list, conn, &mut *state);
+                            //remove old offer entries and their corresponding MIME types as new ones will be generated for future selections
+                            state.mime_type_offers.clear();
                         }
                     }
                 } else {
@@ -206,7 +208,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
             let object_id = offer.id();
             println!("Offer event: MIME type offered: {}", mime_type.clone());
             let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(mimes) = state.mime_type_offers.get_mut(&object_id) { mimes.push(mime_type); }
+            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id) { mime_list.push(mime_type); }
         }
     }
 }

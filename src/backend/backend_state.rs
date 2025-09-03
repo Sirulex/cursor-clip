@@ -52,11 +52,11 @@ impl BackendState {
     pub fn new() -> Self {
         Self {
             history: Vec::new(),
+            mime_type_offers: HashMap::new(),
             id_for_next_entry: 1,
             data_control_manager: None,
             data_control_device: None,
             seat: None,
-            mime_type_offers: HashMap::new(),
             current_data_offer: None,
             current_source_object: None,
             current_source_entry_id: None,
@@ -66,27 +66,28 @@ impl BackendState {
         }
     }
 
-    pub fn add_clipboard_item_from_mime_map(&mut self, mut indexmap_mime_content: IndexMap<String, Vec<u8>>) {
-        if indexmap_mime_content.is_empty() { return; }
+    pub fn add_clipboard_item_from_mime_map(&mut self, mut mime_content: IndexMap<String, Vec<u8>>) {
+        if mime_content.is_empty() { return; }
 
-        // Preview-Kandidat bestimmen
-        let mut preview_source: Option<(String, Vec<u8>)> = None;
-        if let Some(v) = indexmap_mime_content.get("text/plain").cloned() { preview_source = Some(("text/plain".into(), v)); }
-        if preview_source.is_none() {
-            if let Some((k,v)) = indexmap_mime_content.iter().find(|(k,_)| k.starts_with("text/")) { preview_source = Some((k.clone(), v.clone())); }
-        }
-        let (preview_mime, preview_bytes) = match preview_source { Some(p) => p, None => indexmap_mime_content.iter().next().map(|(k,v)| (k.clone(), v.clone())).unwrap() };
-        let content_string = String::from_utf8(preview_bytes.clone()).unwrap_or_else(|_| format!("<{} {} bytes>", preview_mime, preview_bytes.len()));
-        let preview = if content_string.len() > 256 { format!("{}…", &content_string[..252]) } else { content_string.clone() };
-        let content_type = ClipboardContentType::from_content(&content_string);
+        let preview: String = if let Some(txt_bytes) = mime_content.get("text/plain;charset=utf-8") {
+            match String::from_utf8(txt_bytes.clone()) {
+                Ok(s) => s.chars().take(200).collect(),
+                Err(_) => format!("<text/plain;charset=utf-8 {} bytes>", txt_bytes.len()),
+            }
+        } else {
+            // Fallback: show placeholder using first mime entry
+            let (mime_name, len) = mime_content.iter().next().map(|(k,v)| (k.clone(), v.len())).unwrap();
+            format!("<{} {} bytes>", mime_name, len)
+        };
+        let content_type = ClipboardContentType::from_content(&preview);
 
 
         let item = ClipboardItem {
             item_id: self.id_for_next_entry,
-            content_type_preview: content_type,
+            content_preview_type: content_type,
             content_preview: preview,
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-            mime_data: indexmap_mime_content.drain(..).collect(),
+            mime_data: mime_content.drain(..).collect(),
         };
 
         // remove duplicates (todo change to more robust solution -> hashes)

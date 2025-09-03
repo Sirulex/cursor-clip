@@ -46,7 +46,7 @@ pub async fn run_backend() -> Result<(), Box<dyn std::error::Error>> {
             "Password4234!Cursor-Clip",
         ] {
             let mut map = IndexMap::new();
-            map.insert("text/plain".to_string(), sample.as_bytes().to_vec());
+            map.insert("text/plain;charset=utf-8".to_string(), sample.as_bytes().to_vec());
             state_lock.add_clipboard_item_from_mime_map(map);
         }
     }

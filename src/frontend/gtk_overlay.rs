@@ -85,24 +85,14 @@ fn create_overlay_content() -> Box {
                 vec![
                     ClipboardItem {
                         item_id: 1,
-                        content_preview: "Hello, world!".to_string(),
-                        content_type_preview: ClipboardContentType::Text,
-                        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 120,
+                        content_preview: "Internal Error querying the History!".to_string(),
+                        content_preview_type: ClipboardContentType::Text,
+                        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
                         mime_data: {
                             use indexmap::IndexMap; let mut m = IndexMap::new();
                             m.insert("text/plain".to_string(), b"Hello, world!".to_vec()); m
                         },
-                    },
-                    ClipboardItem {
-                        item_id: 2,
-                        content_preview: "https://github.com/rust-lang/rust".to_string(),
-                        content_type_preview: ClipboardContentType::Url,
-                        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 300,
-                        mime_data: {
-                            use indexmap::IndexMap; let mut m = IndexMap::new();
-                            m.insert("text/plain".to_string(), b"https://github.com/rust-lang/rust".to_vec()); m
-                        },
-                    },
+                    }
                 ]
             })
         }
@@ -112,12 +102,12 @@ fn create_overlay_content() -> Box {
             vec![
                 ClipboardItem {
                     item_id: 1,
-                    content_preview: "Backend not available - sample data".to_string(),
-                    content_type_preview: ClipboardContentType::Text,
-                    timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 120,
+                    content_preview: "Backend not available - first start cursor-clip --daemon".to_string(),
+                    content_preview_type: ClipboardContentType::Text,
+                    timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
                     mime_data: {
                         use indexmap::IndexMap; let mut m = IndexMap::new();
-                        m.insert("text/plain".to_string(), b"Backend not available - sample data".to_vec()); m
+                        m.insert("text/plain".to_string(), b"Backend not available - first start cursor-clip --daemon".to_vec()); m
                     },
                 },
             ]
@@ -216,12 +206,12 @@ fn create_overlay_content() -> Box {
 }
 
 /// Sync version of the main entry point for creating the overlay
-pub fn create_clipboard_overlay_sync(x: f64, y: f64) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
+pub fn create_clipboard_overlay(x: f64, y: f64) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     let app = init_application();
     
     let app_clone = app.clone();
     app.connect_activate(move |_| {
-        let window = create_layer_shell_window_sync(&app_clone, x, y);
+        let window = create_layer_shell_window(&app_clone, x, y);
         
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
@@ -244,7 +234,7 @@ pub fn create_clipboard_overlay_sync(x: f64, y: f64) -> Result<(), std::boxed::B
 }
 
 /// Create and configure the sync layer shell window
-fn create_layer_shell_window_sync(
+fn create_layer_shell_window(
     app: &Application, 
     x: f64, 
     y: f64
@@ -399,10 +389,10 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
     
-    let type_label = Label::new(Some(&item.content_type_preview.get_icon()));
+    let type_label = Label::new(Some(&item.content_preview_type.get_icon()));
     type_label.add_css_class("caption");
     
-    let type_text = Label::new(Some(&capitalize_first_letter(item.content_type_preview.to_string())));
+    let type_text = Label::new(Some(&capitalize_first_letter(item.content_preview_type.to_string())));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);

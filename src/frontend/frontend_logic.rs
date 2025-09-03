@@ -39,7 +39,7 @@ async fn run_main_event_loop(
             println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", x, y);
 
             // Create the GTK window using the unified client backend communication
-            if let Err(e) = gtk_overlay::create_clipboard_overlay_sync(x, y) {
+            if let Err(e) = gtk_overlay::create_clipboard_overlay(x, y) {
                 eprintln!("Error creating GTK overlay: {:?}", e);
             }
             

@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 pub struct ClipboardItem {
     pub item_id: u64,
     pub content_preview: String,
-    pub content_type_preview: ClipboardContentType,
+    pub content_preview_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
     pub mime_data: IndexMap<String, Vec<u8>>,
 }
