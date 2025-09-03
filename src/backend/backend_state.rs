@@ -9,7 +9,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
 use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
-use wayland_client::{QueueHandle, Connection, Proxy};
+use wayland_client::{QueueHandle, Connection};
 
 use crate::shared::{ClipboardItem, ClipboardContentType};
 use indexmap::IndexMap;

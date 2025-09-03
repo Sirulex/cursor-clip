@@ -239,14 +239,17 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
                 println!("Data source Send event for MIME type: {}", mime_type);
                 if let Some(item_id) = state.current_source_entry_id {
                     if let Some(item) = state.get_item_by_id(item_id) {
-                        use std::os::unix::io::{IntoRawFd, FromRawFd};
-                        let raw_fd = fd.into_raw_fd();
-                        let mut fd_endpoint = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+                        use std::io::Write;
+                        let mut file: std::fs::File = fd.into();
                         if let Some(bytes) = item.mime_data.get(&mime_type) {
-                            if let Err(e) = std::io::Write::write_all(&mut fd_endpoint, bytes) {
-                                eprintln!("Failed writing selection data (id {}, mime {}): {e}", item_id, mime_type);
+                            if let Err(e) = file.write_all(bytes) {
+                                eprintln!(
+                                    "Failed writing selection data (id {}, mime {}): {e}",
+                                    item_id, mime_type
+                                );
                             } else {
-                                println!("✅ Wrote {} bytes for id {} (mime {})", bytes.len(), item_id, mime_type);
+                                println!(
+                                    "✅ Wrote {} bytes for id {} (mime {})", bytes.len(), item_id, mime_type);
                             }
                         } else {
                             println!("⚠️ No data stored for MIME {} (id {}), nothing written", mime_type, item_id);
@@ -289,19 +292,15 @@ impl Dispatch<wl_display::WlDisplay, ()> for SharedBackendStateWrapper {
 
 // ================= Helper functions =================
 
-/// Create a pipe for reading clipboard data
-fn create_pipes() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::Error>> {
-    let mut fds = [0; 2];
-    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if result != 0 {
-        return Err("Failed to create pipe".into());
-    }
-    
-    // Convert file descriptors to Files for easier handling
+/// Create a pipe for reading clipboard data, returning OwnedFd handles.
+fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dyn std::error::Error>> {
     use std::os::fd::FromRawFd;
-    let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-    let writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
-    
+    let mut fds = [0; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let reader = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[0]) };
+    let writer = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[1]) };
     Ok((reader, writer))
 }
 
@@ -320,16 +319,19 @@ fn read_all_data_formats(
     let mut mime_map: IndexMap<String, Vec<u8>> = IndexMap::new();
 
     for mime in text_mimes {
-        let (mut reader, writer) = match create_pipes() {
-            Ok((reader, writer)) => (reader, writer),
+        let (reader_fd, writer_fd) = match create_pipes() {
+            Ok(pair) => pair,
             Err(err) => { eprintln!("Could not open pipe to read data for {}: {:?}", mime, err); continue; }
         };
         println!("Requesting {} content...", mime);
-        data_offer.receive(mime.clone(), writer.as_fd());
-        drop(writer);
+        data_offer.receive(mime.clone(), writer_fd.as_fd());
+        // Drop writer side so the provider gets EOF after writing
+        drop(writer_fd);
         if let Err(e) = conn.flush() { eprintln!("Flush failed: {e}"); }
+        // Convert OwnedFd to File for reading
+        let mut reader_file = std::fs::File::from(reader_fd);
         let mut buf = Vec::new();
-        match reader.read_to_end(&mut buf) {
+        match reader_file.read_to_end(&mut buf) {
             Ok(_) => {
                 if !buf.is_empty() { mime_map.insert(mime, buf); }
             }
