@@ -71,14 +71,15 @@ pub enum BackendMessage {
 
 impl ClipboardContentType {
     pub fn from_content(content: &str) -> Self {
+        const PASSWORD_SPECIALS: &str = "!@#$%^&*()-_=+[]{};:,.<>?/\\|`~";
         if content.starts_with("http://") || content.starts_with("https://") {
             ClipboardContentType::Url
         } else if content.contains("fn ") || content.contains("impl ") || content.contains("struct ") {
             ClipboardContentType::Code
-        } else if content.chars().all(|c| c.is_alphanumeric() || "!@#$%^&*()".contains(c)) && content.len() > 8 {
-            ClipboardContentType::Password
         } else if content.contains('/') && !content.contains(' ') && content.len() < 256 {
             ClipboardContentType::File
+        } else if !content.is_empty() && content.len() < 50 && !content.contains(' ') && content.chars().any(|c| PASSWORD_SPECIALS.contains(c)) {
+            ClipboardContentType::Password
         } else {
             ClipboardContentType::Text
         }
