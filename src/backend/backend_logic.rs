@@ -6,7 +6,7 @@ use crate::shared::{BackendMessage, FrontendMessage};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 use super::backend_state::BackendState;
 
-pub async fn run_backend(preserve_selection: bool) -> Result<(), Box<dyn std::error::Error>> { 
+pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> { 
     // Remove existing socket if it exists
     let socket_path = "/tmp/cursor-clip.sock";
     let _ = std::fs::remove_file(socket_path);
@@ -18,7 +18,7 @@ pub async fn run_backend(preserve_selection: bool) -> Result<(), Box<dyn std::er
     let state = Arc::new(Mutex::new(BackendState::new()));
     {
         let mut s = state.lock().unwrap();
-        s.preserve_selection = preserve_selection;
+    s.monitor_only = monitor_only;
     }
 
     // Start Wayland clipboard monitoring in a separate task

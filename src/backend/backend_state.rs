@@ -40,10 +40,11 @@ pub struct BackendState {
     // event loop. This flag suppresses reading the very next selection so we
     // avoid blocking on our own source.
     pub suppress_next_selection_read: bool,
-    // If true, when a new external selection is read, we immediately re-set
-    // that selection from our own data source so that we "own" it. This lets
-    // us keep it available even if the original app exits.
-    pub preserve_selection: bool,
+    // If true, we only monitor external selections and DO NOT immediately
+    // re-set (take ownership of) the newly received selection.
+    // If false (default), after reading an external selection we immediately
+    // set it ourselves so it persists even if the source app exits.
+    pub monitor_only: bool,
 }
 
 impl Default for BackendState {
@@ -67,7 +68,7 @@ impl BackendState {
             qh: None,
             suppress_next_selection_read: false,
             connection: None,
-            preserve_selection: false,
+            monitor_only: false,
         }
     }
 
