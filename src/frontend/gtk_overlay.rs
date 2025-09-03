@@ -6,7 +6,7 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::shared::{ClipboardItem, ClipboardContentType};
+use crate::shared::{ClipboardItemPreview, ClipboardContentType};
 use crate::frontend::frontend_client::FrontendClient;
 
 static INIT: Once = Once::new();
@@ -83,15 +83,11 @@ fn create_overlay_content() -> Box {
                 eprintln!("Error getting clipboard history: {}", e);
                 // Fall back to sample data
                 vec![
-                    ClipboardItem {
+                    ClipboardItemPreview {
                         item_id: 1,
                         content_preview: "Internal Error querying the History!".to_string(),
                         content_preview_type: ClipboardContentType::Text,
                         timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                        mime_data: {
-                            use indexmap::IndexMap; let mut m = IndexMap::new();
-                            m.insert("text/plain".to_string(), b"Hello, world!".to_vec()); m
-                        },
                     }
                 ]
             })
@@ -100,15 +96,11 @@ fn create_overlay_content() -> Box {
             eprintln!("Error connecting to backend: {}", e);
             // Fall back to sample data
             vec![
-                ClipboardItem {
+                ClipboardItemPreview {
                     item_id: 1,
                     content_preview: "Backend not available - first start cursor-clip --daemon".to_string(),
                     content_preview_type: ClipboardContentType::Text,
                     timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                    mime_data: {
-                        use indexmap::IndexMap; let mut m = IndexMap::new();
-                        m.insert("text/plain".to_string(), b"Backend not available - first start cursor-clip --daemon".to_vec()); m
-                    },
                 },
             ]
         }
@@ -376,7 +368,7 @@ pub fn hide_overlay() {
 }
 
 /// Create a clipboard history item row from backend data
-fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow {
+fn create_clipboard_item_from_backend(item: &ClipboardItemPreview) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
 
@@ -408,14 +400,7 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     
     main_box.append(&header_box);
 
-    // Content preview
-    let preview_text = if item.content_preview.len() > 100 {
-        format!("{}...", &item.content_preview[..97])
-    } else {
-        item.content_preview.clone()
-    };
-
-    let content_label = Label::new(Some(&preview_text));
+    let content_label = Label::new(Some(&item.content_preview));
     content_label.add_css_class("clipboard-preview");
     content_label.set_halign(Align::Start);
     content_label.set_wrap(true);

@@ -10,7 +10,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
 use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
 use wayland_client::{QueueHandle, Connection};
 
-use crate::shared::{ClipboardItem, ClipboardContentType};
+use crate::shared::{ClipboardItem, ClipboardItemPreview, ClipboardContentType};
 use indexmap::IndexMap;
 
 #[derive(Debug)]
@@ -97,8 +97,8 @@ impl BackendState {
         self.id_for_next_entry += 1;
     }
 
-    pub fn get_history(&self) -> Vec<ClipboardItem> { 
-        self.history.clone() 
+    pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 
+        self.history.iter().map(|c| ClipboardItemPreview::from(c)).collect()
     }
     
     pub fn get_item_by_id(&self, id: u64) -> Option<ClipboardItem> { 

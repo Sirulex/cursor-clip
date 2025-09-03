@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixStream;
 use std::io::{BufRead, BufReader, Write};
-use crate::shared::{FrontendMessage, BackendMessage, ClipboardItem};
+use crate::shared::{FrontendMessage, BackendMessage, ClipboardItemPreview};
 
 const SOCKET_PATH: &str = "/tmp/cursor-clip.sock";
 
@@ -31,7 +31,7 @@ impl FrontendClient {
     }
 
     /// Get clipboard history
-    pub fn get_history(&mut self) -> Result<Vec<ClipboardItem>, Box<dyn std::error::Error>> {
+    pub fn get_history(&mut self) -> Result<Vec<ClipboardItemPreview>, Box<dyn std::error::Error>> {
     let response = self.send_message(FrontendMessage::GetHistory)?;
         match response {
             BackendMessage::History { items } => Ok(items),
@@ -40,7 +40,7 @@ impl FrontendClient {
         }
     }
 
-    /// Set clipboard by ID (preferred method)
+    /// Set clipboard by ID 
     pub fn set_clipboard_by_id(&mut self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
     let response = self.send_message(FrontendMessage::SetClipboardById { id })?;
         match response {

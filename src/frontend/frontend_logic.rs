@@ -17,11 +17,6 @@ use wayland_protocols::{
 
 use crate::frontend::{frontend_state::State, buffer, gtk_overlay};
 
-pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting frontend with its own Wayland connection...");
-    run_frontend_standalone().await
-}
-
 async fn run_main_event_loop(
     state: &mut State, 
     queue: &mut EventQueue<State>
@@ -73,8 +68,8 @@ async fn run_main_event_loop(
     Ok(())
 }
 
-// Frontend always uses its own connection now
-async fn run_frontend_standalone() -> Result<(), Box<dyn std::error::Error>> {
+// Frontend always uses its own Wayland connection (may change in future to support shared connection/hide feature)
+pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize Wayland for layer shell capture
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (GlobalList, EventQueue<State>) =

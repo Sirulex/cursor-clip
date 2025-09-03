@@ -7,7 +7,27 @@ pub struct ClipboardItem {
     pub content_preview: String,
     pub content_preview_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
-    pub mime_data: IndexMap<String, Vec<u8>>,
+    pub mime_data: IndexMap<String, Vec<u8>>, // kept internal / not sent in history
+}
+
+/// Lightweight version sent to the frontend in history listings (no payload bytes)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardItemPreview {
+    pub item_id: u64,
+    pub content_preview: String,
+    pub content_preview_type: ClipboardContentType,
+    pub timestamp: u64, // Unix timestamp
+}
+
+impl From<&ClipboardItem> for ClipboardItemPreview {
+    fn from(full: &ClipboardItem) -> Self {
+        Self {
+            item_id: full.item_id,
+            content_preview: full.content_preview.clone(),
+            content_preview_type: full.content_preview_type.clone(),
+            timestamp: full.timestamp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,10 +57,10 @@ pub enum FrontendMessage {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum BackendMessage {
-    /// Response with clipboard history
-    History { items: Vec<ClipboardItem> },
-    /// New clipboard item added
-    NewItem { item: ClipboardItem },
+    /// Response with clipboard history (previews only, no mime payloads)
+    History { items: Vec<ClipboardItemPreview> },
+    /// New clipboard item added (preview only)
+    NewItem { item: ClipboardItemPreview },
     /// Clipboard content set successfully
     ClipboardSet,
     /// History cleared
