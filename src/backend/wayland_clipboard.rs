@@ -330,7 +330,16 @@ fn read_all_data_formats(
     }
 
     if !mime_map.is_empty() {
-        backend_state.add_clipboard_item_from_mime_map(mime_map);
+        if let Some(new_id) = backend_state.add_clipboard_item_from_mime_map(mime_map) {
+            if backend_state.preserve_selection && !backend_state.suppress_next_selection_read {
+                // Try to set selection to the freshly added item so we own it
+                if let Err(e) = backend_state.set_clipboard_by_id(new_id) {
+                    eprintln!("Failed to re-set (preserve) selection for id {}: {}", new_id, e);
+                } else {
+                    println!("🔒 Preserved selection by re-setting it from our own source (id {} )", new_id);
+                }
+            }
+        }
     }
 }
 

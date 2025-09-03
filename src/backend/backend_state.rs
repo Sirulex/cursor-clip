@@ -40,6 +40,10 @@ pub struct BackendState {
     // event loop. This flag suppresses reading the very next selection so we
     // avoid blocking on our own source.
     pub suppress_next_selection_read: bool,
+    // If true, when a new external selection is read, we immediately re-set
+    // that selection from our own data source so that we "own" it. This lets
+    // us keep it available even if the original app exits.
+    pub preserve_selection: bool,
 }
 
 impl Default for BackendState {
@@ -63,11 +67,12 @@ impl BackendState {
             qh: None,
             suppress_next_selection_read: false,
             connection: None,
+            preserve_selection: false,
         }
     }
 
-    pub fn add_clipboard_item_from_mime_map(&mut self, mut mime_content: IndexMap<String, Vec<u8>>) {
-        if mime_content.is_empty() { return; }
+    pub fn add_clipboard_item_from_mime_map(&mut self, mut mime_content: IndexMap<String, Vec<u8>>) -> Option<u64> {
+        if mime_content.is_empty() { return None; }
 
         let preview: String = if let Some(txt_bytes) = mime_content.get("text/plain;charset=utf-8") {
             match String::from_utf8(txt_bytes.clone()) {
@@ -93,8 +98,10 @@ impl BackendState {
         // remove duplicates (todo change to more robust solution -> hashes)
         self.history.retain(|existing| existing.content_preview != item.content_preview); //
         self.history.insert(0, item);
-        if self.history.len() > 100 { self.history.truncate(100); }
-        self.id_for_next_entry += 1;
+    if self.history.len() > 100 { self.history.truncate(100); }
+    let new_id = self.id_for_next_entry;
+    self.id_for_next_entry += 1;
+    Some(new_id)
     }
 
     pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 
