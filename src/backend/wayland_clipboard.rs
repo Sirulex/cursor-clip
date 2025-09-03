@@ -237,23 +237,25 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
         match event {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
                 println!("Data source Send event for MIME type: {}", mime_type);
-                if mime_type == "text/plain" {
-                    if let Some(item_id) = state.current_source_entry_id {
-                        if let Some(item) = state.get_item_by_id(item_id) {
-                            use std::os::unix::io::{IntoRawFd, FromRawFd};
-                            let raw_fd = fd.into_raw_fd();
-                            let mut file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-                            if let Err(e) = std::io::Write::write_all(&mut file, item.content_preview.as_bytes()) {
-                                eprintln!("Failed writing selection data (id {}): {e}", item_id);
+                if let Some(item_id) = state.current_source_entry_id {
+                    if let Some(item) = state.get_item_by_id(item_id) {
+                        use std::os::unix::io::{IntoRawFd, FromRawFd};
+                        let raw_fd = fd.into_raw_fd();
+                        let mut fd_endpoint = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+                        if let Some(bytes) = item.mime_data.get(&mime_type) {
+                            if let Err(e) = std::io::Write::write_all(&mut fd_endpoint, bytes) {
+                                eprintln!("Failed writing selection data (id {}, mime {}): {e}", item_id, mime_type);
                             } else {
-                                println!("✅ Wrote clipboard data for id {} ({} bytes)", item_id, item.content_preview.len());
+                                println!("✅ Wrote {} bytes for id {} (mime {})", bytes.len(), item_id, mime_type);
                             }
                         } else {
-                            eprintln!("Clipboard item id {} no longer exists in history", item_id);
+                            println!("⚠️ No data stored for MIME {} (id {}), nothing written", mime_type, item_id);
                         }
                     } else {
-                        eprintln!("No current_source_id set when Send event received");
+                        eprintln!("Clipboard item id {} no longer exists in history", item_id);
                     }
+                } else {
+                    eprintln!("No current_source_id set when Send event received");
                 }
             }
             zwlr_data_control_source_v1::Event::Cancelled => {
