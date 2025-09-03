@@ -33,7 +33,7 @@ pub struct BackendState {
     pub connection: Option<Connection>,
     
     // Current clipboard data
-    pub offers: HashMap<ObjectId, DataOffer>,
+    pub mime_type_offers: HashMap<ObjectId, DataOffer>,
     pub current_data_offer: Option<DataOffer>,
     pub current_source_object: Option<ZwlrDataControlSourceV1>,
     pub current_source_entry_id: Option<u64>,
@@ -60,7 +60,7 @@ impl BackendState {
             data_control_manager: None,
             data_control_device: None,
             seat: None,
-            offers: HashMap::new(),
+            mime_type_offers: HashMap::new(),
             current_data_offer: None,
             current_source_object: None,
             current_source_entry_id: None,
@@ -71,18 +71,26 @@ impl BackendState {
     }
 
     pub fn add_clipboard_item(&mut self, content: String) {
+        use indexmap::IndexMap;
+        let mut mime_data: IndexMap<String, Vec<u8>> = IndexMap::new();
+        // Standard Text-Repräsentation ablegen (UTF-8)
+        mime_data.insert("text/plain".to_string(), content.as_bytes().to_vec());
+        let preview = if content.len() > 256 { // Preview nicht zu groß machen
+            format!("{}…", &content[..252])
+        } else { content.clone() };
         let item = ClipboardItem {
-            id: self.id_for_next_entry,
-            content_type: ClipboardContentType::from_content(&content),
-            content,
+            item_id: self.id_for_next_entry,
+            content_type_preview: ClipboardContentType::from_content(&content),
+            content_preview: preview,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            mime_data,
         };
 
         // Remove previous occurrence of identical content
-        self.history.retain(|existing| existing.content != item.content);
+        self.history.retain(|existing| existing.content_preview != item.content_preview);
         self.history.insert(0, item);
         if self.history.len() > 100 { 
             self.history.truncate(100); 
@@ -95,7 +103,7 @@ impl BackendState {
     }
     
     pub fn get_item_by_id(&self, id: u64) -> Option<ClipboardItem> { 
-        self.history.iter().find(|i| i.id == id).cloned() 
+        self.history.iter().find(|i| i.item_id == id).cloned() 
     }
     
     pub fn clear_history(&mut self) { 
@@ -104,7 +112,7 @@ impl BackendState {
 
     pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
         let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {}", entry_id))?;
-        println!("Setting clipboard content by ID {}: {}", entry_id, item.content);
+        println!("Setting clipboard content by ID {}: {}", entry_id, item.content_preview);
 
         let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
             (Some(m), Some(d), Some(q)) => (m.clone(), d.clone(), q.clone()),
@@ -113,6 +121,10 @@ impl BackendState {
 
         let source = manager.create_data_source(&qh, ());
         source.offer("text/plain".into());
+        // Alle bekannten MIME-Typen des Items anbieten (Reihenfolge bleibt erhalten)
+        //for (mime, _data) in &item.mime_data {
+        //    source.offer(mime.clone());
+        //}
         device.set_selection(Some(&source));
         self.current_source_object = Some(source.clone());
         self.current_source_entry_id = Some(entry_id);

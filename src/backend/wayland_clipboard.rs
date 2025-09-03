@@ -151,13 +151,13 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
                     offer: id,
                     mime_types: Vec::new(),
                 };
-                state.offers.insert(object_id, data_offer);
+                state.mime_type_offers.insert(object_id, data_offer);
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
                 if let Some(offer_id) = id {
                     let object_id = offer_id.id();
                     println!("Selection changed to offer ID: {:?}", object_id);
-                    if let Some(data_offer) = state.offers.get(&object_id).cloned() {
+                    if let Some(data_offer) = state.mime_type_offers.get(&object_id).cloned() {
                         println!("New clipboard content available with {} MIME types", data_offer.mime_types.len());
                         
                         if state.suppress_next_selection_read {
@@ -215,7 +215,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             let object_id = offer.id();
             let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(data_offer) = state.offers.get_mut(&object_id) {
+            if let Some(data_offer) = state.mime_type_offers.get_mut(&object_id) {
                 data_offer.mime_types.push(mime_type);
             }
         }
@@ -242,10 +242,10 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
                             use std::os::unix::io::{IntoRawFd, FromRawFd};
                             let raw_fd = fd.into_raw_fd();
                             let mut file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-                            if let Err(e) = std::io::Write::write_all(&mut file, item.content.as_bytes()) {
+                            if let Err(e) = std::io::Write::write_all(&mut file, item.content_preview.as_bytes()) {
                                 eprintln!("Failed writing selection data (id {}): {e}", item_id);
                             } else {
-                                println!("✅ Wrote clipboard data for id {} ({} bytes)", item_id, item.content.len());
+                                println!("✅ Wrote clipboard data for id {} ({} bytes)", item_id, item.content_preview.len());
                             }
                         } else {
                             eprintln!("Clipboard item id {} no longer exists in history", item_id);

@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
+use indexmap::IndexMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardItem {
-    pub id: u64,
-    pub content: String,
-    pub content_type: ClipboardContentType,
+    pub item_id: u64,
+    pub content_preview: String,
+    pub content_type_preview: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
+    pub mime_data: IndexMap<String, Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -84,16 +84,24 @@ fn create_overlay_content() -> Box {
                 // Fall back to sample data
                 vec![
                     ClipboardItem {
-                        id: 1,
-                        content: "Hello, world!".to_string(),
-                        content_type: ClipboardContentType::Text,
+                        item_id: 1,
+                        content_preview: "Hello, world!".to_string(),
+                        content_type_preview: ClipboardContentType::Text,
                         timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 120,
+                        mime_data: {
+                            use indexmap::IndexMap; let mut m = IndexMap::new();
+                            m.insert("text/plain".to_string(), b"Hello, world!".to_vec()); m
+                        },
                     },
                     ClipboardItem {
-                        id: 2,
-                        content: "https://github.com/rust-lang/rust".to_string(),
-                        content_type: ClipboardContentType::Url,
+                        item_id: 2,
+                        content_preview: "https://github.com/rust-lang/rust".to_string(),
+                        content_type_preview: ClipboardContentType::Url,
                         timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 300,
+                        mime_data: {
+                            use indexmap::IndexMap; let mut m = IndexMap::new();
+                            m.insert("text/plain".to_string(), b"https://github.com/rust-lang/rust".to_vec()); m
+                        },
                     },
                 ]
             })
@@ -103,10 +111,14 @@ fn create_overlay_content() -> Box {
             // Fall back to sample data
             vec![
                 ClipboardItem {
-                    id: 1,
-                    content: "Backend not available - sample data".to_string(),
-                    content_type: ClipboardContentType::Text,
+                    item_id: 1,
+                    content_preview: "Backend not available - sample data".to_string(),
+                    content_type_preview: ClipboardContentType::Text,
                     timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 120,
+                    mime_data: {
+                        use indexmap::IndexMap; let mut m = IndexMap::new();
+                        m.insert("text/plain".to_string(), b"Backend not available - sample data".to_vec()); m
+                    },
                 },
             ]
         }
@@ -136,15 +148,15 @@ fn create_overlay_content() -> Box {
             let index = row.index() as usize;
             if index < items_for_selection.len() {
                 let item = &items_for_selection[index];
-                println!("Selected clipboard item ID {}: {}", item.id, item.content);
+                println!("Selected clipboard item ID {}: {}", item.item_id, item.content_preview);
                 
                 // Use ID-based clipboard operation
                 match FrontendClient::new() {
                     Ok(mut client) => {
-                        if let Err(e) = client.set_clipboard_by_id(item.id) {
+                        if let Err(e) = client.set_clipboard_by_id(item.item_id) {
                             eprintln!("Error setting clipboard by ID: {}", e);
                         } else {
-                            println!("Successfully set clipboard content by ID: {}", item.id);
+                            println!("Successfully set clipboard content by ID: {}", item.item_id);
                             // Close the overlay after successful selection
                             CLOSE_REQUESTED.store(true, Ordering::Relaxed);
                             OVERLAY_WINDOW.with(|window| {
@@ -387,10 +399,10 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
     
-    let type_label = Label::new(Some(&item.content_type.get_icon()));
+    let type_label = Label::new(Some(&item.content_type_preview.get_icon()));
     type_label.add_css_class("caption");
     
-    let type_text = Label::new(Some(&capitalize_first_letter(item.content_type.to_string())));
+    let type_text = Label::new(Some(&capitalize_first_letter(item.content_type_preview.to_string())));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);
@@ -407,10 +419,10 @@ fn create_clipboard_item_from_backend(item: &ClipboardItem) -> gtk4::ListBoxRow 
     main_box.append(&header_box);
 
     // Content preview
-    let preview_text = if item.content.len() > 100 {
-        format!("{}...", &item.content[..97])
+    let preview_text = if item.content_preview.len() > 100 {
+        format!("{}...", &item.content_preview[..97])
     } else {
-        item.content.clone()
+        item.content_preview.clone()
     };
 
     let content_label = Label::new(Some(&preview_text));
