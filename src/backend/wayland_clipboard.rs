@@ -11,6 +11,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
 use std::sync::Arc as StdArc; // for event_created_child return type clarity
 
 use super::backend_state::{BackendState, DataOffer};
+use indexmap::IndexMap;
 
 // Wrapper struct that holds the shared backend state for dispatch implementations
 pub struct SharedBackendStateWrapper {
@@ -171,8 +172,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
                         if state.current_data_offer.as_ref().map(|s| s.offer.id()) != Some(object_id) {
                             state.current_data_offer = Some(data_offer.clone());
                             
-                            // Read the clipboard content
-                            read_clipboard_offer(&data_offer.offer, &data_offer.mime_types, conn, &mut *state);
+                            read_all_data_formats(&data_offer.offer, &data_offer.mime_types, conn, &mut *state);
                         }
                     }
                 } else {
@@ -214,6 +214,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             let object_id = offer.id();
+            println!("Offer event: MIME type offered: {}", mime_type.clone());
             let mut state = wrapper.backend_state.lock().unwrap();
             if let Some(data_offer) = state.mime_type_offers.get_mut(&object_id) {
                 data_offer.mime_types.push(mime_type);
@@ -302,8 +303,7 @@ fn create_pipes() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::
     Ok((reader, writer))
 }
 
-/// Read data from a clipboard offer
-fn read_clipboard_offer(
+fn read_all_data_formats(
     data_offer: &ZwlrDataControlOfferV1,
     mime_types: &[String],
     conn: &Connection,
@@ -311,42 +311,32 @@ fn read_clipboard_offer(
 ) {
     use std::os::fd::AsFd;
     use std::io::Read;
-    
-    // Prioritize text/plain over other types
-    for mime_type in mime_types {
-        if mime_type == "text/plain" {
-            let (mut reader, writer) = match create_pipes() {
-                Ok((reader, writer)) => (reader, writer),
-                Err(err) => {
-                    eprintln!("Could not open pipe to read data: {:?}", err);
-                    continue;
-                }
-            };
-            
-            println!("Requesting {} content...", mime_type);
-            data_offer.receive(mime_type.clone(), writer.as_fd());
-            drop(writer); // We won't write anything, the selection client will.
-            
-            // Flush to ensure data is sent
-            conn.flush().expect("Failed to flush connection");
-            
-            // Read the data synchronously
-            let mut content = String::new();
-            match reader.read_to_string(&mut content) {
-                Ok(_) => {
-                    if !content.trim().is_empty() {
-                        println!("📋 Clipboard content: {}", content.trim());
-                        backend_state.add_clipboard_item(content.trim().to_string());
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Failed to read clipboard content: {:?}", err);
-                }
+
+    let text_mimes: Vec<String> = mime_types.to_vec();
+    if text_mimes.is_empty() { return; }
+
+    let mut mime_map: IndexMap<String, Vec<u8>> = IndexMap::new();
+
+    for mime in text_mimes {
+        let (mut reader, writer) = match create_pipes() {
+            Ok((reader, writer)) => (reader, writer),
+            Err(err) => { eprintln!("Could not open pipe to read data for {}: {:?}", mime, err); continue; }
+        };
+        println!("Requesting {} content...", mime);
+        data_offer.receive(mime.clone(), writer.as_fd());
+        drop(writer);
+        if let Err(e) = conn.flush() { eprintln!("Flush failed: {e}"); }
+        let mut buf = Vec::new();
+        match reader.read_to_end(&mut buf) {
+            Ok(_) => {
+                if !buf.is_empty() { mime_map.insert(mime, buf); }
             }
-            
-            // Only read from the first suitable mime type
-            break;
+            Err(e) => eprintln!("Failed reading data for mime: {e}"),
         }
+    }
+
+    if !mime_map.is_empty() {
+        backend_state.add_clipboard_item_from_mime_map(mime_map);
     }
 }
 

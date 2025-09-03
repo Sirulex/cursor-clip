@@ -12,6 +12,7 @@ use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHa
 use wayland_client::{QueueHandle, Connection, Proxy};
 
 use crate::shared::{ClipboardItem, ClipboardContentType};
+use indexmap::IndexMap;
 
 #[derive(Debug, Clone)]
 pub struct DataOffer {
@@ -70,31 +71,33 @@ impl BackendState {
         }
     }
 
-    pub fn add_clipboard_item(&mut self, content: String) {
-        use indexmap::IndexMap;
-        let mut mime_data: IndexMap<String, Vec<u8>> = IndexMap::new();
-        // Standard Text-Repräsentation ablegen (UTF-8)
-        mime_data.insert("text/plain".to_string(), content.as_bytes().to_vec());
-        let preview = if content.len() > 256 { // Preview nicht zu groß machen
-            format!("{}…", &content[..252])
-        } else { content.clone() };
+    pub fn add_clipboard_item_from_mime_map(&mut self, mut indexmap_mime_content: IndexMap<String, Vec<u8>>) {
+        if indexmap_mime_content.is_empty() { return; }
+
+        // Preview-Kandidat bestimmen
+        let mut preview_source: Option<(String, Vec<u8>)> = None;
+        if let Some(v) = indexmap_mime_content.get("text/plain").cloned() { preview_source = Some(("text/plain".into(), v)); }
+        if preview_source.is_none() {
+            if let Some((k,v)) = indexmap_mime_content.iter().find(|(k,_)| k.starts_with("text/")) { preview_source = Some((k.clone(), v.clone())); }
+        }
+        let (preview_mime, preview_bytes) = match preview_source { Some(p) => p, None => indexmap_mime_content.iter().next().map(|(k,v)| (k.clone(), v.clone())).unwrap() };
+        let content_string = String::from_utf8(preview_bytes.clone()).unwrap_or_else(|_| format!("<{} {} bytes>", preview_mime, preview_bytes.len()));
+        let preview = if content_string.len() > 256 { format!("{}…", &content_string[..252]) } else { content_string.clone() };
+        let content_type = ClipboardContentType::from_content(&content_string);
+
+
         let item = ClipboardItem {
             item_id: self.id_for_next_entry,
-            content_type_preview: ClipboardContentType::from_content(&content),
+            content_type_preview: content_type,
             content_preview: preview,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            mime_data,
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            mime_data: indexmap_mime_content.drain(..).collect(),
         };
 
-        // Remove previous occurrence of identical content
-        self.history.retain(|existing| existing.content_preview != item.content_preview);
+        // remove duplicates (todo change to more robust solution -> hashes)
+        self.history.retain(|existing| existing.content_preview != item.content_preview); //
         self.history.insert(0, item);
-        if self.history.len() > 100 { 
-            self.history.truncate(100); 
-        }
+        if self.history.len() > 100 { self.history.truncate(100); }
         self.id_for_next_entry += 1;
     }
 
@@ -120,11 +123,7 @@ impl BackendState {
         };
 
         let source = manager.create_data_source(&qh, ());
-        source.offer("text/plain".into());
-        // Alle bekannten MIME-Typen des Items anbieten (Reihenfolge bleibt erhalten)
-        //for (mime, _data) in &item.mime_data {
-        //    source.offer(mime.clone());
-        //}
+        for (mime, _data) in &item.mime_data { source.offer(mime.clone()); }
         device.set_selection(Some(&source));
         self.current_source_object = Some(source.clone());
         self.current_source_entry_id = Some(entry_id);

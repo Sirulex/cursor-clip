@@ -37,13 +37,18 @@ pub async fn run_backend() -> Result<(), Box<dyn std::error::Error>> {
     // Add some sample data
     {
         let mut state_lock = state.lock().unwrap();
+        use indexmap::IndexMap;
         for sample in [
             "Hello, world Cursor-Clip!",
             "https://github.com/rust-lang/rust",
             "Sample clipboard content for testing the clipboard manager",
             "impl Display for MyStruct {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"MyStruct\")\n    }\n}",
             "Password4234!Cursor-Clip",
-        ] { state_lock.add_clipboard_item(sample.to_string()); }
+        ] {
+            let mut map = IndexMap::new();
+            map.insert("text/plain".to_string(), sample.as_bytes().to_vec());
+            state_lock.add_clipboard_item_from_mime_map(map);
+        }
     }
 
     // Handle IPC connections
