@@ -42,7 +42,7 @@ fn init_application() -> Application {
 }
 
 /// Create a Windows 11-style clipboard history list with backend data
-fn create_overlay_content() -> Box {
+fn create_overlay_content() -> (Box, gtk4::ListBox) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -123,38 +123,35 @@ fn create_overlay_content() -> Box {
         list_box.append(&placeholder_row);
     }
 
-    // Handle item selection
-    let items_for_selection = items.clone();
-    list_box.connect_row_selected(move |_, row| {
-        if let Some(row) = row {
-            let index = row.index() as usize;
-            if index < items_for_selection.len() {
-                let item = &items_for_selection[index];
-                println!("Selected clipboard item ID {}: {}", item.item_id, item.content_preview);
-                
-                // Use ID-based clipboard operation
-                match FrontendClient::new() {
-                    Ok(mut client) => {
-                        if let Err(e) = client.set_clipboard_by_id(item.item_id) {
-                            eprintln!("Error setting clipboard by ID: {}", e);
-                        } else {
-                            println!("Successfully set clipboard content by ID: {}", item.item_id);
-                            // Close the overlay after successful selection
-                            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                            OVERLAY_WINDOW.with(|window| {
-                                if let Some(ref win) = *window.borrow() {
-                                    win.close();
-                                }
-                            });
-                        }
+    // Handle item activation (Enter/Space/double-click) instead of mere selection
+    let items_for_activation: Vec<ClipboardItemPreview> = items;
+    list_box.connect_row_activated(move |_, row| {
+        let index = row.index() as usize;
+        if index < items_for_activation.len() {
+            let item = &items_for_activation[index];
+            println!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
+
+            match FrontendClient::new() {
+                Ok(mut client) => {
+                    if let Err(e) = client.set_clipboard_by_id(item.item_id) {
+                        eprintln!("Error setting clipboard by ID: {}", e);
+                    } else {
+                        println!("Successfully set clipboard content by ID: {}", item.item_id);
+                        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                        OVERLAY_WINDOW.with(|window| {
+                            if let Some(ref win) = *window.borrow() {
+                                win.close();
+                            }
+                        });
                     }
-                    Err(e) => {
-                        eprintln!("Error creating frontend client: {}", e);
-                    }
+                }
+                Err(e) => {
+                    eprintln!("Error creating frontend client: {}", e);
                 }
             }
         }
     });
+
 
     scrolled_window.set_child(Some(&list_box));
     main_box.append(&scrolled_window);
@@ -183,7 +180,64 @@ fn create_overlay_content() -> Box {
         }
     });
 
-    main_box
+    (main_box, list_box)
+}
+
+/// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
+fn build_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
+    let controller = gtk4::EventControllerKey::new();
+    let list_box_for_keys = list_box.clone();
+    controller.connect_key_pressed(move |_, key, _, _| {
+        use gtk4::gdk::Key;
+        match key {
+            Key::Escape => {
+                CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                OVERLAY_WINDOW.with(|window| {
+                    if let Some(ref win) = *window.borrow() {
+                        win.close();
+                    }
+                });
+                gtk4::glib::Propagation::Stop
+            }
+            Key::j | Key::J | Key::Down => {
+                if let Some(current) = list_box_for_keys.selected_row() {
+                    let next_index = current.index() + 1;
+                    if let Some(next_row) = list_box_for_keys.row_at_index(next_index) {
+                        list_box_for_keys.select_row(Some(&next_row));
+                        next_row.grab_focus();
+                    }
+                } else if let Some(first_row) = list_box_for_keys.row_at_index(0) {
+                    list_box_for_keys.select_row(Some(&first_row));
+                    first_row.grab_focus();
+                }
+                gtk4::glib::Propagation::Stop
+            }
+            Key::k | Key::K | Key::Up => {
+                if let Some(current) = list_box_for_keys.selected_row() {
+                    if current.index() > 0 {
+                        let prev_index = current.index() - 1;
+                        if let Some(prev_row) = list_box_for_keys.row_at_index(prev_index) {
+                            list_box_for_keys.select_row(Some(&prev_row));
+                            prev_row.grab_focus();
+                        }
+                    }
+                } else if let Some(first_row) = list_box_for_keys.row_at_index(0) {
+                    list_box_for_keys.select_row(Some(&first_row));
+                    first_row.grab_focus();
+                }
+                gtk4::glib::Propagation::Stop
+            }
+            Key::Return | Key::KP_Enter => {
+                if let Some(row) = list_box_for_keys.selected_row() {
+                    row.emit_by_name::<()>("activate", &[]);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
+            _ => gtk4::glib::Propagation::Proceed,
+        }
+    });
+    controller
 }
 
 /// Sync version of the main entry point for creating the overlay
@@ -250,24 +304,12 @@ fn create_layer_shell_window(
     // Apply custom styling
     apply_custom_styling(&window);
 
-    // Create and set content
-    let content = create_overlay_content();
+    // Create and set content (also obtain list_box for navigation)
+    let (content, list_box) = create_overlay_content();
     window.set_content(Some(&content));
 
-    // Add key controller to close on Escape
-    let key_controller = gtk4::EventControllerKey::new();
-    key_controller.connect_key_pressed(|_, key, _, _| {
-        if key == gtk4::gdk::Key::Escape {
-            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-            OVERLAY_WINDOW.with(|window| {
-                if let Some(ref win) = *window.borrow() {
-                    win.close();
-                }
-            });
-            return gtk4::glib::Propagation::Stop;
-        }
-        gtk4::glib::Propagation::Proceed
-    });
+    // Add key controller (Esc/j/k/Enter navigation & activation)
+    let key_controller = build_key_controller(&list_box);
     window.add_controller(key_controller);
 
     // Add focus-out handler to close when clicking outside
