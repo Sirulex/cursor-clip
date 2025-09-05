@@ -85,15 +85,17 @@ impl ClipboardContentType {
         }
     }
 
+    // Return a static string representation of the content type (future multi-language support)
     pub fn to_string(&self) -> &'static str {
         match self {
-            ClipboardContentType::Text => "text",
-            ClipboardContentType::Url => "url",
-            ClipboardContentType::Code => "code",
-            ClipboardContentType::Password => "password",
-            ClipboardContentType::File => "file",
-            ClipboardContentType::Image => "image",
-            ClipboardContentType::Other => "other",
+            // Return capitalized labels directly so callers don't need to post-process
+            ClipboardContentType::Text => "Text",
+            ClipboardContentType::Url => "Url",
+            ClipboardContentType::Code => "Code",
+            ClipboardContentType::Password => "Password",
+            ClipboardContentType::File => "File",
+            ClipboardContentType::Image => "Image",
+            ClipboardContentType::Other => "Other",
         }
     }
 

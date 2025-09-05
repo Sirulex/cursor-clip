@@ -240,7 +240,6 @@ fn build_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
     controller
 }
 
-/// Sync version of the main entry point for creating the overlay
 pub fn create_clipboard_overlay(x: f64, y: f64) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     let app = init_application();
     
@@ -257,7 +256,6 @@ pub fn create_clipboard_overlay(x: f64, y: f64) -> Result<(), std::boxed::Box<dy
             *a.borrow_mut() = Some(app_clone.clone());
         });
         
-        // Show the window
         window.present();
         
         println!("Libadwaita overlay window created and shown at ({}, {})", x, y);
@@ -425,7 +423,7 @@ fn create_clipboard_item_from_backend(item: &ClipboardItemPreview) -> gtk4::List
     let type_label = Label::new(Some(&item.content_preview_type.get_icon()));
     type_label.add_css_class("caption");
     
-    let type_text = Label::new(Some(&capitalize_first_letter(item.content_preview_type.to_string())));
+    let type_text = Label::new(Some(item.content_preview_type.to_string()));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);
@@ -476,14 +474,5 @@ fn format_timestamp(timestamp: u64) -> String {
     } else {
         let days = diff / 86400;
         format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
-    }
-}
-
-/// Capitalize first letter of a string
-fn capitalize_first_letter(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
