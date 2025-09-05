@@ -70,8 +70,8 @@ fn create_overlay_content() -> Box {
     let list_box = gtk4::ListBox::new();
     // Use custom styling instead of the default boxed-list to create floating cards
     list_box.add_css_class("clipboard-list");
-    list_box.set_margin_top(6);
-    list_box.set_margin_bottom(12);
+    //list_box.set_margin_top(6);
+    list_box.set_margin_bottom(6);
     list_box.set_margin_start(4);
     list_box.set_margin_end(4);
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
@@ -279,67 +279,44 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
     let css_provider = gtk4::CssProvider::new();
     css_provider.load_from_data(
         "
-        /* Modern GNOME-style rounded window */
         window {
             border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
             background: #222226;
         }
-        
-        /* Ensure the window content also respects the rounded corners */
-        window > box {
-            border-radius: 12px;
-            background: #222226; /* unify background */
-        }
-        
-        /* Header bar rounded corners */
+
         headerbar {
-            border-top-left-radius: 12px;
-            border-top-right-radius: 12px;
-            background: #222226; /* match window background */
+            background: #222226;
             box-shadow: none;
-            border: none;
         }
-        
-        
-        /* List container cleanup */
+
         .clipboard-list {
             background: transparent;
         }
 
-        /* Floating card style for clipboard rows */
         .clipboard-item {
-            background: #343437; /* requested card color */
-            border: 2px solid transparent; /* 2px to allow thicker highlight */
+            background: #343437;
+            border: 2px solid transparent;
             border-radius: 10px;
             padding: 10px 14px;
-            margin: 6px 12px; /* spacing between cards */
-            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            margin: 6px 12px;
             transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
         }
 
         .clipboard-item:hover {
             border-color: #3584E4;
             background: shade(#343437, 1.05);
-            box-shadow: 0 3px 6px rgba(0,0,0,0.18);
         }
 
         .clipboard-item:selected {
             border-color: #3584E4;
             background: alpha(#3584E4, 0.18);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
         }
 
-        /* Subtle hover effect for labels inside cards */
-        .clipboard-item:hover .clipboard-preview {
-            opacity: 0.85;
-        }
-        
         .clipboard-preview {
             font-family: monospace;
-            opacity: 0.8;
+            opacity: 0.9;
         }
-        
+
         .clipboard-time {
             font-size: 0.8em;
             opacity: 0.6;
