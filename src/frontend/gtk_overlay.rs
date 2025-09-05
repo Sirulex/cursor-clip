@@ -254,6 +254,22 @@ fn create_layer_shell_window(
     let content = create_overlay_content();
     window.set_content(Some(&content));
 
+    // Add key controller to close on Escape
+    let key_controller = gtk4::EventControllerKey::new();
+    key_controller.connect_key_pressed(|_, key, _, _| {
+        if key == gtk4::gdk::Key::Escape {
+            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+            OVERLAY_WINDOW.with(|window| {
+                if let Some(ref win) = *window.borrow() {
+                    win.close();
+                }
+            });
+            return gtk4::glib::Propagation::Stop;
+        }
+        gtk4::glib::Propagation::Proceed
+    });
+    window.add_controller(key_controller);
+
     // Add focus-out handler to close when clicking outside
     window.connect_is_active_notify(|window| {
         println!("inside GTK window focus handler (checking outside)");
