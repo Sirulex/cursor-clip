@@ -46,17 +46,12 @@ fn create_overlay_content() -> Box {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
-    // Header bar with title
+    // Header bar 
     let header_bar = adw::HeaderBar::new();
     header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
-    header_bar.set_show_end_title_buttons(false);
+    // Use standard end title buttons (includes the normal close button with Adwaita styling)
+    header_bar.set_show_end_title_buttons(true);
     header_bar.set_show_start_title_buttons(false);
-
-    // Add close button to header (upper right corner)
-    let close_button = Button::new();
-    close_button.set_icon_name("window-close-symbolic");
-    close_button.add_css_class("circular");
-    header_bar.pack_end(&close_button);
     
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
@@ -69,11 +64,16 @@ fn create_overlay_content() -> Box {
     let scrolled_window = gtk4::ScrolledWindow::new();
     scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     scrolled_window.set_min_content_width(200);
-    scrolled_window.set_min_content_height(300);
+    scrolled_window.set_min_content_height(400);
 
     // Create list box for clipboard items
     let list_box = gtk4::ListBox::new();
-    list_box.add_css_class("boxed-list");
+    // Use custom styling instead of the default boxed-list to create floating cards
+    list_box.add_css_class("clipboard-list");
+    list_box.set_margin_top(6);
+    list_box.set_margin_bottom(12);
+    list_box.set_margin_start(4);
+    list_box.set_margin_end(4);
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
 
     // Load clipboard items from backend
@@ -183,17 +183,6 @@ fn create_overlay_content() -> Box {
         }
     });
 
-    close_button.connect_clicked(move |_| {
-        println!("Close button clicked - closing both overlay and capture layer");
-        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-        
-        OVERLAY_WINDOW.with(|window| {
-            if let Some(ref win) = *window.borrow() {
-                win.close();
-            }
-        });
-    });
-
     main_box
 }
 
@@ -256,7 +245,7 @@ fn create_layer_shell_window(
     window.set_exclusive_zone(-1); 
 
     // Make window keyboard interactive
-    window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
+    window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::Exclusive);
 
     // Apply custom styling
     apply_custom_styling(&window);
@@ -294,44 +283,61 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
         window {
             border-radius: 12px;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+            background: #222226;
         }
         
         /* Ensure the window content also respects the rounded corners */
         window > box {
             border-radius: 12px;
+            background: #222226; /* unify background */
         }
         
         /* Header bar rounded corners */
         headerbar {
             border-top-left-radius: 12px;
             border-top-right-radius: 12px;
+            background: #222226; /* match window background */
+            box-shadow: none;
+            border: none;
         }
         
-        /* Last child element rounded bottom corners */
-        window > box > scrolledwindow {
-            border-bottom-left-radius: 12px;
-            border-bottom-right-radius: 12px;
-        }
         
-        /* Minimal styling for clipboard items */
+        /* List container cleanup */
+        .clipboard-list {
+            background: transparent;
+        }
+
+        /* Floating card style for clipboard rows */
         .clipboard-item {
-            padding: 8px 12px;
-            margin: 2px 0;
-            border-radius: 6px;
+            background: #343437; /* requested card color */
+            border: 2px solid transparent; /* 2px to allow thicker highlight */
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin: 6px 12px; /* spacing between cards */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
         }
-        
+
         .clipboard-item:hover {
-            background: alpha(@accent_color, 0.1);
+            border-color: #3584E4;
+            background: shade(#343437, 1.05);
+            box-shadow: 0 3px 6px rgba(0,0,0,0.18);
         }
-        
+
         .clipboard-item:selected {
-            background: @accent_color;
-            color: @accent_fg_color;
+            border-color: #3584E4;
+            background: alpha(#3584E4, 0.18);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        }
+
+        /* Subtle hover effect for labels inside cards */
+        .clipboard-item:hover .clipboard-preview {
+            opacity: 0.85;
         }
         
         .clipboard-preview {
             font-family: monospace;
-            opacity: 0.7;
+            opacity: 0.8;
         }
         
         .clipboard-time {
