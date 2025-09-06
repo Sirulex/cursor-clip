@@ -125,13 +125,6 @@ fn init_wayland_protocols(
         return Err("zwlr_layer_shell_v1 not available".into());
     }
 
-    if let Ok(xdg_shell) = globals.bind::<xdg_wm_base::XdgWmBase, _, _>(&queue.handle(), 1..=1, ())
-    {
-        state.xdg_wm_base = Some(xdg_shell);
-    } else {
-        eprintln!("xdg_wm_base not available");
-    }
-
     // Bind wl_seat
     if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
         state.seat = Some(seat);

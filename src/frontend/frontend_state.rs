@@ -20,7 +20,6 @@ use crate::shared::ClipboardItemPreview;
 pub struct State {
     pub compositor: Option<wl_compositor::WlCompositor>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
-    pub xdg_wm_base: Option<xdg_wm_base::XdgWmBase>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub seat: Option<wl_seat::WlSeat>,
     pub single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
@@ -48,7 +47,6 @@ impl State {
         Self {
             compositor: None,
             layer_shell: None,
-            xdg_wm_base: None,
             pointer: None,
             seat: None,
             single_pixel_buffer_manager: None,
