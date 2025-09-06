@@ -5,6 +5,7 @@ use wayland_client::{
 };
 
 use crate::frontend::frontend_state::State;
+use log::debug;
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(
@@ -23,7 +24,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
             version,
         } = event
         {
-            println!("[{}] {} (v{})", name, interface, version);
+            debug!("Global [{}] {} (v{})", name, interface, version);
         }
     }
 }

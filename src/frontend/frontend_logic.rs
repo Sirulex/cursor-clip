@@ -16,6 +16,7 @@ use wayland_protocols::{
 
 use crate::frontend::{frontend_state::State, gtk_overlay};
 use crate::frontend::frontend_client::FrontendClient;
+use log::{debug, warn, error};
 
 async fn run_main_event_loop(
     state: &mut State, 
@@ -31,11 +32,11 @@ async fn run_main_event_loop(
         if state.coords_received && !gtk_window_created {
             let x = state.received_x;
             let y = state.received_y;
-            println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", x, y);
+            debug!("Capture layer ready; creating GTK overlay window at ({}, {})", x, y);
 
             // Create the GTK window using the unified client backend communication
             if let Err(e) = gtk_overlay::create_clipboard_overlay(x, y, state.clipboard_history.clone()) {
-                eprintln!("Error creating GTK overlay: {:?}", e);
+                error!("Error creating GTK overlay: {:?}", e);
             }
             
             gtk_window_created = true;
@@ -43,7 +44,7 @@ async fn run_main_event_loop(
         
         // Handle close requests
         if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
-            println!("Close requested - closing both capture layer and GTK window");
+            debug!("Close requested - closing overlay");
             
             // Close GTK overlay window
             gtk_overlay::reset_close_flags();
@@ -51,7 +52,7 @@ async fn run_main_event_loop(
             // Clean up capture layer surface
             if let Some(capture_layer_surface) = &state.capture_layer_surface {
                 capture_layer_surface.destroy();
-                println!("Capture layer surface destroyed");
+                debug!("Capture layer surface destroyed");
             }
             state.capture_layer_surface = None;
             state.capture_layer_clicked = false;
@@ -76,12 +77,12 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
         match client.get_history() {
             Ok(items) => {
                 state.clipboard_history = items;
-                println!("Prefetched {} clipboard history items", state.clipboard_history.len());
+                debug!("Prefetched {} clipboard history items", state.clipboard_history.len());
             }
-            Err(e) => eprintln!("Failed to prefetch clipboard history: {e}"),
+            Err(e) => warn!("Failed to prefetch clipboard history: {e}"),
         }
     } else {
-        eprintln!("Failed to connect to backend for history prefetch");
+        warn!("Failed to connect to backend for history prefetch");
     }
 
     // Initialize Wayland for layer shell capture
@@ -135,7 +136,7 @@ fn init_wayland_protocols(
     if let Ok(viewporter) = globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ()) {
         state.viewporter = Some(viewporter);
     } else {
-        eprintln!("wp_viewporter not available");
+        debug!("wp_viewporter not available");
     }
 
     // Bind wp_single_pixel_buffer_manager_v1
@@ -148,7 +149,7 @@ fn init_wayland_protocols(
     {
         state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
     } else {
-        eprintln!("wp_single_pixel_buffer_manager_v1 not available");
+        debug!("wp_single_pixel_buffer_manager_v1 not available");
     }
 
     // Bind virtual_pointer_manager_v1
@@ -166,7 +167,7 @@ fn init_wayland_protocols(
         }
         state.virtual_pointer_manager = Some(virtual_pointer_manager);
     } else {
-        eprintln!("zwlr_virtual_pointer_manager_v1 not available");
+        debug!("zwlr_virtual_pointer_manager_v1 not available");
     }
 
     Ok(())

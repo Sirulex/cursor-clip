@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use crate::shared::ClipboardItemPreview;
 use crate::frontend::frontend_client::FrontendClient;
+use log::{info, debug, warn, error};
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -79,11 +80,11 @@ fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, 
     // Start with prefetched items; if empty try one lazy fetch (non-fatal if it fails)
     let mut items = prefetched_items;
     if items.is_empty() {
-        print!("Prefetched clipboard history empty - trying on-demand fetch... ");
+        debug!("Prefetched clipboard history empty - trying on-demand fetch...");
         if let Ok(mut client) = FrontendClient::new() {
             match client.get_history() {
                 Ok(fetched) => items = fetched,
-                Err(e) => eprintln!("Error fetching clipboard history on-demand: {}", e),
+                Err(e) => warn!("Error fetching clipboard history on-demand: {}", e),
             }
         }
     }
@@ -111,14 +112,14 @@ fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, 
         let index = row.index() as usize;
         if index < items_for_activation.len() {
             let item = &items_for_activation[index];
-            println!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
+            debug!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
 
             match FrontendClient::new() {
                 Ok(mut client) => {
                     if let Err(e) = client.set_clipboard_by_id(item.item_id) {
-                        eprintln!("Error setting clipboard by ID: {}", e);
+                        error!("Error setting clipboard by ID: {}", e);
                     } else {
-                        println!("Successfully set clipboard content by ID: {}", item.item_id);
+                        info!("Clipboard set by ID: {}", item.item_id);
                         CLOSE_REQUESTED.store(true, Ordering::Relaxed);
                         OVERLAY_WINDOW.with(|window| {
                             if let Some(ref win) = *window.borrow() {
@@ -128,7 +129,7 @@ fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, 
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error creating frontend client: {}", e);
+                    error!("Error creating frontend client: {}", e);
                 }
             }
         }
@@ -140,13 +141,12 @@ fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, 
 
     // Connect button signals
     clear_button.connect_clicked(move |_| {
-        println!("Clear all clipboard history");
     match FrontendClient::new() {
             Ok(mut client) => {
                 if let Err(e) = client.clear_history() {
-                    eprintln!("Error clearing clipboard history: {}", e);
+                    error!("Error clearing clipboard history: {}", e);
                 } else {
-                    println!("Successfully cleared clipboard history");
+                    info!("Clipboard history cleared");
                     // Close the overlay after clearing
                     CLOSE_REQUESTED.store(true, Ordering::Relaxed);
                     OVERLAY_WINDOW.with(|window| {
@@ -157,7 +157,7 @@ fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, 
                 }
             }
             Err(e) => {
-                eprintln!("Error creating frontend client: {}", e);
+                error!("Error creating frontend client: {}", e);
             }
         }
     });
@@ -240,7 +240,7 @@ pub fn create_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardI
         
         window.present();
         
-        println!("Libadwaita overlay window created and shown at ({}, {})", x, y);
+        debug!("Libadwaita overlay window created at ({}, {})", x, y);
     });
 
     // Run the application

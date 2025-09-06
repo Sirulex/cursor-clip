@@ -5,6 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::shared::{BackendMessage, FrontendMessage};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 use super::backend_state::BackendState;
+use log::{info, error};
 
 pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> { 
     // Remove existing socket if it exists
@@ -13,7 +14,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
 
     // Create Unix socket for IPC
     let listener = UnixListener::bind(socket_path)?;
-    println!("Clipboard backend listening on {}", socket_path);
+    info!("Clipboard backend listening on {}", socket_path);
 
     let state = Arc::new(Mutex::new(BackendState::new()));
     {
@@ -27,12 +28,11 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
         match WaylandClipboardMonitor::new(wayland_state) {
             Ok(mut monitor) => {
                 if let Err(e) = monitor.start_monitoring().await {
-                    eprintln!("Wayland clipboard monitoring error: {}", e);
+                    error!("Wayland clipboard monitoring error: {}", e);
                 }
             }
             Err(e) => {
-                eprintln!("Failed to create Wayland clipboard monitor: {}", e);
-                println!("Continuing without Wayland clipboard monitoring...");
+                error!("Failed to create Wayland clipboard monitor: {}", e);
             }
         }
     });
@@ -62,7 +62,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
         
         tokio::spawn(async move {
             if let Err(e) = handle_client(stream, state_clone).await {
-                eprintln!("Client error: {}", e);
+                error!("Client error: {}", e);
             }
         });
     }

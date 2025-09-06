@@ -1,4 +1,5 @@
 use clap::{Arg, Command};
+use log::{info, error};
 
 mod backend;
 mod frontend;
@@ -6,6 +7,11 @@ mod shared;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging (RUST_LOG overrides, default to info)
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_secs()
+        .try_init();
+
     let matches = Command::new("cursor-clip")
         .version("0.1.0")
         .about("Clipboard manager with GUI overlay")
@@ -27,15 +33,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let run_daemon = matches.get_flag("daemon");
 
     if monitor_only && !run_daemon {
-        eprintln!("--monitor-only can only be used together with --daemon");
+        error!("--monitor-only can only be used together with --daemon");
         std::process::exit(1);
     }
 
     if run_daemon {
-        println!("Starting clipboard backend daemon...");
+        info!("Starting clipboard backend daemon...");
         backend::run_backend(monitor_only).await?;
     } else {
-        println!("Starting clipboard frontend...");
+        info!("Starting clipboard frontend...");
         frontend::run_frontend().await?;
     }
 

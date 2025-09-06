@@ -6,6 +6,7 @@ use wayland_protocols::wp::viewporter::client::wp_viewport;
 
 use crate::frontend::frontend_state::State;
 use crate::frontend::dispatch::frame_callback::FrameCallbackData;
+use log::debug;
 
 impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for State {
     fn event(
@@ -36,7 +37,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 height,
             } => {
                 layer_surface.ack_configure(serial);
-                println!("Layer surface configured: {}x{}", width, height);
+                debug!("Layer surface configured: {}x{}", width, height);
 
                 // Ensure we have the necessary objects
                 let Some(_manager) = &state.single_pixel_buffer_manager else {
@@ -56,7 +57,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 }
 
                 let Some(viewporter) = &state.viewporter else {
-                    eprintln!("Viewporter not available");
+                    debug!("Viewporter not available");
                     return;
                 };
                 let viewport: wp_viewport::WpViewport =
@@ -76,13 +77,9 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 // Mark the entire surface as damaged
                 capture_surface.damage(0, 0, width as i32, height as i32);
 
-                // Commit all pending state changes at once:
-                // - The attached buffer
-                // - The new input region-
-                // - The damage
                 if !state.capture_layer_ready {
                     state.capture_layer_ready = true; // Set flag to indicate layer is ready
-                    println!("Setting capture_layer_ready to true");
+                    debug!("Setting capture_layer_ready to true");
                     
                     // Create frame callback for capture layer to know when it's shown
                     let frame_callback = capture_surface.frame(qhandle, FrameCallbackData::CaptureLayer);
@@ -91,7 +88,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     capture_surface.commit();
                 } else {
                     // This is the update layer surface configuration
-                    println!("Update layer surface configured");
+                    debug!("Update layer surface configured");
                     
                     // Create frame callback for update layer to know when it's shown
                     if let Some(update_surface) = &state.update_surface {
@@ -124,7 +121,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
             }
 
             zwlr_layer_surface_v1::Event::Closed => {
-                println!("Layer surface was closed");
+                debug!("Layer surface was closed");
             }
 
             _ => {}

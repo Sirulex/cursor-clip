@@ -2,6 +2,7 @@ use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_client::protocol::{wl_pointer, wl_seat};
 
 use crate::frontend::frontend_state::State;
+use log::{debug};
 
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn event(
@@ -12,25 +13,25 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _conn: &Connection,
         qhandle: &QueueHandle<State>,
     ) {
-        println!("WL Seat event received yay: {:?}", event);
+        debug!("Seat event: {:?}", event);
         if let wl_seat::Event::Capabilities {
             capabilities: cap_event_enum,
         } = event
         {
             //detangle Capabilities enum
             if let WEnum::Value(capabilities) = cap_event_enum {
-                println!("Pointer capabilities detected.");
+                debug!("Pointer capabilities detected");
 
                 if capabilities.contains(wl_seat::Capability::Pointer) {
                     //no pattern matching as wl_seat::Capability is a bitfield
                     let pointer = seat.get_pointer(qhandle, ());
                     state.pointer = Some(pointer);
-                    println!("Pointer capabilities detected, pointer created.");
+                    debug!("Pointer created");
                 } else {
-                    println!("No pointer capabilities detected.");
+                    debug!("No pointer capabilities detected");
                 }
             } else {
-                println!("Unknown capability enumerator");
+                debug!("Unknown capability enumerator");
             }
         }
         //impl release events todo
@@ -46,7 +47,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _conn: &Connection,
         _qhandle: &QueueHandle<State>,
     ) {
-        println!("WL Pointer event received");
+        debug!("Pointer event received");
         match event {
             wl_pointer::Event::Enter {
                 serial: _,
@@ -54,29 +55,21 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 surface_x,
                 surface_y,
             } => {
-                println!(
-                    "Pointer entered surface: {:?} at ({}, {})",
-                    surface, surface_x, surface_y
-                );
+                debug!("Pointer entered surface: {:?} at ({}, {})", surface, surface_x, surface_y);
                 state.coords_received = true; // Set flag when coordinates are received
                 state.received_x = surface_x;
                 state.received_y = surface_y;
             }
             wl_pointer::Event::Leave { serial: _, surface } => {
-                println!("Pointer left surface: {:?}", surface);
+                debug!("Pointer left surface: {:?}", surface);
             }
             wl_pointer::Event::Motion {
                 time,
                 surface_x,
                 surface_y,
             } => {
-                println!(
-                    "Pointer moved to ({}, {}) at time {}",
-                    surface_x, surface_y, time
-                );
-                // Update stored coordinates on motion
-                //state.received_x = surface_x;
-                //state.received_y = surface_y;
+                debug!("Pointer moved to ({}, {}) at time {}", surface_x, surface_y, time);
+
             }
             wl_pointer::Event::Button {
                 serial: _,
@@ -84,12 +77,12 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 button,
                 state: button_state,
             } => {
-                println!("Pointer button {:?} at time {}: {:?}", button, time, button_state);
+                debug!("Pointer button {:?} at time {}: {:?}", button, time, button_state);
                 
                 // Check for left mouse button click (button 272 is left click)
                 if button == 272 {
                     if let WEnum::Value(wl_pointer::ButtonState::Pressed) = button_state {
-                        println!("Left mouse button clicked on capture layer - requesting full close");
+                        debug!("Left mouse button clicked on capture layer - requesting close");
                         state.capture_layer_clicked = true; // This will trigger cleanup in main loop
                     }
                 }

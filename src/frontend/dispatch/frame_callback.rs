@@ -3,6 +3,7 @@ use wayland_client::protocol::wl_callback;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::frontend::frontend_state::State;
+use log::debug;
 
 #[derive(Debug, Clone)]
 pub enum FrameCallbackData {
@@ -23,21 +24,21 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
         if let wl_callback::Event::Done { callback_data: _ } = event {
             match data {
                 FrameCallbackData::CaptureLayer => {
-                    println!("Capture layer frame callback received - creating update surface");
+                    debug!("Capture layer frame callback received - creating update surface");
                     state.capture_frame_callback = None;
                     create_update_layer_surface(state, qhandle);
                 }
                 FrameCallbackData::UpdateLayer => {
-                    println!("Update layer frame callback received - starting frame counting");
+                    debug!("Update layer frame callback received - starting frame counting");
                     state.update_frame_callback = None;
                     schedule_next_frame_check(state, qhandle, 0);
                 }
                 FrameCallbackData::UpdateLayerFrameCount(frame_count) => {
-                    println!("Update layer frame {} received", frame_count + 1);
+                    debug!("Update layer frame {} received", frame_count + 1);
                     if *frame_count < 2 {
                         schedule_next_frame_check(state, qhandle, frame_count + 1);
                     } else {
-                        println!("Minimal frames elapsed - cleaning up update layer");
+                        debug!("Minimal frames elapsed - cleaning up update layer");
                         cleanup_update_layer(state);
                     }
                 }
@@ -88,17 +89,17 @@ fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) 
 }
 
 fn cleanup_update_layer(state: &mut State) {
-    println!("Cleaning up update layer resources");
+    debug!("Cleaning up update layer resources");
     
     // Destroy the update layer surface if it exists
     if let Some(update_layer_surface) = state.update_layer_surface.take() {
-        println!("Destroying update layer surface");
+        debug!("Destroying update layer surface");
         update_layer_surface.destroy();
     }
     
     // Clean up the update surface
     if let Some(update_surface) = state.update_surface.take() {
-        println!("Destroying update surface");
+        debug!("Destroying update surface");
         update_surface.destroy();
     }
     
@@ -107,16 +108,16 @@ fn cleanup_update_layer(state: &mut State) {
     
     // Clear the update frame callback reference (callbacks are auto-cleaned)
     if state.update_frame_callback.is_some() {
-        println!("Clearing update frame callback reference");
+        debug!("Clearing update frame callback reference");
         state.update_frame_callback = None;
     }
     
-    println!("Update layer cleanup completed");
+    debug!("Update layer cleanup completed");
 }
 
 fn schedule_next_frame_check(state: &mut State, qhandle: &QueueHandle<State>, frame_count: u8) {
     if let Some(update_surface) = &state.update_surface {
-        println!("Scheduling frame check #{}", frame_count + 1);
+        debug!("Scheduling frame check #{}", frame_count + 1);
         let frame_callback = update_surface.frame(qhandle, FrameCallbackData::UpdateLayerFrameCount(frame_count));
         state.update_frame_callback = Some(frame_callback);
         

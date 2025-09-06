@@ -12,6 +12,7 @@ use wayland_client::{QueueHandle, Connection};
 
 use crate::shared::{ClipboardItem, ClipboardItemPreview, ClipboardContentType};
 use indexmap::IndexMap;
+use log::{debug, info, warn};
 
 #[derive(Debug)]
 pub struct BackendState {
@@ -119,7 +120,7 @@ impl BackendState {
 
     pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
         let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {}", entry_id))?;
-        println!("Setting clipboard content by ID {}: {}", entry_id, item.content_preview);
+        info!("Setting clipboard content by ID {}: {}", entry_id, item.content_preview);
 
         let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
             (Some(m), Some(d), Some(q)) => (m.clone(), d.clone(), q.clone()),
@@ -135,9 +136,9 @@ impl BackendState {
         self.suppress_next_selection_read = true;
         // Flush the Wayland connection so the compositor sees our selection (very important)
         if let Some(conn) = &self.connection {
-            if let Err(e) = conn.flush() { eprintln!("Failed to flush Wayland connection after setting selection: {e}"); }
+            if let Err(e) = conn.flush() { warn!("Failed to flush Wayland connection after setting selection: {e}"); }
         }
-        println!("✅ Created clipboard source and set selection (id {})", entry_id);
+        debug!("Created clipboard source and set selection (id {})", entry_id);
         Ok(())
     }
 }
