@@ -5,8 +5,7 @@ use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::shared::{ClipboardItemPreview, ClipboardContentType};
+use crate::shared::ClipboardItemPreview;
 use crate::frontend::frontend_client::FrontendClient;
 
 static INIT: Once = Once::new();
@@ -41,8 +40,9 @@ fn init_application() -> Application {
     app.upcast()
 }
 
-/// Create a Windows 11-style clipboard history list with backend data
-fn create_overlay_content() -> (Box, gtk4::ListBox) {
+/// Create a Windows 11-style clipboard history list with provided (prefetched) backend data.
+/// Falls back to a lazy on-demand fetch only if the provided vector is empty.
+fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, gtk4::ListBox) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -76,35 +76,17 @@ fn create_overlay_content() -> (Box, gtk4::ListBox) {
     list_box.set_margin_end(4);
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
 
-    // Load clipboard items from backend
-    let items = match FrontendClient::new() {
-        Ok(mut client) => {
-            client.get_history().unwrap_or_else(|e| {
-                eprintln!("Error getting clipboard history: {}", e);
-                // Fall back to sample data
-                vec![
-                    ClipboardItemPreview {
-                        item_id: 1,
-                        content_preview: "Internal Error querying the History!".to_string(),
-                        content_preview_type: ClipboardContentType::Text,
-                        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                    }
-                ]
-            })
+    // Start with prefetched items; if empty try one lazy fetch (non-fatal if it fails)
+    let mut items = prefetched_items;
+    if items.is_empty() {
+        print!("Prefetched clipboard history empty - trying on-demand fetch... ");
+        if let Ok(mut client) = FrontendClient::new() {
+            match client.get_history() {
+                Ok(fetched) => items = fetched,
+                Err(e) => eprintln!("Error fetching clipboard history on-demand: {}", e),
+            }
         }
-        Err(e) => {
-            eprintln!("Error connecting to backend: {}", e);
-            // Fall back to sample data
-            vec![
-                ClipboardItemPreview {
-                    item_id: 1,
-                    content_preview: "Backend not available - first start cursor-clip --daemon".to_string(),
-                    content_preview_type: ClipboardContentType::Text,
-                    timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                },
-            ]
-        }
-    };
+    }
 
         // Populate the list with clipboard items
     for item in &items {
@@ -240,12 +222,12 @@ fn build_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
     controller
 }
 
-pub fn create_clipboard_overlay(x: f64, y: f64) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
+pub fn create_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardItemPreview>) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     let app = init_application();
     
     let app_clone = app.clone();
     app.connect_activate(move |_| {
-        let window = create_layer_shell_window(&app_clone, x, y);
+        let window = create_layer_shell_window(&app_clone, x, y, prefetched_items.clone());
         
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
@@ -270,7 +252,8 @@ pub fn create_clipboard_overlay(x: f64, y: f64) -> Result<(), std::boxed::Box<dy
 fn create_layer_shell_window(
     app: &Application, 
     x: f64, 
-    y: f64
+    y: f64,
+    prefetched_items: Vec<ClipboardItemPreview>
 ) -> adw::ApplicationWindow {
     // Create the main window using Adwaita ApplicationWindow
     let window = adw::ApplicationWindow::builder()
@@ -303,7 +286,7 @@ fn create_layer_shell_window(
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let (content, list_box) = create_overlay_content();
+    let (content, list_box) = create_overlay_content(prefetched_items);
     window.set_content(Some(&content));
 
     // Add key controller (Esc/j/k/Enter navigation & activation)
@@ -353,7 +336,7 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             background: #343437;
             border: 2px solid transparent;
             border-radius: 10px;
-            padding: 10px 14px;
+            padding: 4px 4px;
             margin: 6px 12px;
             transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
         }

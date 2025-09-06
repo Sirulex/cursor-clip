@@ -16,6 +16,7 @@ use wayland_protocols::{
 };
 
 use crate::frontend::{frontend_state::State, buffer, gtk_overlay};
+use crate::frontend::frontend_client::FrontendClient;
 
 async fn run_main_event_loop(
     state: &mut State, 
@@ -34,7 +35,7 @@ async fn run_main_event_loop(
             println!("Capture layer ready! Creating GTK overlay window at ({}, {})...", x, y);
 
             // Create the GTK window using the unified client backend communication
-            if let Err(e) = gtk_overlay::create_clipboard_overlay(x, y) {
+            if let Err(e) = gtk_overlay::create_clipboard_overlay(x, y, state.clipboard_history.clone()) {
                 eprintln!("Error creating GTK overlay: {:?}", e);
             }
             
@@ -70,12 +71,25 @@ async fn run_main_event_loop(
 
 // Frontend always uses its own Wayland connection (may change in future to support shared connection/hide feature)
 pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new();
+    // Prefetch clipboard history for instant GTK overlay population
+    if let Ok(mut client) = FrontendClient::new() {
+        match client.get_history() {
+            Ok(items) => {
+                state.clipboard_history = items;
+                println!("Prefetched {} clipboard history items", state.clipboard_history.len());
+            }
+            Err(e) => eprintln!("Failed to prefetch clipboard history: {e}"),
+        }
+    } else {
+        eprintln!("Failed to connect to backend for history prefetch");
+    }
+
     // Initialize Wayland for layer shell capture
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (GlobalList, EventQueue<State>) =
         registry_queue_init::<State>(&conn)?;
 
-    let mut state = State::new();
     queue.roundtrip(&mut state)?;
 
     // Initialize Wayland protocols

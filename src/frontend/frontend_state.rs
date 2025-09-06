@@ -15,6 +15,8 @@ use wayland_protocols::{
     xdg::shell::client::xdg_wm_base,
 };
 
+use crate::shared::ClipboardItemPreview;
+
 pub struct State {
     pub compositor: Option<wl_compositor::WlCompositor>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
@@ -40,6 +42,8 @@ pub struct State {
     pub update_buffer: Option<wl_buffer::WlBuffer>,
     pub update_layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     pub update_frame_callback: Option<wl_callback::WlCallback>,
+    // Prefetched clipboard history (preview items) so GTK overlay can build instantly
+    pub clipboard_history: Vec<ClipboardItemPreview>,
 }
 
 impl State {
@@ -69,6 +73,7 @@ impl State {
             update_buffer: None,
             update_layer_surface: None,
             update_frame_callback: None,
+            clipboard_history: Vec::new(),
         }
     }
 }
