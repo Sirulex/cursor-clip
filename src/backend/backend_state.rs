@@ -7,7 +7,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
     zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
-use crate::backend::wayland_clipboard::SharedBackendStateWrapper; // for QueueHandle type
+use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
 use wayland_client::{QueueHandle, Connection};
 
 use crate::shared::{ClipboardItem, ClipboardItemPreview, ClipboardContentType};
@@ -22,7 +22,7 @@ pub struct BackendState {
     // Wayland objects for clipboard operations
     pub data_control_manager: Option<ZwlrDataControlManagerV1>,
     pub data_control_device: Option<ZwlrDataControlDeviceV1>,
-    pub qh: Option<QueueHandle<SharedBackendStateWrapper>>,
+    pub qh: Option<QueueHandle<MutexBackendState>>,
     pub seat: Option<wl_seat::WlSeat>,
     pub connection: Option<Connection>,
     

@@ -67,7 +67,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
                     return;
                 };
 
-                if let Some(update_buffer) = &state.update_buffer {
+                if let Some(update_buffer) = &state.transparent_buffer {
                     update_surface.attach(Some(update_buffer), 0, 0);
                 }
 

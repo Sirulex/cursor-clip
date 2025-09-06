@@ -1,7 +1,7 @@
 use wayland_client::{
     Connection, EventQueue,
     globals::{GlobalList, registry_queue_init},
-    protocol::{wl_compositor, wl_seat, wl_shm},
+    protocol::{wl_compositor, wl_seat},
 };
 use wayland_protocols_wlr::{
     layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
@@ -15,7 +15,7 @@ use wayland_protocols::{
     xdg::shell::client::xdg_wm_base,
 };
 
-use crate::frontend::{frontend_state::State, buffer, gtk_overlay};
+use crate::frontend::{frontend_state::State, gtk_overlay};
 use crate::frontend::frontend_client::FrontendClient;
 
 async fn run_main_event_loop(
@@ -132,13 +132,6 @@ fn init_wayland_protocols(
         eprintln!("xdg_wm_base not available");
     }
 
-    // Initialize SHM
-    if let Ok(shm) = globals.bind::<wl_shm::WlShm, _, _>(&queue.handle(), 1..=1, ()) {
-        state.shm = Some(shm);
-    } else {
-        return Err("wl_shm not available".into());
-    }
-
     // Bind wl_seat
     if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
         state.seat = Some(seat);
@@ -204,15 +197,15 @@ fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) -> Result<(
         .as_ref()
         .expect("Layer Shell not initialized");
 
-    // Create buffers
-    let shm = state.shm.as_ref().expect("SHM not initialized");
-    let (pool, capture_buffer) = buffer::create_shared_buffer(shm, 1, 1, &queue.handle())
-        .expect("Failed to create shared buffer");
+    // Create single-pixel buffers via the wp_single_pixel_buffer_manager (no SHM file needed)
+    let spbm = state
+        .single_pixel_buffer_manager
+        .as_ref()
+        .expect("single_pixel_buffer_manager not initialized");
 
-    let update_buffer = capture_buffer.clone();
-    state.update_buffer = Some(update_buffer);
-    state.pool = Some(pool);
-    state.capture_buffer = Some(capture_buffer.clone());
+    // Single shared buffer (transparent) reused for both capture and update layer surfaces
+    let transparent_buffer = spbm.create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x00, &queue.handle(), ());
+    state.transparent_buffer = Some(transparent_buffer);
 
     let capture_layer_surface = layer_shell.get_layer_surface(
         &capture_surface,

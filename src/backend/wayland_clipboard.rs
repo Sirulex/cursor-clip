@@ -14,7 +14,7 @@ use super::backend_state::BackendState;
 use indexmap::IndexMap;
 
 // Wrapper struct that holds the shared backend state for dispatch implementations
-pub struct SharedBackendStateWrapper {
+pub struct MutexBackendState {
     pub backend_state: Arc<Mutex<BackendState>>,
 }
 
@@ -35,12 +35,12 @@ impl WaylandClipboardMonitor {
         // Establish Wayland connection
     let connection = Connection::connect_to_env()
             .map_err(|e| format!("Failed to connect to Wayland: {}", e))?;
-        let (globals, mut event_queue): (GlobalList, EventQueue<SharedBackendStateWrapper>) =
-            registry_queue_init::<SharedBackendStateWrapper>(&connection)
+        let (globals, mut event_queue): (GlobalList, EventQueue<MutexBackendState>) =
+            registry_queue_init::<MutexBackendState>(&connection)
                 .map_err(|e| format!("Failed to init registry: {}", e))?;
 
         // Create wrapper for shared state
-        let mut shared_state_wrapper = SharedBackendStateWrapper { backend_state: self.backend_state.clone() };
+        let mut shared_state_wrapper = MutexBackendState { backend_state: self.backend_state.clone() };
 
         // Roundtrip once for globals
         event_queue.roundtrip(&mut shared_state_wrapper)
@@ -93,53 +93,53 @@ impl WaylandClipboardMonitor {
 
 // ================= Dispatch Implementations =================
 
-impl Dispatch<ZwlrDataControlManagerV1, ()> for SharedBackendStateWrapper {
+impl Dispatch<ZwlrDataControlManagerV1, ()> for MutexBackendState {
     fn event(
         _: &mut Self,
         _: &ZwlrDataControlManagerV1,
         _: zwlr_data_control_manager_v1::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<SharedBackendStateWrapper>,
+        _: &QueueHandle<MutexBackendState>,
     ) {
         // No events for the manager
     }
 }
 
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for SharedBackendStateWrapper {
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState {
     fn event(
         _state: &mut Self,
         _proxy: &wl_registry::WlRegistry,
         _event: wl_registry::Event,
         _data: &GlobalListContents,
         _conn: &Connection,
-        _qhandle: &QueueHandle<SharedBackendStateWrapper>,
+        _qhandle: &QueueHandle<MutexBackendState>,
     ) {
         // GlobalList handles population; nothing else to do.
     }
 }
 
-impl Dispatch<wl_seat::WlSeat, ()> for SharedBackendStateWrapper {
+impl Dispatch<wl_seat::WlSeat, ()> for MutexBackendState {
     fn event(
         _: &mut Self,
         _: &wl_seat::WlSeat,
         _: wl_seat::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<SharedBackendStateWrapper>,
+        _: &QueueHandle<MutexBackendState>,
     ) {
         // We don't need to handle seat events for this application
     }
 }
 
-impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
+impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
     fn event(
         wrapper: &mut Self,
         _: &ZwlrDataControlDeviceV1,
         event: zwlr_data_control_device_v1::Event,
         _: &(),
         conn: &Connection,
-        _qh: &QueueHandle<SharedBackendStateWrapper>,
+        _qh: &QueueHandle<MutexBackendState>,
     ) {
         let mut state = wrapper.backend_state.lock().unwrap();
         
@@ -195,14 +195,14 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for SharedBackendStateWrapper {
     }
 }
 
-impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
+impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
     fn event(
         wrapper: &mut Self,
         offer: &ZwlrDataControlOfferV1,
         event: zwlr_data_control_offer_v1::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<SharedBackendStateWrapper>,
+        _: &QueueHandle<MutexBackendState>,
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             let object_id = offer.id();
@@ -213,7 +213,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for SharedBackendStateWrapper {
     }
 }
 
-impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
+impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
     fn event(
         wrapper: &mut Self,
         event_source: &ZwlrDataControlSourceV1,
@@ -267,14 +267,14 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for SharedBackendStateWrapper {
     }
 }
 
-impl Dispatch<wl_display::WlDisplay, ()> for SharedBackendStateWrapper {
+impl Dispatch<wl_display::WlDisplay, ()> for MutexBackendState {
     fn event(
         _: &mut Self,
         _: &wl_display::WlDisplay,
         _: wl_display::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<SharedBackendStateWrapper>,
+        _: &QueueHandle<MutexBackendState>,
     ) {
         // Handle display events if needed
     }

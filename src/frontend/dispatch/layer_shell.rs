@@ -51,7 +51,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     return;
                 };
 
-                if let Some(buffer) = &state.capture_buffer {
+                if let Some(buffer) = &state.transparent_buffer {
                     capture_surface.attach(Some(buffer), 0, 0);
                 }
 
@@ -63,10 +63,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     viewporter.get_viewport(&capture_surface, qhandle, ());
                 viewport.set_destination(width as i32, height as i32);
 
-                // Create and attach the buffer
-                //let buffer = manager.create_u32_rgba_buffer(0xFF, 0x00, 0x00, 0x80, qhandle, ()); //manual buffer alloc
-                //surface.attach(Some(&buffer), 0, 0);
-
                 // 1. Create a region object from the compositor.
                 let region = compositor.create_region(qhandle, ());
                 // 2. Add a rectangle to the region that covers the entire surface.
@@ -76,7 +72,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 // 4. The surface now holds the state of the region. We can
                 //    destroy our client-side handle to it.
                 region.destroy();
-                // --- END OF NEW PART ---
 
                 // Mark the entire surface as damaged
                 capture_surface.damage(0, 0, width as i32, height as i32);
@@ -100,7 +95,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     
                     // Create frame callback for update layer to know when it's shown
                     if let Some(update_surface) = &state.update_surface {
-                        if let Some(update_buffer) = &state.update_buffer {
+                        if let Some(update_buffer) = &state.transparent_buffer {
                             update_surface.attach(Some(update_buffer), 0, 0);
                         }
                         

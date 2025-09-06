@@ -3,7 +3,6 @@ use wayland_client::protocol::wl_callback;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::frontend::frontend_state::State;
-use crate::frontend::buffer;
 
 #[derive(Debug, Clone)]
 pub enum FrameCallbackData {
@@ -69,18 +68,7 @@ fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) 
         return;
     };
 
-    let Some(shm) = &state.shm else {
-        eprintln!("SHM not available");
-        return;
-    };
 
-    // Create a red buffer for the update surface
-    if let Ok((_red_pool, red_buffer)) = buffer::create_red_buffer(shm, 1, 1, qhandle) {
-        state.update_buffer = Some(red_buffer);
-    } else {
-        eprintln!("Failed to create red buffer for update surface");
-        return;
-    }
 
     // Create the update layer surface
     let update_layer_surface = layer_shell.get_layer_surface(
@@ -126,10 +114,7 @@ fn cleanup_update_layer(state: &mut State) {
     }
     
     // Clean up the update buffer
-    if let Some(update_buffer) = state.update_buffer.take() {
-        println!("Destroying update buffer");
-        update_buffer.destroy();
-    }
+
     
     // Clear the update frame callback reference (callbacks are auto-cleaned)
     if state.update_frame_callback.is_some() {
