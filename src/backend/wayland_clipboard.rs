@@ -162,7 +162,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                             println!("(Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads)");
                         } else if !already_current {
                             state.current_data_offer = Some(offer_key.clone());
-                            read_all_data_formats(&offer_id, &mime_list, conn, &mut *state);
+                            read_all_data_formats(&offer_id, &mime_list, conn, &mut state);
                             //remove old offer entries and their corresponding MIME types as new ones will be generated for future selections
                             state.mime_type_offers.clear();
                         }

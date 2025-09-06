@@ -13,8 +13,8 @@ pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
-    static OVERLAY_WINDOW: RefCell<Option<adw::ApplicationWindow>> = RefCell::new(None);
-    static OVERLAY_APP: RefCell<Option<Application>> = RefCell::new(None);
+    static OVERLAY_WINDOW: RefCell<Option<adw::ApplicationWindow>> = const { RefCell::new(None) };
+    static OVERLAY_APP: RefCell<Option<Application>> = const { RefCell::new(None) };
 }
 
 pub fn is_close_requested() -> bool {
@@ -90,7 +90,7 @@ fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, 
 
         // Populate the list with clipboard items
     for item in &items {
-        let row = create_clipboard_item_from_backend(&item);
+        let row = create_clipboard_item_from_backend(item);
         list_box.append(&row);
     }
 
@@ -403,7 +403,7 @@ fn create_clipboard_item_from_backend(item: &ClipboardItemPreview) -> gtk4::List
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
     
-    let type_label = Label::new(Some(&item.content_preview_type.get_icon()));
+    let type_label = Label::new(Some(item.content_preview_type.get_icon()));
     type_label.add_css_class("caption");
     
     let type_text = Label::new(Some(item.content_preview_type.to_string()));

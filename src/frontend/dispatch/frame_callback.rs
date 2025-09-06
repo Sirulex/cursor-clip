@@ -20,39 +20,28 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
         _conn: &Connection,
         qhandle: &QueueHandle<State>,
     ) {
-        match event {
-            wl_callback::Event::Done { callback_data: _ } => {
-                match data {
-                    FrameCallbackData::CaptureLayer => {
-                        println!("Capture layer frame callback received - creating update surface");
-                        state.capture_frame_callback = None;
-                        
-                        // Create and configure the update layer surface
-                        create_update_layer_surface(state, qhandle);
-                    }
-                    FrameCallbackData::UpdateLayer => {
-                        println!("Update layer frame callback received - starting frame counting");
-                        state.update_frame_callback = None;
-                        
-                        // Start frame counting to ensure surface is rendered
-                        schedule_next_frame_check(state, qhandle, 0);
-                    }
-                    FrameCallbackData::UpdateLayerFrameCount(frame_count) => {
-                        println!("Update layer frame {} received", frame_count + 1);
-                        
-                        // Wait for 2 frames to ensure the surface is actually rendered
-                        if *frame_count < 2 {
-                            // Schedule next frame callback
-                            schedule_next_frame_check(state, qhandle, frame_count + 1);
-                        } else {
-                            println!("Minimal frames elapsed - cleaning up update layer");
-                            // Close and cleanup update layer resources
-                            cleanup_update_layer(state);
-                        }
+        if let wl_callback::Event::Done { callback_data: _ } = event {
+            match data {
+                FrameCallbackData::CaptureLayer => {
+                    println!("Capture layer frame callback received - creating update surface");
+                    state.capture_frame_callback = None;
+                    create_update_layer_surface(state, qhandle);
+                }
+                FrameCallbackData::UpdateLayer => {
+                    println!("Update layer frame callback received - starting frame counting");
+                    state.update_frame_callback = None;
+                    schedule_next_frame_check(state, qhandle, 0);
+                }
+                FrameCallbackData::UpdateLayerFrameCount(frame_count) => {
+                    println!("Update layer frame {} received", frame_count + 1);
+                    if *frame_count < 2 {
+                        schedule_next_frame_check(state, qhandle, frame_count + 1);
+                    } else {
+                        println!("Minimal frames elapsed - cleaning up update layer");
+                        cleanup_update_layer(state);
                     }
                 }
             }
-            _ => {}
         }
     }
 }

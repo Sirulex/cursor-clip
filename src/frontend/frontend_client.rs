@@ -26,7 +26,7 @@ impl FrontendClient {
         let mut line = String::new();
         reader.read_line(&mut line)?;
         
-        let response: BackendMessage = serde_json::from_str(&line.trim())?;
+    let response: BackendMessage = serde_json::from_str(line.trim())?;
         Ok(response)
     }
 

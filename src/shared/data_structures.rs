@@ -49,10 +49,6 @@ pub enum FrontendMessage {
     SetClipboardById { id: u64 },
     /// Clear all clipboard history
     ClearHistory,
-    /// Show frontend at coordinates
-    ShowAt { x: f64, y: f64 },
-    /// Close frontend
-    Close,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -37,7 +37,8 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
         }
     });
 
-    // Add some sample data
+    // Add some sample data only in debug builds (helps during development without polluting release)
+    #[cfg(debug_assertions)]
     {
         let mut state_lock = state.lock().unwrap();
         use indexmap::IndexMap;
@@ -93,10 +94,6 @@ async fn handle_client(
                 let mut state = state.lock().unwrap();
                 state.clear_history();
                 BackendMessage::HistoryCleared
-            }
-            FrontendMessage::ShowAt { .. } | FrontendMessage::Close => {
-                // These are handled by the frontend, not the backend
-                continue;
             }
         };
 

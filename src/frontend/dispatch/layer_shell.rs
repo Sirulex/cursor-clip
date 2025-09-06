@@ -60,7 +60,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     return;
                 };
                 let viewport: wp_viewport::WpViewport =
-                    viewporter.get_viewport(&capture_surface, qhandle, ());
+                    viewporter.get_viewport(capture_surface, qhandle, ());
                 viewport.set_destination(width as i32, height as i32);
 
                 // 1. Create a region object from the compositor.

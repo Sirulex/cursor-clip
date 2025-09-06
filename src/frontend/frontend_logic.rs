@@ -12,7 +12,6 @@ use wayland_protocols::{
         single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
         viewporter::client::wp_viewporter,
     },
-    xdg::shell::client::xdg_wm_base,
 };
 
 use crate::frontend::{frontend_state::State, gtk_overlay};

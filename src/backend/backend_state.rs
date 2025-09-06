@@ -106,7 +106,7 @@ impl BackendState {
     }
 
     pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 
-        self.history.iter().map(|c| ClipboardItemPreview::from(c)).collect()
+    self.history.iter().map(ClipboardItemPreview::from).collect()
     }
     
     pub fn get_item_by_id(&self, id: u64) -> Option<ClipboardItem> { 
