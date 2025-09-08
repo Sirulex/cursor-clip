@@ -4,7 +4,6 @@ use wayland_client::protocol::{
 
 use wayland_protocols_wlr::{
     layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
-    virtual_pointer::v1::client::{zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1},
 };
 
 use wayland_protocols::{
@@ -23,8 +22,6 @@ pub struct State {
     pub seat: Option<wl_seat::WlSeat>,
     pub single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
-    pub virtual_pointer_manager: Option<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1>,
-    pub virtual_pointer: Option<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,
     pub coords_received: bool,
     pub received_x: f64,
     pub received_y: f64,
@@ -50,8 +47,6 @@ impl State {
             seat: None,
             single_pixel_buffer_manager: None,
             viewporter: None,
-            virtual_pointer_manager: None,
-            virtual_pointer: None,
             coords_received: false,
             received_x: 0.0,
             received_y: 0.0,

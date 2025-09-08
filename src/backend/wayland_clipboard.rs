@@ -42,8 +42,8 @@ impl WaylandClipboardMonitor {
         let mut shared_state_wrapper = MutexBackendState { backend_state: self.backend_state.clone() };
 
         // Roundtrip once for globals
-        event_queue.roundtrip(&mut shared_state_wrapper)
-            .map_err(|e| format!("Initial roundtrip failed: {}", e))?;
+        //event_queue.roundtrip(&mut shared_state_wrapper)
+        //    .map_err(|e| format!("Initial roundtrip failed: {}", e))?;
 
         // Bind required globals
         let qh = event_queue.handle();
@@ -80,9 +80,7 @@ impl WaylandClipboardMonitor {
         info!("Wayland clipboard monitor initialized, monitoring changes...");
 
         loop {
-            // First drain any already queued events (e.g., triggered after we set selection & flushed)
-            if let Err(e) = event_queue.dispatch_pending(&mut shared_state_wrapper) { return Err(format!("Failed to dispatch pending events: {e}")); }
-            // Then block waiting for new ones
+            // Dispatch pending events, then block waiting for new ones
             event_queue.blocking_dispatch(&mut shared_state_wrapper)
                 .map_err(|e| format!("Failed to dispatch events: {}", e))?;
         }

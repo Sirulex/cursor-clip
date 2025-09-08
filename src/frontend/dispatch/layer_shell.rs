@@ -1,25 +1,12 @@
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::{
-    zwlr_layer_shell_v1, zwlr_layer_surface_v1,
+    zwlr_layer_surface_v1,
 };
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 
 use crate::frontend::frontend_state::State;
 use crate::frontend::dispatch::frame_callback::FrameCallbackData;
 use log::debug;
-
-impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for State {
-    fn event(
-        _state: &mut State,
-        _layer_shell: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
-        _event: zwlr_layer_shell_v1::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<State>,
-    ) {
-        // Handle layer shell events if needed
-    }
-}
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
     fn event(

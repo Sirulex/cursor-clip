@@ -120,7 +120,9 @@ impl BackendState {
 
     pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
         let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {}", entry_id))?;
-        info!("Setting clipboard content by ID {}: {}", entry_id, item.content_preview);
+        
+        info!("Setting clipboard content by ID {}", entry_id);
+        debug!("Setting clipboard content by ID {}: {}", entry_id, item.content_preview);
 
         let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
             (Some(m), Some(d), Some(q)) => (m.clone(), d.clone(), q.clone()),

@@ -1,8 +1,4 @@
-pub mod compositor;
 pub mod frame_callback;
 pub mod layer_shell;
 pub mod pointer;
-pub mod registry;
-pub mod shm;
-pub mod viewporter;
-pub mod virtual_pointer;
+pub mod empty_dispatch;

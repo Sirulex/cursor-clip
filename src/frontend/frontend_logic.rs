@@ -5,7 +5,6 @@ use wayland_client::{
 };
 use wayland_protocols_wlr::{
     layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
-    virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1,
 };
 use wayland_protocols::{
     wp::{
@@ -150,24 +149,6 @@ fn init_wayland_protocols(
         state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
     } else {
         debug!("wp_single_pixel_buffer_manager_v1 not available");
-    }
-
-    // Bind virtual_pointer_manager_v1
-    if let Ok(virtual_pointer_manager) =
-        globals.bind::<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1, _, _>(
-            &queue.handle(),
-            1..=1,
-            (),
-        )
-    {
-        if let Some(seat) = &state.seat {
-            let virtual_pointer =
-                virtual_pointer_manager.create_virtual_pointer(Some(seat), &queue.handle(), ());
-            state.virtual_pointer = Some(virtual_pointer);
-        }
-        state.virtual_pointer_manager = Some(virtual_pointer_manager);
-    } else {
-        debug!("zwlr_virtual_pointer_manager_v1 not available");
     }
 
     Ok(())

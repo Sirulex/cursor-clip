@@ -5,7 +5,7 @@ mod backend;
 mod frontend;
 mod shared;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging (RUST_LOG overrides, default to info)
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
