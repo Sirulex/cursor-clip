@@ -58,8 +58,6 @@ fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) 
         return;
     };
 
-
-
     // Create the update layer surface
     let update_layer_surface = layer_shell.get_layer_surface(
         update_surface,

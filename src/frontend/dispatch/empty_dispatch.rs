@@ -30,44 +30,28 @@ delegate_noop!(State: WpViewporter);
 delegate_noop!(State: WpViewport);
 delegate_noop!(State: WpSinglePixelBufferManagerV1);
 
+//ignore Keyword as WlBuffer emits a Release event
+//without ignore delegate_noop! macro would panic (unreachable) when an actual event arrives.
+delegate_noop!(State: ignore WlBuffer);
 
 //-------------------------------------------------------------------------------
 // Manual Dispatch implementations for specific interfaces needing custom logic
 //-------------------------------------------------------------------------------
 
-// Manual no-op Dispatch for wl_buffer because it emits a Release event; the
-// delegate_noop! macro would panic (unreachable) when an actual event arrives.
 use wayland_client::{Connection, QueueHandle, Dispatch};
-use wayland_client::protocol::wl_buffer;
 use wayland_client::globals::GlobalListContents;
-use log::debug;
 
-impl Dispatch<WlBuffer, ()> for State {
-    fn event(
-        _state: &mut State,
-        _buffer: &WlBuffer,
-        _event: wl_buffer::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<State>,
-    ) {
-        // Intentionally ignore Release or any future events.
-    }
-}
-
-// Registry: log discovered globals
+// WlRegistry needs a custom Dispatch due to custom UserData (GlobalListContents)
 impl Dispatch<WlRegistry, GlobalListContents> for State {
     fn event(
         _state: &mut State,
         _registry: &WlRegistry,
-        event: wayland_client::protocol::wl_registry::Event,
+        _event: wayland_client::protocol::wl_registry::Event,
         _data: &GlobalListContents,
         _conn: &Connection,
         _qh: &QueueHandle<State>,
     ) {
-        if let wayland_client::protocol::wl_registry::Event::Global { name, interface, version } = event {
-            debug!("Global [{}] {} (v{})", name, interface, version);
-        }
+        // No-op
     }
 }
 

@@ -158,7 +158,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                             debug!("Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads");
                         } else if !already_current {
                             state.current_data_offer = Some(offer_key.clone());
-                            read_all_data_formats(&offer_id, &mime_list, conn, &mut state);
+                            process_all_data_formats(&offer_id, mime_list, conn, &mut state);
                             //remove old offer entries and their corresponding MIME types as new ones will be generated for future selections
                             state.mime_type_offers.clear();
                         }
@@ -290,21 +290,20 @@ fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dy
     Ok((reader, writer))
 }
 
-fn read_all_data_formats(
+fn process_all_data_formats(
     data_offer: &ZwlrDataControlOfferV1,
-    mime_types: &[String],
+    mime_types: Vec<String>,
     conn: &Connection,
     backend_state: &mut BackendState,
 ) {
     use std::os::fd::AsFd;
     use std::io::Read;
 
-    let text_mimes: Vec<String> = mime_types.to_vec();
-    if text_mimes.is_empty() { return; }
+    if mime_types.is_empty() { return; }
 
     let mut mime_map: IndexMap<String, Vec<u8>> = IndexMap::new();
 
-    for mime in text_mimes {
+    for mime in mime_types {
         let (reader_fd, writer_fd) = match create_pipes() {
             Ok(pair) => pair,
             Err(err) => { warn!("Could not open pipe to read data for {}: {:?}", mime, err); continue; }
