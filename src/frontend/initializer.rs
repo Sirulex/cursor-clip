@@ -14,7 +14,7 @@ use wayland_protocols::{
 };
 
 use crate::frontend::{frontend_state::State, gtk_overlay};
-use crate::frontend::frontend_client::FrontendClient;
+use crate::frontend::ipc_client::FrontendClient;
 use log::{debug, warn, error};
 
 async fn run_main_event_loop(

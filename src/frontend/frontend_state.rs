@@ -34,7 +34,6 @@ pub struct State {
     pub update_surface: Option<wl_surface::WlSurface>,
     pub update_layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     pub update_frame_callback: Option<wl_callback::WlCallback>,
-    // Prefetched clipboard history (preview items) so GTK overlay can build instantly
     pub clipboard_history: Vec<ClipboardItemPreview>,
 }
 

@@ -1,7 +1,7 @@
-pub mod frontend_logic;
+pub mod initializer;
 pub mod frontend_state;
 pub mod dispatch;
 pub mod gtk_overlay;
-pub mod frontend_client;
+pub mod ipc_client;
 
-pub use frontend_logic::*;
+pub use initializer::*;

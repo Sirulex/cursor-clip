@@ -6,7 +6,7 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use crate::shared::ClipboardItemPreview;
-use crate::frontend::frontend_client::FrontendClient;
+use crate::frontend::ipc_client::FrontendClient;
 use log::{info, debug, warn, error};
 
 static INIT: Once = Once::new();

@@ -1,5 +1,5 @@
-pub mod backend_logic;
+pub mod ipc_server;
 pub mod backend_state;
 pub mod wayland_clipboard;
 
-pub use backend_logic::*;
+pub use ipc_server::*;
