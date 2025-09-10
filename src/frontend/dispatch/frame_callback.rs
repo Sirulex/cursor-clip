@@ -26,7 +26,7 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
                 FrameCallbackData::CaptureLayer => {
                     debug!("Capture layer frame callback received - creating update surface");
                     state.capture_frame_callback = None;
-                    create_update_layer_surface(state, qhandle);
+                    setup_update_layer(state, qhandle);
                 }
                 FrameCallbackData::UpdateLayer => {
                     debug!("Update layer frame callback received - starting frame counting");
@@ -47,7 +47,7 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
     }
 }
 
-fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) {
+fn setup_update_layer(state: &mut State, qhandle: &QueueHandle<State>) {
     let Some(layer_shell) = &state.layer_shell else {
         eprintln!("Layer shell not available");
         return;
@@ -77,8 +77,6 @@ fn create_update_layer_surface(state: &mut State, qhandle: &QueueHandle<State>) 
             | zwlr_layer_surface_v1::Anchor::Bottom,
     ); // Anchor to all edges
 
-    //update_layer_surface.set_margin(200, 200, 200, 200);
-
     // Store the layer surface in state
     state.update_layer_surface = Some(update_layer_surface);
 
@@ -101,10 +99,8 @@ fn cleanup_update_layer(state: &mut State) {
         update_surface.destroy();
     }
     
-    // Clean up the update buffer
-
     
-    // Clear the update frame callback reference (callbacks are auto-cleaned)
+    // Clear the update frame callback reference (callback-resources are auto-cleaned)
     if state.update_frame_callback.is_some() {
         debug!("Clearing update frame callback reference");
         state.update_frame_callback = None;

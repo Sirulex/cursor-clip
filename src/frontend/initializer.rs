@@ -34,7 +34,7 @@ async fn run_main_event_loop(
             debug!("Capture layer ready; creating GTK overlay window at ({}, {})", x, y);
 
             // Create the GTK window using the unified client backend communication
-            if let Err(e) = gtk_overlay::create_clipboard_overlay(x, y, state.clipboard_history.clone()) {
+            if let Err(e) = gtk_overlay::init_clipboard_overlay(x, y, state.clipboard_history.clone()) {
                 error!("Error creating GTK overlay: {:?}", e);
             }
             
@@ -196,7 +196,7 @@ fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) -> Result<(
         zwlr_layer_surface_v1::Anchor::Top
             | zwlr_layer_surface_v1::Anchor::Left
             | zwlr_layer_surface_v1::Anchor::Right
-            | zwlr_layer_surface_v1::Anchor::Bottom,
+            | zwlr_layer_surface_v1::Anchor::Bottom
     );
 
     state.capture_layer_surface = Some(capture_layer_surface);

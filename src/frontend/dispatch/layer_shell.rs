@@ -31,10 +31,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     return;
                 };
 
-                let Some(compositor) = &state.compositor else {
-                    return;
-                };
-
                 let Some(capture_surface) = &state.capture_surface else {
                     return;
                 };
@@ -50,16 +46,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 let viewport: wp_viewport::WpViewport =
                     viewporter.get_viewport(capture_surface, qhandle, ());
                 viewport.set_destination(width as i32, height as i32);
-
-                // 1. Create a region object from the compositor.
-                let region = compositor.create_region(qhandle, ());
-                // 2. Add a rectangle to the region that covers the entire surface.
-                region.add(0, 0, width as i32, height as i32);
-                // 3. Set this as the input region for the surface.
-                capture_surface.set_input_region(Some(&region));
-                // 4. The surface now holds the state of the region. We can
-                //    destroy our client-side handle to it.
-                region.destroy();
 
                 // Mark the entire surface as damaged
                 capture_surface.damage(0, 0, width as i32, height as i32);
@@ -88,12 +74,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                             let update_viewport = viewporter.get_viewport(update_surface, qhandle, ());
                             update_viewport.set_destination(width as i32, height as i32);
                         }
-                        
-                        // Create input region for update surface
-                        let update_region = compositor.create_region(qhandle, ());
-                        update_region.add(0, 0, width as i32, height as i32);
-                        update_surface.set_input_region(Some(&update_region));
-                        update_region.destroy();
                         
                         // Mark damage
                         update_surface.damage(0, 0, width as i32, height as i32);

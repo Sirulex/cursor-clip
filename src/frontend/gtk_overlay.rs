@@ -26,204 +26,16 @@ pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
 }
 
-/// Initialize the GTK/Libadwaita application
-fn init_application() -> Application {
+pub fn init_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardItemPreview>) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
-        // Initialize libadwaita which also initializes GTK
         adw::init().expect("Failed to initialize libadwaita");
     });
 
-    // Create the application
-    let app = adw::Application::builder()
+    // Create the application (was returned from init_application())
+    let app: Application = adw::Application::builder()
         .application_id("com.cursor-clip")
-        .build();
-
-    app.upcast()
-}
-
-/// Create a Windows 11-style clipboard history list with provided (prefetched) backend data.
-/// Falls back to a lazy on-demand fetch only if the provided vector is empty.
-fn create_overlay_content(prefetched_items: Vec<ClipboardItemPreview>) -> (Box, gtk4::ListBox) {
-    // Main container with standard libadwaita spacing
-    let main_box = Box::new(Orientation::Vertical, 0);
-
-    // Header bar 
-    let header_bar = adw::HeaderBar::new();
-    header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
-    // Use standard end title buttons (includes the normal close button with Adwaita styling)
-    header_bar.set_show_end_title_buttons(true);
-    header_bar.set_show_start_title_buttons(false);
-    
-    // Add clear all button to header
-    let clear_button = Button::with_label("Clear All");
-    clear_button.add_css_class("destructive-action");
-    header_bar.pack_start(&clear_button);
-
-    main_box.append(&header_bar);
-
-    // Create scrolled window for the clipboard list
-    let scrolled_window = gtk4::ScrolledWindow::new();
-    scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-    scrolled_window.set_min_content_width(200);
-    scrolled_window.set_min_content_height(400);
-
-    // Create list box for clipboard items
-    let list_box = gtk4::ListBox::new();
-    // Use custom styling instead of the default boxed-list to create floating cards
-    list_box.add_css_class("clipboard-list");
-    //list_box.set_margin_top(6);
-    list_box.set_margin_bottom(6);
-    list_box.set_margin_start(4);
-    list_box.set_margin_end(4);
-    list_box.set_selection_mode(gtk4::SelectionMode::Single);
-
-    // Start with prefetched items; if empty try one lazy fetch (non-fatal if it fails)
-    let mut items = prefetched_items;
-    if items.is_empty() {
-        debug!("Prefetched clipboard history empty - trying on-demand fetch...");
-        if let Ok(mut client) = FrontendClient::new() {
-            match client.get_history() {
-                Ok(fetched) => items = fetched,
-                Err(e) => warn!("Error fetching clipboard history on-demand: {}", e),
-            }
-        }
-    }
-
-        // Populate the list with clipboard items
-    for item in &items {
-        let row = create_clipboard_item_from_backend(item);
-        list_box.append(&row);
-    }
-
-        // If no items, show a placeholder
-    if items.is_empty() {
-        let placeholder_row = gtk4::ListBoxRow::new();
-        let placeholder_label = Label::new(Some("No clipboard history yet"));
-        placeholder_label.add_css_class("dim-label");
-        placeholder_label.set_margin_top(20);
-        placeholder_label.set_margin_bottom(20);
-        placeholder_row.set_child(Some(&placeholder_label));
-        list_box.append(&placeholder_row);
-    }
-
-    // Handle item activation (Enter/Space/double-click) instead of mere selection
-    let items_for_activation: Vec<ClipboardItemPreview> = items;
-    list_box.connect_row_activated(move |_, row| {
-        let index = row.index() as usize;
-        if index < items_for_activation.len() {
-            let item = &items_for_activation[index];
-            debug!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
-
-            match FrontendClient::new() {
-                Ok(mut client) => {
-                    if let Err(e) = client.set_clipboard_by_id(item.item_id) {
-                        error!("Error setting clipboard by ID: {}", e);
-                    } else {
-                        info!("Clipboard set by ID: {}", item.item_id);
-                        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                        OVERLAY_WINDOW.with(|window| {
-                            if let Some(ref win) = *window.borrow() {
-                                win.close();
-                            }
-                        });
-                    }
-                }
-                Err(e) => {
-                    error!("Error creating frontend client: {}", e);
-                }
-            }
-        }
-    });
-
-
-    scrolled_window.set_child(Some(&list_box));
-    main_box.append(&scrolled_window);
-
-    // Connect button signals
-    clear_button.connect_clicked(move |_| {
-    match FrontendClient::new() {
-            Ok(mut client) => {
-                if let Err(e) = client.clear_history() {
-                    error!("Error clearing clipboard history: {}", e);
-                } else {
-                    info!("Clipboard history cleared");
-                    // Close the overlay after clearing
-                    CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                    OVERLAY_WINDOW.with(|window| {
-                        if let Some(ref win) = *window.borrow() {
-                            win.close();
-                        }
-                    });
-                }
-            }
-            Err(e) => {
-                error!("Error creating frontend client: {}", e);
-            }
-        }
-    });
-
-    (main_box, list_box)
-}
-
-/// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
-fn build_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
-    let controller = gtk4::EventControllerKey::new();
-    let list_box_for_keys = list_box.clone();
-    controller.connect_key_pressed(move |_, key, _, _| {
-        use gtk4::gdk::Key;
-        match key {
-            Key::Escape => {
-                CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                OVERLAY_WINDOW.with(|window| {
-                    if let Some(ref win) = *window.borrow() {
-                        win.close();
-                    }
-                });
-                gtk4::glib::Propagation::Stop
-            }
-            Key::j | Key::J | Key::Down => {
-                if let Some(current) = list_box_for_keys.selected_row() {
-                    let next_index = current.index() + 1;
-                    if let Some(next_row) = list_box_for_keys.row_at_index(next_index) {
-                        list_box_for_keys.select_row(Some(&next_row));
-                        next_row.grab_focus();
-                    }
-                } else if let Some(first_row) = list_box_for_keys.row_at_index(0) {
-                    list_box_for_keys.select_row(Some(&first_row));
-                    first_row.grab_focus();
-                }
-                gtk4::glib::Propagation::Stop
-            }
-            Key::k | Key::K | Key::Up => {
-                if let Some(current) = list_box_for_keys.selected_row() {
-                    if current.index() > 0 {
-                        let prev_index = current.index() - 1;
-                        if let Some(prev_row) = list_box_for_keys.row_at_index(prev_index) {
-                            list_box_for_keys.select_row(Some(&prev_row));
-                            prev_row.grab_focus();
-                        }
-                    }
-                } else if let Some(first_row) = list_box_for_keys.row_at_index(0) {
-                    list_box_for_keys.select_row(Some(&first_row));
-                    first_row.grab_focus();
-                }
-                gtk4::glib::Propagation::Stop
-            }
-            Key::Return | Key::KP_Enter => {
-                if let Some(row) = list_box_for_keys.selected_row() {
-                    row.emit_by_name::<()>("activate", &[]);
-                    return gtk4::glib::Propagation::Stop;
-                }
-                gtk4::glib::Propagation::Proceed
-            }
-            _ => gtk4::glib::Propagation::Proceed,
-        }
-    });
-    controller
-}
-
-pub fn create_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardItemPreview>) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
-    let app = init_application();
+        .build()
+        .upcast();
     
     let app_clone = app.clone();
     app.connect_activate(move |_| {
@@ -286,11 +98,11 @@ fn create_layer_shell_window(
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let (content, list_box) = create_overlay_content(prefetched_items);
+    let (content, list_box) = generate_overlay_content(prefetched_items);
     window.set_content(Some(&content));
 
     // Add key controller (Esc/j/k/Enter navigation & activation)
-    let key_controller = build_key_controller(&list_box);
+    let key_controller = generate_key_controller(&list_box);
     window.add_controller(key_controller);
 
     // Add focus-out handler to close when clicking outside
@@ -311,6 +123,187 @@ fn create_layer_shell_window(
     });
 
     window
+}
+
+/// Create a Windows 11-style clipboard history list with provided (prefetched) backend data.
+/// Falls back to a lazy on-demand fetch only if the provided vector is empty.
+fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> (Box, gtk4::ListBox) {
+    // Main container with standard libadwaita spacing
+    let main_box = Box::new(Orientation::Vertical, 0);
+
+    // Header bar 
+    let header_bar = adw::HeaderBar::new();
+    header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
+    // Use standard end title buttons (includes the normal close button with Adwaita styling)
+    header_bar.set_show_end_title_buttons(true);
+    header_bar.set_show_start_title_buttons(false);
+    
+    // Add clear all button to header
+    let clear_button = Button::with_label("Clear All");
+    clear_button.add_css_class("destructive-action");
+    header_bar.pack_start(&clear_button);
+
+    main_box.append(&header_bar);
+
+    // Create scrolled window for the clipboard list
+    let scrolled_window = gtk4::ScrolledWindow::new();
+    scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+    scrolled_window.set_min_content_width(200);
+    scrolled_window.set_min_content_height(400);
+
+    // Create list box for clipboard items
+    let list_box = gtk4::ListBox::new();
+    // Use custom styling instead of the default boxed-list to create floating cards
+    list_box.add_css_class("clipboard-list");
+    //list_box.set_margin_top(6);
+    list_box.set_margin_bottom(6);
+    list_box.set_margin_start(4);
+    list_box.set_margin_end(4);
+    list_box.set_selection_mode(gtk4::SelectionMode::Single);
+
+    // Start with prefetched items; if empty try one lazy fetch (non-fatal if it fails)
+    
+    if prefetched_items.is_empty() {
+        debug!("Prefetched clipboard history empty - trying on-demand fetch...");
+        if let Ok(mut client) = FrontendClient::new() {
+            match client.get_history() {
+                Ok(fetched) => prefetched_items = fetched,
+                Err(e) => warn!("Error fetching clipboard history on-demand: {}", e),
+            }
+        }
+    }
+
+        // Populate the list with clipboard items
+    for item in &prefetched_items {
+        let row = create_clipboard_item_from_backend(item);
+        list_box.append(&row);
+    }
+
+        // If no items, show a placeholder
+    if prefetched_items.is_empty() {
+        let placeholder_row = gtk4::ListBoxRow::new();
+        let placeholder_label = Label::new(Some("No clipboard history yet"));
+        placeholder_label.add_css_class("dim-label");
+        placeholder_label.set_margin_top(20);
+        placeholder_label.set_margin_bottom(20);
+        placeholder_row.set_child(Some(&placeholder_label));
+        list_box.append(&placeholder_row);
+    }
+
+    // Handle item activation (Enter/Space/double-click) instead of mere selection
+    let items_for_activation: Vec<ClipboardItemPreview> = prefetched_items;
+    list_box.connect_row_activated(move |_, row| {
+        let index = row.index() as usize;
+        if index < items_for_activation.len() {
+            let item = &items_for_activation[index];
+            debug!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
+
+            match FrontendClient::new() {
+                Ok(mut client) => {
+                    if let Err(e) = client.set_clipboard_by_id(item.item_id) {
+                        error!("Error setting clipboard by ID: {}", e);
+                    } else {
+                        info!("Clipboard set by ID: {}", item.item_id);
+                        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                        OVERLAY_WINDOW.with(|window| {
+                            if let Some(ref win) = *window.borrow() {
+                                win.close();
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    error!("Error creating frontend client: {}", e);
+                }
+            }
+        }
+    });
+
+
+    scrolled_window.set_child(Some(&list_box));
+    main_box.append(&scrolled_window);
+
+    // Connect button signals
+    clear_button.connect_clicked(move |_| {
+    match FrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.clear_history() {
+                    error!("Error clearing clipboard history: {}", e);
+                } else {
+                    info!("Clipboard history cleared");
+                    // Close the overlay after clearing
+                    CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                    OVERLAY_WINDOW.with(|window| {
+                        if let Some(ref win) = *window.borrow() {
+                            win.close();
+                        }
+                    });
+                }
+            }
+            Err(e) => {
+                error!("Error creating frontend client: {}", e);
+            }
+        }
+    });
+
+    (main_box, list_box)
+}
+
+/// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
+fn generate_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
+    let controller = gtk4::EventControllerKey::new();
+    let list_box_for_keys = list_box.clone();
+    controller.connect_key_pressed(move |_, key, _, _| {
+        use gtk4::gdk::Key;
+        match key {
+            Key::Escape => {
+                CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+                OVERLAY_WINDOW.with(|window| {
+                    if let Some(ref win) = *window.borrow() {
+                        win.close();
+                    }
+                });
+                gtk4::glib::Propagation::Stop
+            }
+            Key::j | Key::J | Key::Down => {
+                if let Some(current) = list_box_for_keys.selected_row() {
+                    let next_index = current.index() + 1;
+                    if let Some(next_row) = list_box_for_keys.row_at_index(next_index) {
+                        list_box_for_keys.select_row(Some(&next_row));
+                        next_row.grab_focus();
+                    }
+                } else if let Some(first_row) = list_box_for_keys.row_at_index(0) {
+                    list_box_for_keys.select_row(Some(&first_row));
+                    first_row.grab_focus();
+                }
+                gtk4::glib::Propagation::Stop
+            }
+            Key::k | Key::K | Key::Up => {
+                if let Some(current) = list_box_for_keys.selected_row() {
+                    if current.index() > 0 {
+                        let prev_index = current.index() - 1;
+                        if let Some(prev_row) = list_box_for_keys.row_at_index(prev_index) {
+                            list_box_for_keys.select_row(Some(&prev_row));
+                            prev_row.grab_focus();
+                        }
+                    }
+                } else if let Some(first_row) = list_box_for_keys.row_at_index(0) {
+                    list_box_for_keys.select_row(Some(&first_row));
+                    first_row.grab_focus();
+                }
+                gtk4::glib::Propagation::Stop
+            }
+            Key::Return | Key::KP_Enter => {
+                if let Some(row) = list_box_for_keys.selected_row() {
+                    row.emit_by_name::<()>("activate", &[]);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
+            _ => gtk4::glib::Propagation::Proceed,
+        }
+    });
+    controller
 }
 
 /// Apply custom CSS styling for modern GNOME-style rounded window
