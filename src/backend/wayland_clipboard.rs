@@ -202,9 +202,11 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             let object_id = offer.id();
-            debug!("Offer event: MIME type offered: {}", mime_type.clone());
+            debug!("Offer event: MIME type offered: {}", mime_type);
             let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id) { mime_list.push(mime_type); }
+            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id) {
+                if !mime_type.starts_with("video") { mime_list.push(mime_type); }
+            }
         }
     }
 }
