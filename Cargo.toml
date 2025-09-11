@@ -14,8 +14,6 @@ wayland-protocols-wlr = { version = "0.3.8", features = ["client"] }
 gtk4 = "0.9"
 gtk4-layer-shell = "0.5.0"
 libadwaita = "0.7"
-gio = "0.20"
-memmap2 = "0.9.5"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -25,5 +23,3 @@ indexmap = { version = "2.11", features = ["serde"] }
 # Logging
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
-#smithay-client-toolkit = "0.19.2"
-#nix = { version = "0.26.0"}

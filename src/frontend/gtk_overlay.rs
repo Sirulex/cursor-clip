@@ -175,7 +175,7 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
 
         // Populate the list with clipboard items
     for item in &prefetched_items {
-        let row = create_clipboard_item_from_backend(item);
+        let row = generate_listboxrow_from_preview(item);
         list_box.append(&row);
     }
 
@@ -317,7 +317,7 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
         }
 
         headerbar {
-            background: #222226;
+            background: transparent;
             box-shadow: none;
         }
 
@@ -383,7 +383,7 @@ pub fn hide_overlay() {
 }
 
 /// Create a clipboard history item row from backend data
-fn create_clipboard_item_from_backend(item: &ClipboardItemPreview) -> gtk4::ListBoxRow {
+fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
 
