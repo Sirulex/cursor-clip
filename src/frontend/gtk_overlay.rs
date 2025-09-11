@@ -26,6 +26,25 @@ pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
 }
 
+// Centralized quit path to avoid double-close reentrancy and ensure flags + app quit
+fn request_quit() {
+    CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+    // Prefer quitting the application (cleaner teardown) over closing the window directly
+    OVERLAY_APP.with(|a| {
+        if let Some(ref app) = *a.borrow() {
+            app.quit();
+            return;
+        }
+    });
+
+    // Fallback: close the window if app is unavailable
+    OVERLAY_WINDOW.with(|w| {
+        if let Some(ref win) = *w.borrow() {
+            win.close();
+        }
+    });
+}
+
 pub fn init_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardItemPreview>) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
         adw::init().expect("Failed to initialize libadwaita");
@@ -57,6 +76,14 @@ pub fn init_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardIte
 
     // Run the application
     app.run_with_args::<String>(&[]);
+
+    // Belt-and-suspenders: clear TLS after run returns
+    OVERLAY_WINDOW.with(|w| {
+        *w.borrow_mut() = None;
+    });
+    OVERLAY_APP.with(|a| {
+        *a.borrow_mut() = None;
+    });
     Ok(())
 }
 
@@ -110,16 +137,16 @@ fn create_layer_shell_window(
         println!("inside GTK window focus handler (checking outside)");
         if !window.is_active() {
             println!("GTK window lost focus - closing both overlay and capture layer");
-            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-            window.close();
+            request_quit();
         }
     });
 
     // Add close request handler to ensure any window close goes through our logic
     window.connect_close_request(|_window| {
         println!("Window close requested - ensuring both overlay and capture layer close");
-        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-        gtk4::glib::Propagation::Proceed
+        request_quit();
+        // Stop default handler to avoid double-close reentrancy during teardown
+        gtk4::glib::Propagation::Stop
     });
 
     window
@@ -204,12 +231,7 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
                         error!("Error setting clipboard by ID: {}", e);
                     } else {
                         info!("Clipboard set by ID: {}", item.item_id);
-                        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                        OVERLAY_WINDOW.with(|window| {
-                            if let Some(ref win) = *window.borrow() {
-                                win.close();
-                            }
-                        });
+                        request_quit();
                     }
                 }
                 Err(e) => {
@@ -232,12 +254,7 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
                 } else {
                     info!("Clipboard history cleared");
                     // Close the overlay after clearing
-                    CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                    OVERLAY_WINDOW.with(|window| {
-                        if let Some(ref win) = *window.borrow() {
-                            win.close();
-                        }
-                    });
+                    request_quit();
                 }
             }
             Err(e) => {
@@ -257,12 +274,7 @@ fn generate_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey
         use gtk4::gdk::Key;
         match key {
             Key::Escape => {
-                CLOSE_REQUESTED.store(true, Ordering::Relaxed);
-                OVERLAY_WINDOW.with(|window| {
-                    if let Some(ref win) = *window.borrow() {
-                        win.close();
-                    }
-                });
+                request_quit();
                 gtk4::glib::Propagation::Stop
             }
             Key::j | Key::J | Key::Down => {

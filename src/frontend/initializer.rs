@@ -14,6 +14,7 @@ use wayland_protocols::{
 };
 
 use crate::frontend::{frontend_state::State, gtk_overlay};
+use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
 use crate::frontend::ipc_client::FrontendClient;
 use log::{debug, warn, error};
 
@@ -43,19 +44,8 @@ async fn run_main_event_loop(
         
         // Handle close requests
         if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
-            debug!("Close requested - closing overlay");
-            
-            // Close GTK overlay window
             gtk_overlay::reset_close_flags();
-            
-            // Clean up capture layer surface
-            if let Some(capture_layer_surface) = &state.capture_layer_surface {
-                capture_layer_surface.destroy();
-                debug!("Capture layer surface destroyed");
-            }
-            state.capture_layer_surface = None;
-            state.capture_layer_clicked = false;
-            
+            cleanup_capture_layer(state);
             break;
         }
         

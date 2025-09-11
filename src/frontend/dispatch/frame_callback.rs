@@ -3,6 +3,7 @@ use wayland_client::protocol::wl_callback;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::frontend::frontend_state::State;
+use crate::frontend::dispatch::layer_shell::cleanup_update_layer;
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -82,31 +83,6 @@ fn setup_update_layer(state: &mut State, qhandle: &QueueHandle<State>) {
 
     // Commit the update surface to trigger the configure event
     update_surface.commit();
-}
-
-fn cleanup_update_layer(state: &mut State) {
-    debug!("Cleaning up update layer resources");
-    
-    // Destroy the update layer surface if it exists
-    if let Some(update_layer_surface) = state.update_layer_surface.take() {
-        debug!("Destroying update layer surface");
-        update_layer_surface.destroy();
-    }
-    
-    // Clean up the update surface
-    if let Some(update_surface) = state.update_surface.take() {
-        debug!("Destroying update surface");
-        update_surface.destroy();
-    }
-    
-    
-    // Clear the update frame callback reference (callback-resources are auto-cleaned)
-    if state.update_frame_callback.is_some() {
-        debug!("Clearing update frame callback reference");
-        state.update_frame_callback = None;
-    }
-    
-    debug!("Update layer cleanup completed");
 }
 
 fn schedule_next_frame_check(state: &mut State, qhandle: &QueueHandle<State>, frame_count: u8) {

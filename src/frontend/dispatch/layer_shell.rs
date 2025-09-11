@@ -95,3 +95,63 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
         }
     }
 }
+
+/// Destroy capture/update layer resources and underlying Wayland objects.
+pub fn cleanup_capture_layer(state: &mut State) {
+    debug!("Cleaning up capture/update layer resources");
+
+    // Destroy update layer resources first if present
+    if let Some(update_layer_surface) = state.update_layer_surface.take() {
+        update_layer_surface.destroy();
+        debug!("Update layer surface destroyed");
+    }
+    if let Some(update_surface) = state.update_surface.take() {
+        update_surface.destroy();
+        debug!("Update surface destroyed");
+    }
+    state.update_frame_callback = None;
+
+    // Destroy capture layer surface
+    if let Some(capture_layer_surface) = state.capture_layer_surface.take() {
+        capture_layer_surface.destroy();
+        debug!("Capture layer surface destroyed");
+    }
+
+    // Destroy underlying surfaces and buffers
+    if let Some(capture_surface) = state.capture_surface.take() {
+        capture_surface.destroy();
+        debug!("Capture wl_surface destroyed");
+    }
+
+    if let Some(buffer) = state.transparent_buffer.take() {
+        buffer.destroy();
+        debug!("Transparent buffer destroyed");
+    }
+
+    state.capture_layer_clicked = false;
+}
+
+/// Destroy only the update layer resources (used after minimal frame delay).
+pub fn cleanup_update_layer(state: &mut State) {
+    debug!("Cleaning up update layer resources");
+
+    // Destroy the update layer surface if it exists
+    if let Some(update_layer_surface) = state.update_layer_surface.take() {
+        debug!("Destroying update layer surface");
+        update_layer_surface.destroy();
+    }
+
+    // Clean up the update surface
+    if let Some(update_surface) = state.update_surface.take() {
+        debug!("Destroying update surface");
+        update_surface.destroy();
+    }
+
+    // Clear the update frame callback reference (callback-resources are auto-cleaned)
+    if state.update_frame_callback.is_some() {
+        debug!("Clearing update frame callback reference");
+        state.update_frame_callback = None;
+    }
+
+    debug!("Update layer cleanup completed");
+}
