@@ -5,7 +5,7 @@ use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
-use crate::shared::ClipboardItemPreview;
+use crate::shared::{ClipboardItemPreview, ClipboardContentType};
 use crate::frontend::ipc_client::FrontendClient;
 use log::{info, debug, warn, error};
 
@@ -357,8 +357,11 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
         }
 
         .clipboard-preview {
-            font-family: monospace;
             opacity: 0.9;
+        }
+
+        .clipboard-preview.monospace {
+            font-family: monospace;
         }
 
         .clipboard-time {
@@ -408,10 +411,10 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
     
-    let type_label = Label::new(Some(item.content_preview_type.get_icon()));
+    let type_label = Label::new(Some(item.content_type.get_icon()));
     type_label.add_css_class("caption");
     
-    let type_text = Label::new(Some(item.content_preview_type.to_string()));
+    let type_text = Label::new(Some(item.content_type.to_string()));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);
@@ -429,6 +432,9 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
 
     let content_label = Label::new(Some(&item.content_preview));
     content_label.add_css_class("clipboard-preview");
+    if matches!(item.content_type, ClipboardContentType::Code | ClipboardContentType::File) {
+        content_label.add_css_class("monospace");
+    }
     content_label.set_halign(Align::Start);
     content_label.set_wrap(true);
     content_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);

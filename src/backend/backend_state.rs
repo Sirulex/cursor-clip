@@ -76,34 +76,41 @@ impl BackendState {
     pub fn add_clipboard_item_from_mime_map(&mut self, mut mime_content: IndexMap<String, Vec<u8>>) -> Option<u64> {
         if mime_content.is_empty() { return None; }
 
-        let preview: String = if let Some(txt_bytes) = mime_content.get("text/plain;charset=utf-8") {
-            match String::from_utf8(txt_bytes.clone()) {
-                Ok(s) => s.chars().take(200).collect(),
-                Err(_) => format!("<text/plain;charset=utf-8 {} bytes>", txt_bytes.len()),
-            }
+        // If we have image/png, prefer showing mime_type + bytes and set type to Image
+        let (content_preview, content_type) = if let Some(png_bytes) = mime_content.get("image/png") {
+            (format!("<image/png {} bytes>", png_bytes.len()), ClipboardContentType::Image)
         } else {
-            // Fallback: show placeholder using first mime entry
-            let (mime_name, len) = mime_content.iter().next().map(|(k,v)| (k.clone(), v.len())).unwrap();
-            format!("<{} {} bytes>", mime_name, len)
+            // Otherwise, if we have text/plain;charset=utf-8, show up to first 200 chars and infer type
+            let preview: String = if let Some(txt_bytes) = mime_content.get("text/plain;charset=utf-8") {
+                match String::from_utf8(txt_bytes.clone()) {
+                    Ok(s) => s.chars().take(200).collect(),
+                    Err(_) => format!("<text/plain;charset=utf-8 {} bytes>", txt_bytes.len()),
+                }
+            } else {
+                // Fallback: show placeholder using first mime entry
+                let (mime_name, len) = mime_content.iter().next().map(|(k,v)| (k.clone(), v.len())).unwrap();
+                format!("<{} {} bytes>", mime_name, len)
+            };
+            
+            (preview.clone(), ClipboardContentType::type_from_preview(&preview))
         };
-        let content_type = ClipboardContentType::from_content(&preview);
 
 
         let item = ClipboardItem {
             item_id: self.id_for_next_entry,
-            content_preview_type: content_type,
-            content_preview: preview,
+            content_type,
+            content_preview,
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             mime_data: mime_content.drain(..).collect(),
         };
 
         // remove duplicates (todo change to more robust solution -> hashes)
-        self.history.retain(|existing| existing.content_preview != item.content_preview); //
+        self.history.retain(|existing| existing.content_preview != item.content_preview);
         self.history.insert(0, item);
-    if self.history.len() > 100 { self.history.truncate(100); }
-    let new_id = self.id_for_next_entry;
-    self.id_for_next_entry += 1;
-    Some(new_id)
+        if self.history.len() > 100 { self.history.truncate(100); }
+        let new_id = self.id_for_next_entry;
+        self.id_for_next_entry += 1;
+        Some(new_id)
     }
 
     pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 

@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 pub struct ClipboardItem {
     pub item_id: u64,
     pub content_preview: String,
-    pub content_preview_type: ClipboardContentType,
+    pub content_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
     pub mime_data: IndexMap<String, Vec<u8>>, // kept internal / not sent in history
 }
@@ -15,7 +15,7 @@ pub struct ClipboardItem {
 pub struct ClipboardItemPreview {
     pub item_id: u64,
     pub content_preview: String,
-    pub content_preview_type: ClipboardContentType,
+    pub content_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
 }
 
@@ -24,7 +24,7 @@ impl From<&ClipboardItem> for ClipboardItemPreview {
         Self {
             item_id: full.item_id,
             content_preview: full.content_preview.clone(),
-            content_preview_type: full.content_preview_type.clone(),
+            content_type: full.content_type.clone(),
             timestamp: full.timestamp,
         }
     }
@@ -66,7 +66,7 @@ pub enum BackendMessage {
 }
 
 impl ClipboardContentType {
-    pub fn from_content(content: &str) -> Self {
+    pub fn type_from_preview(content: &str) -> Self {
         const PASSWORD_SPECIALS: &str = "!@#$%^&*()-_=+[]{};:,.<>?/\\|`~";
         if content.starts_with("http://") || content.starts_with("https://") {
             ClipboardContentType::Url
