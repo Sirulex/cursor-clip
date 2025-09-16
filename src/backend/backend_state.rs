@@ -12,6 +12,7 @@ use wayland_client::{QueueHandle, Connection};
 
 use crate::shared::{ClipboardItem, ClipboardItemPreview, ClipboardContentType};
 use indexmap::IndexMap;
+use bytes::Bytes;
 use log::{debug, info, warn};
 
 #[derive(Debug)]
@@ -73,7 +74,7 @@ impl BackendState {
         }
     }
 
-    pub fn add_clipboard_item_from_mime_map(&mut self, mut mime_content: IndexMap<String, Vec<u8>>) -> Option<u64> {
+    pub fn add_clipboard_item_from_mime_map(&mut self, mut mime_content: IndexMap<String, Bytes>) -> Option<u64> {
         if mime_content.is_empty() { return None; }
 
         // If we have image/png, prefer showing mime_type + bytes and set type to Image
@@ -82,7 +83,7 @@ impl BackendState {
         } else {
             // Otherwise, if we have text/plain;charset=utf-8, show up to first 200 chars and infer type
             let preview: String = if let Some(txt_bytes) = mime_content.get("text/plain;charset=utf-8") {
-                match String::from_utf8(txt_bytes.clone()) {
+                match std::str::from_utf8(txt_bytes.as_ref()) {
                     Ok(s) => s.chars().take(200).collect(),
                     Err(_) => format!("<text/plain;charset=utf-8 {} bytes>", txt_bytes.len()),
                 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use indexmap::IndexMap;
+use bytes::Bytes;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardItem {
@@ -7,7 +8,7 @@ pub struct ClipboardItem {
     pub content_preview: String,
     pub content_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
-    pub mime_data: IndexMap<String, Vec<u8>>, // kept internal / not sent in history
+    pub mime_data: IndexMap<String, Bytes>, // kept internal / not sent in history
 }
 
 /// Lightweight version sent to the frontend in history listings (no payload bytes)

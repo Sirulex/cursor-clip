@@ -13,6 +13,7 @@ use std::sync::Arc as StdArc; // for event_created_child return type clarity
 use super::backend_state::BackendState;
 use indexmap::IndexMap;
 use log::{info, debug, warn, error};
+use bytes::Bytes;
 
 // Wrapper struct that holds the shared backend state for dispatch implementations
 pub struct MutexBackendState {
@@ -230,7 +231,7 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
                         use std::io::Write;
                         let mut file: std::fs::File = fd.into();
                         if let Some(bytes) = item.mime_data.get(&mime_type) {
-                            if let Err(e) = file.write_all(bytes) {
+                            if let Err(e) = file.write_all(bytes.as_ref()) {
                                 error!(
                                     "Failed writing selection data (id {}, mime {}): {e}",
                                     item_id, mime_type
@@ -303,7 +304,7 @@ fn process_all_data_formats(
 
     if mime_types.is_empty() { return; }
 
-    let mut mime_map: IndexMap<String, Vec<u8>> = IndexMap::new();
+    let mut mime_map: IndexMap<String, Bytes> = IndexMap::new();
 
     for mime in mime_types {
         let (reader_fd, writer_fd) = match create_pipes() {
@@ -320,7 +321,7 @@ fn process_all_data_formats(
         let mut buf = Vec::new();
         match reader_file.read_to_end(&mut buf) {
             Ok(_) => {
-                if !buf.is_empty() { mime_map.insert(mime, buf); }
+                if !buf.is_empty() { mime_map.insert(mime, Bytes::from(buf)); }
             }
             Err(e) => warn!("Failed reading data for mime: {e}"),
         }
