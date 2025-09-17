@@ -1,8 +1,13 @@
-# Cursor Clip - Clipboard History Manager with Libadwaita
+# Cursor Clip - GTK4 Clipboard Manager With Dynamic Positioning
 
-A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell**. Features a Windows 11-style clipboard history interface with native GNOME design.
+A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell**, that makes the clipboard-handling more reliable.
+Features a Windows 11-style clipboard history interface with native GNOME designw, which is always positioned at the current mouse pointer coordinates.
 
 ## Features
+
+<img src="Overlay-Preview.png" alt="Overlay Preview" align="right" width="400" />
+
+<div style="margin-right: 400px;">
 
 ### 📋 **Windows 11-Style Clipboard History**
 - **Clean list interface**: Similar to Windows 11 clipboard history
@@ -11,27 +16,88 @@ A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**
 - **Time stamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to clipboard
 
-### 🎨 **Native GNOME Design**
-- **Libadwaita styling**: Follows GNOME Human Interface Guidelines
-- **Adaptive theming**: Automatically follows system light/dark theme
-- **Native widgets**: HeaderBar, ListBox, ScrolledWindow
-
 ### 🖱️ **Advanced Wayland Integration**
 - **Layer Shell Protocol**: Proper overlay positioning above all windows
 - **Precise Cursor Tracking**: Real-time mouse position detection
 - **Multi-output Support**: Works across multiple monitors
-<!-- - **Non-intrusive**: Doesn't steal focus or interfere with other applications -->
+
+### 🎨 **Native GNOME Design**
+- **Libadwaita styling**: Follows GNOME Human Interface Guidelines
+- **Native widgets**: HeaderBar, ListBox, ScrolledWindow
 
 ### 📂 **Automatic Clipboard Monitoring (Wayland)**
-- The backend uses `zwlr_data_control_manager_v1` to automatically monitor clipboard content.
-
+- Stores the last 100 copied items and removes duplicates.
 - Automatic classification of content types:
   - 📝 Text
   - 🔗 URLs
   - 💻 Code
   - 🔒 Passwords
   - 📁 File paths
-- Stores the last 100 copied items and removes duplicates.
+  - 🖼️ Images
+
+</div>
+
+## Compositor Support
+   - The backend uses `zwlr_data_control_manager_v1` to automatically monitor and set clipboard content.
+   - The frontend uses `zwlr_layer_shell_v1` for retrieving pointer coordinates and showing the overlay.
+   - Supported Compositors (need to support both protocols):
+     - KDE Plasma (Wayland session)
+     - Hyprland
+     - Sway
+     - niri
+     - Labwc
+     - Other wlroots-based compositors
+
+### System Requirements
+- **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
+
+## Building
+
+### Install Dependencies
+
+#### Arch Linux:
+```bash
+sudo pacman -S gtk4 libadwaita gtk4-layer-shell
+```
+
+#### Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev gtk4-layer-shell
+```
+
+#### Fedora:
+```bash
+sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
+```
+
+
+### Download and Compile
+
+```bash
+# Clone the repository
+git clone https://gitlab.com/Sirulex/cursor-clip
+cd cursor-clip
+
+# Build in release mode
+cargo build --release
+```
+
+## Usage
+1. **Start Background Daemon**: `cursor-clip --daemon`
+2. **Launch Overlay**: Run `cursor-clip` without any arguments (best bind to a hotkey Super+V)
+3. **Trigger**: Your Mouse position is automatically grabbed
+4. **View History**: The clipboard history window will appear at your cursor position showing:
+   - **Recent clipboard items** with content previews
+   - **Content type icons** (text, URL, code, password, file)
+   - **Timestamps** showing when items were copied
+   - **Quick actions**: Clear All and Close buttons
+5. **Interact**: 
+   - **Click any item** to copy it back to the clipboard
+   - **Scroll** through your clipboard history
+   - **Clear All** to remove all history items
+   - **Keyboard navigation**: Use arrow keys or J/K to navigate, Enter to select, Esc to close
+
 
 ## Architecture
 
@@ -49,117 +115,26 @@ A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**
 │  ├── Positioning and anchoring                  │
 │  └── Overlay layer management                   │
 ├─────────────────────────────────────────────────┤
-│  Wayland Protocol Handlers                      │
-│  ├── Compositor communication                   │
-│  ├── Pointer event processing                   │
-│  └── Surface lifecycle management               │
+│  Clipboard Management                           │
+│  ├── Data Control Manager for privileged access │
+│  ├── IPC communication via Unix Domain Sockets  │
+│  └── IndexMap for clipboard history storage     │
 └─────────────────────────────────────────────────┘
 ```
 
 ## Dependencies
 
 ### Core Libraries
-- **GTK4** (0.9): Modern UI toolkit
-- **Libadwaita** (0.7): GNOME's design system  
-- **gtk4-layer-shell** (0.5): Wayland layer shell integration
+- **GTK4** (0.10): Modern UI toolkit
+- **Libadwaita** (0.8): GNOME's design system
+- **gtk4-layer-shell** (0.6): Wayland layer shell integration
 - **wayland-client** (0.31): Wayland protocol bindings
 - **wayland-protocols** (0.32): Extended Wayland protocols
-
-### System Requirements
-- **Wayland compositor** with layer shell support (KDE, Sway, etc.)
-- **GTK4** and **Libadwaita** system libraries
-- **Rust** 1.70+ (2024 edition support)
-
-## Building
-
-### Install Dependencies
-
-#### Ubuntu/Debian:
-```bash
-sudo apt update
-sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev gtk4-layer-shell
-```
-
-#### Fedora:
-```bash
-sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
-```
-
-#### Arch Linux:
-```bash
-sudo pacman -S gtk4 libadwaita gtk4-layer-shell
-```
-
-### Compile and Run
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd cursor-clip
-
-# Build in release mode
-cargo build --release
-
-# Run the application
-cargo run
-```
-
-## Usage
-1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Launch**: Run `cursor-clip` in a Wayland session
-3. **Trigger**: Your Mouse position is automatically grabbed
-4. **View History**: The clipboard history window will appear at your cursor position showing:
-   - **Recent clipboard items** with content previews
-   - **Content type icons** (text, URL, code, password, file)
-   - **Timestamps** showing when items were copied
-   - **Quick actions**: Clear All and Close buttons
-5. **Interact**: 
-   - **Click any item** to copy it back to the clipboard
-   - **Scroll** through your clipboard history
-   - **Clear All** to remove all history items
-   - **Close** to exit the application
-
-## Interface Components
-
-### Clipboard History List
-- **Content Preview**: First 100 characters of each clipboard item
-- **Type Detection**: Automatic classification of content types
-- **Visual Indicators**: Icons and labels for different content types
-- **Time Stamps**: Relative time since each item was copied
-- **Hover Effects**: Visual feedback on item selection
-
-## Advanced Features
-
-### Modern CSS Styling
-- **Gradient backgrounds** with transparency
-- **Box shadows** and border effects  
-- **Hover animations** and focus states
-- **Responsive typography** scaling
-- **Color scheme** adaptation
-
-### Wayland Layer Shell Configuration
-- **Layer positioning**: Overlay layer for top-level display
-- **Anchoring system**: Precise coordinate-based positioning
-- **Exclusive zones**: Non-intrusive overlay behavior
-- **Keyboard modes**: On-demand input handling
-
-## Development
-
-<!-- ### Code Structure
-```
-src/
-├── main.rs              # Application entry point & Wayland setup
-├── gtk_overlay.rs       # GTK4/Libadwaita UI implementation  
-├── state.rs             # Application state management
-├── buffer.rs            # Graphics buffer management
-└── dispatch/            # Wayland protocol handlers
-    ├── mod.rs
-    ├── compositor.rs
-    ├── layer_shell.rs
-    ├── pointer.rs
-    └── ...
-``` -->
-
+- **wayland-protocols-wlr** (0.3.9): wlroots-specific Wayland protocols
+- **tokio-runtime** (1.47): Asynchronous runtime
+- **serde** (1.0): Serialization framework
+- **indexmap** (2.11): Ordered map for clipboard history
+- **env_logger** (0.11): Logging framework
 <!-- ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
