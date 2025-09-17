@@ -135,10 +135,10 @@ cargo build --release
 - **serde** (1.0): Serialization framework
 - **indexmap** (2.11): Ordered map for clipboard history
 - **env_logger** (0.11): Logging framework
-<!-- ## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
- -->
 ---
 
 **Built with ❤️ using Rust, GTK4, Libadwaita, and Wayland Layer Shell**
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0). See `LICENSE` for the full text.
