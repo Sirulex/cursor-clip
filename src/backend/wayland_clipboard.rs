@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
-use wayland_client::{Connection, EventQueue, Dispatch, QueueHandle, Proxy};
+use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_client::globals::{GlobalList, registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_seat, wl_display, wl_registry};
+use wayland_client::protocol::{wl_registry};
 use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1},
+    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
     zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
     zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
@@ -12,8 +13,8 @@ use std::sync::Arc as StdArc; // for event_created_child return type clarity
 
 use super::backend_state::BackendState;
 use indexmap::IndexMap;
-use log::{info, debug, warn, error};
 use bytes::Bytes;
+use log::{info, debug, warn, error};
 
 // Wrapper struct that holds the shared backend state for dispatch implementations
 pub struct MutexBackendState {
@@ -41,10 +42,6 @@ impl WaylandClipboardMonitor {
 
         // Create wrapper for shared state
         let mut shared_state_wrapper = MutexBackendState { backend_state: self.backend_state.clone() };
-
-        // Roundtrip once for globals
-        //event_queue.roundtrip(&mut shared_state_wrapper)
-        //    .map_err(|e| format!("Initial roundtrip failed: {}", e))?;
 
         // Bind required globals
         let qh = event_queue.handle();
@@ -89,45 +86,6 @@ impl WaylandClipboardMonitor {
 }
 
 // ================= Dispatch Implementations =================
-
-impl Dispatch<ZwlrDataControlManagerV1, ()> for MutexBackendState {
-    fn event(
-        _: &mut Self,
-        _: &ZwlrDataControlManagerV1,
-        _: zwlr_data_control_manager_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<MutexBackendState>,
-    ) {
-        // No events for the manager
-    }
-}
-
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState {
-    fn event(
-        _state: &mut Self,
-        _proxy: &wl_registry::WlRegistry,
-        _event: wl_registry::Event,
-        _data: &GlobalListContents,
-        _conn: &Connection,
-        _qhandle: &QueueHandle<MutexBackendState>,
-    ) {
-        // GlobalList handles population; nothing else to do.
-    }
-}
-
-impl Dispatch<wl_seat::WlSeat, ()> for MutexBackendState {
-    fn event(
-        _: &mut Self,
-        _: &wl_seat::WlSeat,
-        _: wl_seat::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<MutexBackendState>,
-    ) {
-        // We don't need to handle seat events for this application
-    }
-}
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
     fn event(
@@ -266,16 +224,21 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
     }
 }
 
-impl Dispatch<wl_display::WlDisplay, ()> for MutexBackendState {
+// ================== No-op Dispatch Implementations =================
+
+delegate_noop!(MutexBackendState: ignore ZwlrDataControlManagerV1);
+delegate_noop!(MutexBackendState: ignore WlSeat);
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState {
     fn event(
-        _: &mut Self,
-        _: &wl_display::WlDisplay,
-        _: wl_display::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<MutexBackendState>,
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<MutexBackendState>,
     ) {
-        // Handle display events if needed
+        // No-op
     }
 }
 

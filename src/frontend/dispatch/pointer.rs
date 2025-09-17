@@ -63,14 +63,6 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             wl_pointer::Event::Leave { serial: _, surface } => {
                 debug!("Pointer left surface: {:?}", surface);
             }
-            wl_pointer::Event::Motion {
-                time,
-                surface_x,
-                surface_y,
-            } => {
-                debug!("Pointer moved to ({}, {}) at time {}", surface_x, surface_y, time);
-
-            }
             wl_pointer::Event::Button {
                 serial: _,
                 time,
@@ -79,11 +71,11 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             } => {
                 debug!("Pointer button {:?} at time {}: {:?}", button, time, button_state);
                 
-                // Check for left mouse button click (button 272 is left click)
+                // Check for left mouse button click (button 272 = left click)
                 if button == 272 {
                     if let WEnum::Value(wl_pointer::ButtonState::Pressed) = button_state {
                         debug!("Left mouse button clicked on capture layer - requesting close");
-                        state.capture_layer_clicked = true; // This will trigger cleanup in main loop
+                        state.capture_layer_clicked = true; // future handling of outside click to close overlay
                     }
                 }
             }
