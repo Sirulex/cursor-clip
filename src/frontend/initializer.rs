@@ -18,7 +18,7 @@ use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
 use crate::frontend::ipc_client::FrontendClient;
 use log::{debug, warn, error};
 
-async fn run_main_event_loop(
+fn run_main_event_loop(
     state: &mut State, 
     queue: &mut EventQueue<State>
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +88,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     setup_capture_layer(&mut state, &queue);
 
     // Main event loop (reuse existing implementation)
-    run_main_event_loop(&mut state, &mut queue).await
+    run_main_event_loop(&mut state, &mut queue)
 }
 
 fn init_wayland_protocols(

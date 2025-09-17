@@ -26,11 +26,11 @@ pub struct WaylandClipboardMonitor {
 }
 
 impl WaylandClipboardMonitor {
-    pub fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
+    pub const fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
         Self { backend_state }
     }
 
-    pub async fn start_monitoring(&mut self) -> Result<(), String> {
+    pub fn start_monitoring(&self) -> Result<(), String> {
         // Establish Wayland connection
         let connection = Connection::connect_to_env()
             .map_err(|e| format!("Failed to connect to Wayland: {e}"))?;
@@ -90,9 +90,9 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
         wrapper: &mut Self,
         _: &ZwlrDataControlDeviceV1,
         event: zwlr_data_control_device_v1::Event,
-        _: &(),
+        (): &(),
         conn: &Connection,
-        _qh: &QueueHandle<MutexBackendState>,
+        _qh: &QueueHandle<Self>,
     ) {
         let mut state = wrapper.backend_state.lock().unwrap();
         
@@ -141,9 +141,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                 // DataOffer event - create a data offer object data
                 qhandle.make_data::<ZwlrDataControlOfferV1, ()>(())
             }
-            _ => {
-                panic!("Unknown child object for opcode {}", opcode);
-            }
+            _ => panic!("Unknown child object for opcode {opcode}"),
         }
     }
 }
@@ -153,9 +151,9 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
         wrapper: &mut Self,
         offer: &ZwlrDataControlOfferV1,
         event: zwlr_data_control_offer_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
-        _: &QueueHandle<MutexBackendState>,
+        _: &QueueHandle<Self>,
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             let object_id = offer.id();
@@ -173,7 +171,7 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
         wrapper: &mut Self,
         event_source: &ZwlrDataControlSourceV1,
         event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {

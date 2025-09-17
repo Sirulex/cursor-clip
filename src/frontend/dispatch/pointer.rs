@@ -6,14 +6,14 @@ use log::{debug};
 
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn event(
-        state: &mut State,
+        state: &mut Self,
         seat: &wl_seat::WlSeat,
         event: wl_seat::Event,
         _data: &(),
         _conn: &Connection,
-        qhandle: &QueueHandle<State>,
+        qhandle: &QueueHandle<Self>,
     ) {
-        debug!("Seat event: {:?}", event);
+        debug!("Seat event: {event:?}");
         if let wl_seat::Event::Capabilities {
             capabilities: cap_event_enum,
         } = event
@@ -40,7 +40,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
     fn event(
-        state: &mut State,
+        state: &mut Self,
         _pointer: &wl_pointer::WlPointer,
         event: wl_pointer::Event,
         _data: &(),
@@ -55,13 +55,13 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 surface_x,
                 surface_y,
             } => {
-                debug!("Pointer entered surface: {:?} at ({}, {})", surface, surface_x, surface_y);
+                debug!("Pointer entered surface: {surface:?} at ({surface_x}, {surface_y})");
                 state.coords_received = true; // Set flag when coordinates are received
                 state.received_x = surface_x;
                 state.received_y = surface_y;
             }
             wl_pointer::Event::Leave { serial: _, surface } => {
-                debug!("Pointer left surface: {:?}", surface);
+                debug!("Pointer left surface: {surface:?}");
             }
             wl_pointer::Event::Button {
                 serial: _,
@@ -69,7 +69,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 button,
                 state: button_state,
             } => {
-                debug!("Pointer button {:?} at time {}: {:?}", button, time, button_state);
+                debug!("Pointer button {button:?} at time {time}: {button_state:?}");
                 
                 // Check for left mouse button click (button 272 = left click)
                 if button == 272 {

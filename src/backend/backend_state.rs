@@ -132,9 +132,12 @@ impl BackendState {
         info!("Setting clipboard content by ID {entry_id}");
         debug!("Setting clipboard content by ID {entry_id}: {}", item.content_preview);
 
-        let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
-            (Some(m), Some(d), Some(q)) => (m, d, q),
-            _ => return Err("Wayland clipboard objects not available yet".into()),
+        let (Some(manager), Some(device), Some(qh)) = (
+            &self.data_control_manager,
+            &self.data_control_device,
+            &self.qh,
+        ) else {
+            return Err("Wayland clipboard objects not available yet".into());
         };
 
         let source = manager.create_data_source(qh, ());

@@ -26,8 +26,8 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
     // Start Wayland clipboard monitoring in a separate task
     let wayland_state = state.clone();
     tokio::spawn(async move {
-        let mut monitor = WaylandClipboardMonitor::new(wayland_state);
-        if let Err(e) = monitor.start_monitoring().await {
+        let monitor = WaylandClipboardMonitor::new(wayland_state);
+        if let Err(e) = monitor.start_monitoring() {
             error!("Wayland clipboard monitoring error: {e}");
         }
     });
@@ -36,7 +36,6 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
     #[cfg(debug_assertions)]
     {
         let mut state_lock = state.lock().unwrap();
-        use indexmap::IndexMap;
         for sample in [
             "Hello, world Cursor-Clip!",
             "https://github.com/rust-lang/rust",
@@ -44,7 +43,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
             "impl Display for MyStruct {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"MyStruct\")\n    }\n}",
             "Password4234!Cursor-Clip",
         ] {
-            let mut map = IndexMap::new();
+            let mut map = indexmap::IndexMap::new();
             map.insert("text/plain;charset=utf-8".to_string(), Bytes::from_static(sample.as_bytes()));
             let _ = state_lock.add_clipboard_item_from_mime_map(map);
         }
@@ -81,7 +80,7 @@ async fn handle_client(
             FrontendMessage::SetClipboardById { id } => {
                 let mut state = state.lock().unwrap();
                 match state.set_clipboard_by_id(id) {
-                    Ok(_) => BackendMessage::ClipboardSet,
+                    Ok(()) => BackendMessage::ClipboardSet,
                     Err(e) => BackendMessage::Error { message: e },
                 }
             }
