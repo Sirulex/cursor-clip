@@ -32,11 +32,11 @@ async fn run_main_event_loop(
         if state.coords_received && !gtk_window_created {
             let x = state.received_x;
             let y = state.received_y;
-            debug!("Capture layer ready; creating GTK overlay window at ({}, {})", x, y);
+            debug!("Capture layer ready; creating GTK overlay window at ({x}, {y})");
 
             // Create the GTK window using the unified client backend communication
             if let Err(e) = gtk_overlay::init_clipboard_overlay(x, y, state.clipboard_history.clone()) {
-                error!("Error creating GTK overlay: {:?}", e);
+                error!("Error creating GTK overlay: {e:?}");
             }
             
             gtk_window_created = true;
@@ -85,7 +85,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     init_wayland_protocols(&globals, &queue, &mut state)?;
 
     // Create capture surfaces for mouse coordinate detection
-    setup_capture_layer(&mut state, &queue)?;
+    setup_capture_layer(&mut state, &queue);
 
     // Main event loop (reuse existing implementation)
     run_main_event_loop(&mut state, &mut queue).await
@@ -144,7 +144,7 @@ fn init_wayland_protocols(
     Ok(())
 }
 
-fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) {
     let compositor = state
         .compositor
         .as_ref()
@@ -154,7 +154,7 @@ fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) -> Result<(
     let update_surface = compositor.create_surface(&queue.handle(), ());
 
     state.capture_surface = Some(capture_surface.clone());
-    state.update_surface = Some(update_surface.clone());
+    state.update_surface = Some(update_surface);
 
     let layer_shell = state
         .layer_shell
@@ -192,5 +192,4 @@ fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) -> Result<(
     state.capture_layer_surface = Some(capture_layer_surface);
     capture_surface.commit();
 
-    Ok(())
 }

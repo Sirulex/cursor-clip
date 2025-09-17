@@ -25,13 +25,13 @@ impl From<&ClipboardItem> for ClipboardItemPreview {
         Self {
             item_id: full.item_id,
             content_preview: full.content_preview.clone(),
-            content_type: full.content_type.clone(),
+            content_type: full.content_type,
             timestamp: full.timestamp,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum ClipboardContentType {
     Text,
     Url,
@@ -42,7 +42,7 @@ pub enum ClipboardContentType {
     Other,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum FrontendMessage {
     /// Request clipboard history
     GetHistory,
@@ -70,41 +70,41 @@ impl ClipboardContentType {
     pub fn type_from_preview(content: &str) -> Self {
         const PASSWORD_SPECIALS: &str = "!@#$%^&*()-_=+[]{};:,.<>?/\\|`~";
         if content.starts_with("http://") || content.starts_with("https://") {
-            ClipboardContentType::Url
+            Self::Url
         } else if content.contains("fn ") || content.contains("impl ") || content.contains("struct ") {
-            ClipboardContentType::Code
+            Self::Code
         } else if content.contains('/') && !content.contains(' ') && content.len() < 256 {
-            ClipboardContentType::File
+            Self::File
         } else if !content.is_empty() && content.len() < 50 && !content.contains(' ') && content.chars().any(|c| PASSWORD_SPECIALS.contains(c)) {
-            ClipboardContentType::Password
+            Self::Password
         } else {
-            ClipboardContentType::Text
+            Self::Text
         }
     }
 
     // Return a static string representation of the content type (future multi-language support)
-    pub fn to_string(&self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             // Return capitalized labels directly so callers don't need to post-process
-            ClipboardContentType::Text => "Text",
-            ClipboardContentType::Url => "Url",
-            ClipboardContentType::Code => "Code",
-            ClipboardContentType::Password => "Password",
-            ClipboardContentType::File => "File",
-            ClipboardContentType::Image => "Image",
-            ClipboardContentType::Other => "Other",
+            Self::Text => "Text",
+            Self::Url => "Url",
+            Self::Code => "Code",
+            Self::Password => "Password",
+            Self::File => "File",
+            Self::Image => "Image",
+            Self::Other => "Other",
         }
     }
 
-    pub fn get_icon(&self) -> &'static str {
+    pub const fn icon(self) -> &'static str {
         match self {
-            ClipboardContentType::Text => "📝",
-            ClipboardContentType::Url => "🔗",
-            ClipboardContentType::Code => "💻",
-            ClipboardContentType::Password => "🔒",
-            ClipboardContentType::File => "📁",
-            ClipboardContentType::Image => "🖼️",
-            ClipboardContentType::Other => "📄",
+            Self::Text => "📝",
+            Self::Url => "🔗",
+            Self::Code => "💻",
+            Self::Password => "🔒",
+            Self::File => "📁",
+            Self::Image => "🖼️",
+            Self::Other => "📄",
         }
     }
 }

@@ -411,10 +411,10 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
     
-    let type_label = Label::new(Some(item.content_type.get_icon()));
+    let type_label = Label::new(Some(item.content_type.icon()));
     type_label.add_css_class("caption");
     
-    let type_text = Label::new(Some(item.content_type.to_string()));
+    let type_text = Label::new(Some(item.content_type.as_str()));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);

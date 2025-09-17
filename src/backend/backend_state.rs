@@ -90,10 +90,10 @@ impl BackendState {
             } else {
                 // Fallback: show placeholder using first mime entry
                 let (mime_name, len) = mime_content.iter().next().map(|(k,v)| (k.clone(), v.len())).unwrap();
-                format!("<{} {} bytes>", mime_name, len)
+                format!("<{mime_name} {len} bytes>")
             };
-            
-            (preview.clone(), ClipboardContentType::type_from_preview(&preview))
+            let content_type = ClipboardContentType::type_from_preview(&preview);
+            (preview, content_type)
         };
 
 
@@ -127,20 +127,20 @@ impl BackendState {
     }
 
     pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
-        let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {}", entry_id))?;
+        let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
         
-        info!("Setting clipboard content by ID {}", entry_id);
-        debug!("Setting clipboard content by ID {}: {}", entry_id, item.content_preview);
+        info!("Setting clipboard content by ID {entry_id}");
+        debug!("Setting clipboard content by ID {entry_id}: {}", item.content_preview);
 
         let (manager, device, qh) = match (&self.data_control_manager, &self.data_control_device, &self.qh) {
-            (Some(m), Some(d), Some(q)) => (m.clone(), d.clone(), q.clone()),
+            (Some(m), Some(d), Some(q)) => (m, d, q),
             _ => return Err("Wayland clipboard objects not available yet".into()),
         };
 
-        let source = manager.create_data_source(&qh, ());
+        let source = manager.create_data_source(qh, ());
         for (mime, _data) in &item.mime_data { source.offer(mime.clone()); }
         device.set_selection(Some(&source));
-        self.current_source_object = Some(source.clone());
+        self.current_source_object = Some(source);
         self.current_source_entry_id = Some(entry_id);
         // Prevent reading back our own just-set selection (would deadlock due to event queue handling)
         self.suppress_next_selection_read = true;
@@ -148,7 +148,7 @@ impl BackendState {
         if let Some(conn) = &self.connection {
             if let Err(e) = conn.flush() { warn!("Failed to flush Wayland connection after setting selection: {e}"); }
         }
-        debug!("Created clipboard source and set selection (id {})", entry_id);
+        debug!("Created clipboard source and set selection (id {entry_id})");
         Ok(())
     }
 }
