@@ -1,93 +1,144 @@
-# cursor-clip
+# Cursor Clip - GTK4 Clipboard Manager With Dynamic Positioning
 
+A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell**, that makes the clipboard-handling more reliable.
+Features a Windows 11-style clipboard history interface with native GNOME designw, which is always positioned at the current mouse pointer coordinates.
 
+## Features
 
-## Getting started
+<img src="Overlay-Preview.png" alt="Overlay Preview" align="right" width="400" />
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+<div style="margin-right: 400px;">
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### 📋 **Windows 11-Style Clipboard History**
+- **Clean list interface**: Similar to Windows 11 clipboard history
+- **Content type indicators**: Icons for text, URLs, code, files, etc.
+- **Rich previews**: Formatted content display with truncation
+- **Time stamps**: When each item was copied
+- **Quick selection**: Click any item to copy it back to clipboard
 
-## Add your files
+### 🖱️ **Advanced Wayland Integration**
+- **Layer Shell Protocol**: Proper overlay positioning above all windows
+- **Precise Cursor Tracking**: Real-time mouse position detection
+- **Multi-output Support**: Works across multiple monitors
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### 🎨 **Native GNOME Design**
+- **Libadwaita styling**: Follows GNOME Human Interface Guidelines
+- **Native widgets**: HeaderBar, ListBox, ScrolledWindow
 
+### 📂 **Automatic Clipboard Monitoring (Wayland)**
+- Stores the last 100 copied items and removes duplicates.
+- Automatic classification of content types:
+  - 📝 Text
+  - 🔗 URLs
+  - 💻 Code
+  - 🔒 Passwords
+  - 📁 File paths
+  - 🖼️ Images
+
+</div>
+
+## Compositor Support
+   - The backend uses `zwlr_data_control_manager_v1` to automatically monitor and set clipboard content.
+   - The frontend uses `zwlr_layer_shell_v1` for retrieving pointer coordinates and showing the overlay.
+   - Supported Compositors (need to support both protocols):
+     - KDE Plasma (Wayland session)
+     - Hyprland
+     - Sway
+     - niri
+     - Labwc
+     - Other wlroots-based compositors
+
+### System Requirements
+- **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
+
+## Building
+
+### Install Dependencies
+
+#### Arch Linux:
+```bash
+sudo pacman -S gtk4 libadwaita gtk4-layer-shell
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/Sirulex/cursor-clip.git
-git branch -M main
-git push -uf origin main
+
+#### Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev gtk4-layer-shell
 ```
 
-## Integrate with your tools
+#### Fedora:
+```bash
+sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
+```
 
-- [ ] [Set up project integrations](https://gitlab.com/Sirulex/cursor-clip/-/settings/integrations)
 
-## Collaborate with your team
+### Download and Compile
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```bash
+# Clone the repository
+git clone https://gitlab.com/Sirulex/cursor-clip
+cd cursor-clip
 
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+# Build in release mode
+cargo build --release
+```
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+1. **Start Background Daemon**: `cursor-clip --daemon`
+2. **Launch Overlay**: Run `cursor-clip` without any arguments (best bind to a hotkey Super+V)
+3. **Trigger**: Your Mouse position is automatically grabbed
+4. **View History**: The clipboard history window will appear at your cursor position showing:
+   - **Recent clipboard items** with content previews
+   - **Content type icons** (text, URL, code, password, file)
+   - **Timestamps** showing when items were copied
+   - **Quick actions**: Clear All and Close buttons
+5. **Interact**: 
+   - **Click any item** to copy it back to the clipboard
+   - **Scroll** through your clipboard history
+   - **Clear All** to remove all history items
+   - **Keyboard navigation**: Use arrow keys or J/K to navigate, Enter to select, Esc to close
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Architecture
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```
+┌─────────────────────────────────────────────────┐
+│                 Cursor Clip                     │
+├─────────────────────────────────────────────────┤
+│  GTK4 + Libadwaita UI Layer                     │
+│  ├── Modern styling with CSS                    │
+│  ├── Responsive layouts                         │
+│  └── Accessibility features                     │
+├─────────────────────────────────────────────────┤
+│  Wayland Layer Shell Integration                │
+│  ├── zwlr_layer_shell_v1 protocol               │
+│  ├── Positioning and anchoring                  │
+│  └── Overlay layer management                   │
+├─────────────────────────────────────────────────┤
+│  Clipboard Management                           │
+│  ├── Data Control Manager for privileged access │
+│  ├── IPC communication via Unix Domain Sockets  │
+│  └── IndexMap for clipboard history storage     │
+└─────────────────────────────────────────────────┘
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## Dependencies
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### Core Libraries
+- **GTK4** (0.10): Modern UI toolkit
+- **Libadwaita** (0.8): GNOME's design system
+- **gtk4-layer-shell** (0.6): Wayland layer shell integration
+- **wayland-client** (0.31): Wayland protocol bindings
+- **wayland-protocols** (0.32): Extended Wayland protocols
+- **wayland-protocols-wlr** (0.3.9): wlroots-specific Wayland protocols
+- **tokio-runtime** (1.47): Asynchronous runtime
+- **serde** (1.0): Serialization framework
+- **indexmap** (2.11): Ordered map for clipboard history
+- **env_logger** (0.11): Logging framework
+---
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+**Built with ❤️ using Rust, GTK4, Libadwaita, and Wayland Layer Shell**
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0). See `LICENSE` for the full text.
