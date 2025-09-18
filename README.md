@@ -1,7 +1,7 @@
 # Cursor Clip - GTK4 Clipboard Manager With Dynamic Positioning
 
 A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell**, that makes the clipboard-handling more reliable.
-Features a Windows 11-style clipboard history interface with native GNOME designw, which is always positioned at the current mouse pointer coordinates.
+Features a Windows 11-style clipboard history interface with native GNOME design, which is always positioned at the current mouse pointer coordinates.
 
 ## Features
 
