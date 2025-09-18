@@ -1,0 +1,26 @@
+[package]
+name = "cursor-clip"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "cursor-clip"
+path = "src/main.rs"
+
+[dependencies]
+wayland-client = "0.31.11"
+wayland-protocols = { version = "0.32.9", features = ["client","staging"] }
+wayland-protocols-wlr = { version = "0.3.9", features = ["client"] }
+gtk4 = "0.10"
+gtk4-layer-shell = "0.6.3"
+libadwaita = "0.8"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net", "io-util"] }
+libc = "0.2"
+indexmap = { version = "2.11", features = ["serde"] }
+bytes = { version = "1", features = ["serde"] }
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
