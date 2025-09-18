@@ -83,6 +83,26 @@ impl WaylandClipboardMonitor {
     }
 }
 
+impl Drop for WaylandClipboardMonitor {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.backend_state.lock() {
+            if let Some(dev) = state.data_control_device.take() {
+                dev.destroy();
+            }
+            if let Some(src) = state.current_source_object.take() {
+                src.destroy();
+            }
+            if let Some(mgr) = state.data_control_manager.take() {
+                mgr.destroy();
+            }
+            state.seat.take(); // wl_seat proxies auto-drop; no explicit destroy
+            if let Some(conn) = &state.connection {
+                let _ = conn.flush();
+            }
+        }
+    }
+}
+
 // ================= Dispatch Implementations =================
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
@@ -113,11 +133,14 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                         if state.suppress_next_selection_read {
                             state.current_data_offer = Some(offer_key);
                             debug!("Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads");
+                            offer_id.destroy();
                         } else if !already_current {
                             state.current_data_offer = Some(offer_key);
                             process_all_data_formats(&offer_id, mime_list, conn, &mut state);
                             //remove old offer entries and their corresponding MIME types as new ones will be generated for future selections
                             state.mime_type_offers.clear();
+                            offer_id.destroy();
+
                         }
                     }
                 } else {

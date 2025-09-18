@@ -140,6 +140,11 @@ impl BackendState {
             return Err("Wayland clipboard objects not available yet".into());
         };
 
+        // Clean up any previously set source that we own
+        if let Some(prev) = self.current_source_object.take() {
+            prev.destroy();
+        }
+
         let source = manager.create_data_source(qh, ());
         for (mime, _data) in &item.mime_data { source.offer(mime.clone()); }
         device.set_selection(Some(&source));

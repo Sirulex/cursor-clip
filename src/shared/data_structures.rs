@@ -8,7 +8,7 @@ pub struct ClipboardItem {
     pub content_preview: String,
     pub content_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
-    pub mime_data: IndexMap<String, Bytes>, // kept internal / not sent in history
+    pub mime_data: IndexMap<String, Bytes>, // content type -> payload bytes
 }
 
 /// Lightweight version sent to the frontend in history listings (no payload bytes)
