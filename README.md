@@ -1,7 +1,7 @@
-# Cursor Clip - GTK4 Clipboard Manager With Dynamic Positioning
+# Cursor Clip - GTK4 Clipboard Manager with Dynamic Positioning
 
-A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell**, that makes the clipboard-handling more reliable.
-Features a Windows 11-style clipboard history interface with native GNOME designw, which is always positioned at the current mouse pointer coordinates.
+A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell** that makes clipboard handling more reliable.
+Features a Windows 11–style clipboard history interface with native GNOME design, which is always positioned at the current mouse pointer location.
 
 ## Features
 
@@ -13,8 +13,8 @@ Features a Windows 11-style clipboard history interface with native GNOME design
 - **Clean list interface**: Similar to Windows 11 clipboard history
 - **Content type indicators**: Icons for text, URLs, code, files, etc.
 - **Rich previews**: Formatted content display with truncation
-- **Time stamps**: When each item was copied
-- **Quick selection**: Click any item to copy it back to clipboard
+- **Timestamps**: When each item was copied
+- **Quick selection**: Click any item to copy it back to the clipboard
 
 ### 🖱️ **Advanced Wayland Integration**
 - **Layer Shell Protocol**: Proper overlay positioning above all windows
@@ -39,8 +39,8 @@ Features a Windows 11-style clipboard history interface with native GNOME design
 
 ## Compositor Support
    - The backend uses `zwlr_data_control_manager_v1` to automatically monitor and set clipboard content.
-   - The frontend uses `zwlr_layer_shell_v1` for retrieving pointer coordinates and showing the overlay.
-   - Supported Compositors (need to support both protocols):
+   - The frontend uses `zwlr_layer_shell_v1` to retrieve pointer coordinates and show the overlay.
+   - Supported compositors (must support both protocols):
      - KDE Plasma (Wayland session)
      - Hyprland
      - Sway
@@ -85,13 +85,13 @@ cargo build --release
 
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Launch Overlay**: Run `cursor-clip` without any arguments (best bind to a hotkey Super+V)
-3. **Trigger**: Your Mouse position is automatically grabbed
-4. **View History**: The clipboard history window will appear at your cursor position showing:
+2. **Launch Overlay**: Run `cursor-clip` without any arguments (ideally bind it to a hotkey, e.g., Super+V)
+3. **Trigger**: Your mouse position is automatically captured
+4. **View History**: The clipboard history window will appear at your cursor position, showing:
    - **Recent clipboard items** with content previews
    - **Content type icons** (text, URL, code, password, file)
    - **Timestamps** showing when items were copied
-   - **Quick actions**: Clear All and Close buttons
+   - **Quick actions**: Clear All and Close
 5. **Interact**: 
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
@@ -99,7 +99,7 @@ cargo build --release
    - **Keyboard navigation**: Use arrow keys or J/K to navigate, Enter to select, Esc to close
 
 
-## Architecture
+## Key Components
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -117,7 +117,7 @@ cargo build --release
 ├─────────────────────────────────────────────────┤
 │  Clipboard Management                           │
 │  ├── Data Control Manager for privileged access │
-│  ├── IPC communication via Unix Domain Sockets  │
+│  ├── IPC communication via UNIX domain sockets  │
 │  └── IndexMap for clipboard history storage     │
 └─────────────────────────────────────────────────┘
 ```
@@ -131,7 +131,7 @@ cargo build --release
 - **wayland-client** (0.31): Wayland protocol bindings
 - **wayland-protocols** (0.32): Extended Wayland protocols
 - **wayland-protocols-wlr** (0.3.9): wlroots-specific Wayland protocols
-- **tokio-runtime** (1.47): Asynchronous runtime
+- **Tokio runtime** (1.47): Asynchronous runtime
 - **serde** (1.0): Serialization framework
 - **indexmap** (2.11): Ordered map for clipboard history
 - **env_logger** (0.11): Logging framework
