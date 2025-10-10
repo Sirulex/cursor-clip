@@ -5,7 +5,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 
 ## Features
 
-<img src="Overlay-Preview.png" alt="Overlay Preview" align="right" width="400" />
+<img src="https://github.com/user-attachments/assets/604896e7-b48e-4851-a9f4-1f06f32ab9c2" width="400" alt="Overlay Preview" align="right" />
 
 <div style="margin-right: 400px;">
 
@@ -36,6 +36,17 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
   - 🖼️ Images
 
 </div>
+
+### 🎥 **Video Showcase**
+<details>
+   <summary><strong>(click to expand)</strong></summary>
+
+   <br>
+   <video src="https://github.com/user-attachments/assets/387c6441-fa6f-4d63-bea8-96d0eece85ee" >
+      Your browser does not support the video tag. You can watch it here:
+      <a href="https://github.com/user-attachments/assets/387c6441-fa6f-4d63-bea8-96d0eece85ee">Video link</a>.
+   </video>
+</details>
 
 ## Compositor Support
    - The backend uses `zwlr_data_control_manager_v1` to automatically monitor and set clipboard content.
