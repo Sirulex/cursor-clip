@@ -132,15 +132,6 @@ fn create_layer_shell_window(
     let key_controller = generate_key_controller(&list_box);
     window.add_controller(key_controller);
 
-    // Add focus-out handler to close when clicking outside
-    window.connect_is_active_notify(|window| {
-        println!("inside GTK window focus handler (checking outside)");
-        if !window.is_active() {
-            println!("GTK window lost focus - closing both overlay and capture layer");
-            request_quit();
-        }
-    });
-
     // Add close request handler to ensure any window close goes through our logic
     window.connect_close_request(|_window| {
         println!("Window close requested - ensuring both overlay and capture layer close");
@@ -164,6 +155,14 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
     // Use standard end title buttons (includes the normal close button with Adwaita styling)
     header_bar.set_show_end_title_buttons(true);
     header_bar.set_show_start_title_buttons(false);
+    
+    // Add a three-dot menu button (icon-only) next to the close button on the right
+    let three_dot_menu = Button::builder()
+        .icon_name("view-more-symbolic")
+        .build();
+    three_dot_menu.add_css_class("flat");
+    three_dot_menu.set_tooltip_text(Some("Test Hide and Show overlay"));
+    header_bar.pack_end(&three_dot_menu);
     
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
@@ -246,6 +245,14 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
     main_box.append(&scrolled_window);
 
     // Connect button signals
+    // When the three-dot menu button is clicked: hide overlay, wait 0s, then show overlay again
+    three_dot_menu.connect_clicked(move |_| {
+        hide_overlay();
+        gtk4::glib::timeout_add_seconds_local(0, || {
+            show_overlay();
+            gtk4::glib::ControlFlow::Break
+        });
+    });
     clear_button.connect_clicked(move |_| {
     match FrontendClient::new() {
             Ok(mut client) => {
