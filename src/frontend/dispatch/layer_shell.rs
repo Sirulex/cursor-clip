@@ -26,11 +26,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 layer_surface.ack_configure(serial);
                 debug!("Layer surface configured: {}x{}", width, height);
 
-                // Ensure we have the necessary objects
-                let Some(_manager) = &state.single_pixel_buffer_manager else {
-                    return;
-                };
-
                 let Some(capture_surface) = &state.capture_surface else {
                     return;
                 };
@@ -126,6 +121,16 @@ pub fn cleanup_capture_layer(state: &mut State) {
     if let Some(buffer) = state.transparent_buffer.take() {
         buffer.destroy();
         debug!("Transparent buffer destroyed");
+    }
+
+    // Destroy SHM pool if it was used (after buffer is gone)
+    if let Some(pool) = state.shm_pool.take() {
+        pool.destroy();
+        debug!("SHM pool destroyed");
+    }
+    // Drop SHM file handle if present
+    if state.shm_file.take().is_some() {
+        debug!("SHM file dropped");
     }
 
     state.capture_layer_clicked = false;

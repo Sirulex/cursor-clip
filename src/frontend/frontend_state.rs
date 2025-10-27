@@ -1,6 +1,7 @@
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_pointer, wl_seat, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_pointer, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
+use std::fs::File;
 
 use wayland_protocols_wlr::{
     layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
@@ -22,6 +23,9 @@ pub struct State {
     pub seat: Option<wl_seat::WlSeat>,
     pub single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
+    pub shm: Option<wl_shm::WlShm>,
+    pub shm_pool: Option<wl_shm_pool::WlShmPool>,
+    pub shm_file: Option<File>,
     pub coords_received: bool,
     pub received_x: f64,
     pub received_y: f64,
@@ -46,6 +50,9 @@ impl State {
             seat: None,
             single_pixel_buffer_manager: None,
             viewporter: None,
+            shm: None,
+            shm_pool: None,
+            shm_file: None,
             coords_received: false,
             received_x: 0.0,
             received_y: 0.0,

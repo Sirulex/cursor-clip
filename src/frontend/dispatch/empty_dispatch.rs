@@ -9,6 +9,8 @@ use wayland_client::protocol::{
     wl_region::WlRegion,
     wl_buffer::WlBuffer,
     wl_registry::WlRegistry,
+    wl_shm::WlShm,
+    wl_shm_pool::WlShmPool,
 };
 
 // WLR layer shell
@@ -30,9 +32,11 @@ delegate_noop!(State: WpViewporter);
 delegate_noop!(State: WpViewport);
 delegate_noop!(State: WpSinglePixelBufferManagerV1);
 
-//ignore Keyword as WlBuffer emits a Release event
+//ignore Keyword as objects emit a Release event
 //without ignore delegate_noop! macro would panic (unreachable) when an actual event arrives.
 delegate_noop!(State: ignore WlBuffer);
+delegate_noop!(State: ignore WlShmPool);
+delegate_noop!(State: ignore WlShm);
 
 //-------------------------------------------------------------------------------
 // Manual Dispatch implementations for specific interfaces needing custom logic
