@@ -102,7 +102,11 @@ fn init_wayland_protocols(
     {
         state.compositor = Some(compositor);
     } else {
-        return Err("wl_compositor not available".into());
+        let msg = "Critical Wayland global object (interface) 'wl_compositor' is not available. \
+        Your compositor did not advertise wl_compositor (v4-5), so we cannot create the surfaces required for the overlay. \
+        Frontend cannot start, exiting.";
+        error!("{msg}");
+        std::process::exit(1);
     }
 
     // Bind zwlr_layer_shell_v1
@@ -111,14 +115,22 @@ fn init_wayland_protocols(
     {
         state.layer_shell = Some(layer_shell);
     } else {
-        return Err("zwlr_layer_shell_v1 not available".into());
+        let msg = "Critical Wayland global object (interface) 'zwlr_layer_shell_v1' is not available. \
+        Your current compositor likely does not support the wlr-layer-shell protocol (probably running GNOME). \
+        Clipboard monitoring cannot function without it, exiting.";
+        error!("{msg}");
+        std::process::exit(1);
     }
 
     // Bind wl_seat
     if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&queue.handle(), 1..=1, ()) {
         state.seat = Some(seat);
     } else {
-        return Err("wl_seat not available".into());
+        let msg = "Critical Wayland interface 'wl_seat' is not available. \
+        An input seat is required to receive pointer events for capture surface interactions. \
+        Frontend cannot start, exiting.";
+        error!("{msg}");
+        std::process::exit(1);
     }
 
     // Bind wp_viewporter
@@ -138,7 +150,13 @@ fn init_wayland_protocols(
     {
         state.single_pixel_buffer_manager = Some(single_pixel_buffer_manager);
     } else {
-        debug!("wp_single_pixel_buffer_manager_v1 not available");
+        // We rely on SPBM to create solid-color, GPU-friendly buffers without SHM.
+        // The rest of the code expects it to exist; fail fast with a clear message.
+        let msg = "Required Wayland extension 'wp_single_pixel_buffer_manager_v1' is not available. \
+        We use it to create solid-color buffers for the overlay surfaces without SHM. \
+        Frontend cannot start, exiting.";
+        error!("{msg}");
+        std::process::exit(1);
     }
 
     Ok(())
