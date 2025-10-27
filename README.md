@@ -54,6 +54,8 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
      - Labwc
      - Other wlroots-based compositors
 
+   - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and `zwlr_data_control_manager_v1`) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension. 
+
 ### System Requirements
 - **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
 
@@ -82,7 +84,7 @@ sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
 
 ```bash
 # Clone the repository
-git clone https://gitlab.com/Sirulex/cursor-clip
+git clone https://github.com/Sirulex/cursor-clip
 cd cursor-clip
 
 # Build in release mode

@@ -55,10 +55,16 @@ impl WaylandClipboardMonitor {
             let mut state = self.backend_state.lock().unwrap();
             state.seat = Some(seat);
         } else {
-            return Err("wl_seat not available".into());
+            // `wl_seat` is a core Wayland interface needed to create a data device for clipboard monitoring.
+            // Without it, we cannot function. Exit with a clear explanation.
+            let msg = "Critical Wayland interface 'wl_seat' is not available. \
+            Your current compositor/session did not expose an input seat, which is required to create a data device for clipboard access. \
+            Clipboard monitoring cannot start, exiting.";
+            error!("{msg}");
+            std::process::exit(1);
         }
 
-        // Bind data control manager  
+        // Bind data control manager
         if let Ok(data_control_manager) = globals.bind::<wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
             let mut state = self.backend_state.lock().unwrap();
             state.data_control_manager = Some(data_control_manager.clone());
@@ -70,7 +76,13 @@ impl WaylandClipboardMonitor {
             }
             
         } else {
-            return Err("zwlr_data_control_manager_v1 not available".into());
+            // Critical Wayland interface missing: this compositor does not support wlr-data-control v1.
+            // Clipboard monitoring cannot function without it, so terminate the program.
+            let msg = "Critical Wayland global object (interface) 'zwlr_data_control_manager_v1' is not available. \
+            Your current compositor likely does not support the wlr-data-control protocol (probably running GNOME). \
+            Clipboard monitoring cannot function without it, exiting.";
+            error!("{msg}");
+            std::process::exit(1);
         }
 
         info!("Wayland clipboard monitor initialized, monitoring changes...");
