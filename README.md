@@ -84,7 +84,7 @@ sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
 
 ```bash
 # Clone the repository
-git clone https://gitlab.com/Sirulex/cursor-clip
+git clone https://github.com/Sirulex/cursor-clip
 cd cursor-clip
 
 # Build in release mode
