@@ -59,7 +59,14 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 ### System Requirements
 - **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
 
-## Building
+## Installation on Arch Linux based distributions via AUR
+You can install Cursor Clip from the AUR using an AUR helper like `yay`:
+```bash
+yay -S cursor-clip-git
+```
+
+
+## Manual Building
 
 ### Install Dependencies
 
@@ -146,6 +153,11 @@ cargo build --release
 ---
 
 **Built with ❤️ using Rust, GTK4, Libadwaita, and Wayland Layer Shell**
+
+## Support
+If you find this project useful and would like to support its development, consider sponsoring me on GitHub or Ko-fi. Your support helps me dedicate more time to improving and maintaining Cursor Clip.
+- GitHub Sponsors: https://github.com/sponsors/Sirulex
+- Ko-fi: https://ko-fi.com/sirulex
 
 ## License
 
