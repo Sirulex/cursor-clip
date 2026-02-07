@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::os::unix::fs::PermissionsExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -6,15 +7,20 @@ use crate::shared::{BackendMessage, FrontendMessage};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 use super::backend_state::BackendState;
 use log::{info, error};
-use bytes::Bytes;
 
-pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> { 
+pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Remove existing socket if it exists
     let socket_path = "/tmp/cursor-clip.sock";
     let _ = std::fs::remove_file(socket_path);
 
     // Create Unix socket for IPC
     let listener = UnixListener::bind(socket_path)?;
+
+    // Set socket permissions to allow all users to connect (666)
+    // This is needed because the daemon may run with different privileges than the frontend
+    let perms = std::fs::Permissions::from_mode(0o666);
+    std::fs::set_permissions(socket_path, perms)?;
+
     info!("Clipboard backend listening on {socket_path}");
 
     let state = Arc::new(Mutex::new(BackendState::new()));

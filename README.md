@@ -44,17 +44,17 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
    </video>
 
 ## Compositor Support
-   - The backend uses `zwlr_data_control_manager_v1` to automatically monitor and set clipboard content.
+   - The backend supports both `zwlr_data_control_manager_v1` (wlroots) and `ext_data_control_manager_v1` (standard) protocols for clipboard access, automatically selecting the available protocol.
    - The frontend uses `zwlr_layer_shell_v1` to retrieve pointer coordinates and show the overlay.
-   - Supported compositors (must support both protocols):
-     - KDE Plasma (Wayland session)
-     - Hyprland
-     - Sway
-     - niri
-     - Labwc
-     - Other wlroots-based compositors
+   - Supported compositors:
+     - **KDE Plasma 6** (Wayland session) - uses `ext_data_control_manager_v1`
+     - **Hyprland** - uses `zwlr_data_control_manager_v1`
+     - **Sway** - uses `zwlr_data_control_manager_v1`
+     - **niri** - uses `zwlr_data_control_manager_v1`
+     - **Labwc** - uses `zwlr_data_control_manager_v1`
+     - **Other wlroots-based compositors** - uses `zwlr_data_control_manager_v1`
 
-   - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and `zwlr_data_control_manager_v1`) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension. 
+   - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and clipboard access protocols) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension. 
 
 ### System Requirements
 - **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**

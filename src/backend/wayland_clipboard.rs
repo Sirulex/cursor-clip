@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle};
-use wayland_client::globals::{GlobalList, registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_registry};
 use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
@@ -9,9 +9,10 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
-use std::sync::Arc as StdArc; // for event_created_child return type clarity
+use std::sync::Arc as StdArc;
 
-use super::backend_state::BackendState;
+use crate::backend::backend_state::{BackendState, DataControlProtocol};
+use crate::backend::ext_data_control;
 use indexmap::IndexMap;
 use bytes::Bytes;
 use log::{info, debug, warn, error};
@@ -55,8 +56,6 @@ impl WaylandClipboardMonitor {
             let mut state = self.backend_state.lock().unwrap();
             state.seat = Some(seat);
         } else {
-            // `wl_seat` is a core Wayland interface needed to create a data device for clipboard monitoring.
-            // Without it, we cannot function. Exit with a clear explanation.
             let msg = "Critical Wayland interface 'wl_seat' is not available. \
             Your current compositor/session did not expose an input seat, which is required to create a data device for clipboard access. \
             Clipboard monitoring cannot start, exiting.";
@@ -64,22 +63,24 @@ impl WaylandClipboardMonitor {
             std::process::exit(1);
         }
 
-        // Bind data control manager
-        if let Ok(data_control_manager) = globals.bind::<wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
-            let mut state = self.backend_state.lock().unwrap();
-            state.data_control_manager = Some(data_control_manager.clone());
-            
-            // Create device now that we have seat
-            if let Some(seat) = &state.seat {
-                let device = data_control_manager.get_data_device(seat, &qh, ());
-                state.data_control_device = Some(device);
-            }
-            
+        // Try wlroots data control manager first
+        let wlr_available = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()).is_ok();
+
+        // Try ext data control manager
+        let ext_available = globals.bind::<ext_data_control::ExtDataControlManagerV1, _, _>(&qh, 1..=1, ()).is_ok();
+
+        info!("Available data control protocols - wlroots: {}, ext: {}", wlr_available, ext_available);
+
+        if wlr_available {
+            // Use wlroots protocol
+            self.bind_wlr_protocol(&globals, &qh)?;
+        } else if ext_available {
+            // Use ext (standard) protocol
+            self.bind_ext_protocol(&globals, &qh)?;
         } else {
-            // Critical Wayland interface missing: this compositor does not support wlr-data-control v1.
-            // Clipboard monitoring cannot function without it, so terminate the program.
-            let msg = "Critical Wayland global object (interface) 'zwlr_data_control_manager_v1' is not available. \
-            Your current compositor likely does not support the wlr-data-control protocol (probably running GNOME). \
+            let msg = "No supported data control protocol available. \
+            Tried both 'zwlr_data_control_manager_v1' (wlroots) and 'ext_data_control_manager_v1' (standard). \
+            Your compositor likely does not support clipboard access via these protocols. \
             Clipboard monitoring cannot function without it, exiting.";
             error!("{msg}");
             std::process::exit(1);
@@ -93,11 +94,50 @@ impl WaylandClipboardMonitor {
                 .map_err(|e| format!("Failed to dispatch events: {e}"))?;
         }
     }
+
+    fn bind_wlr_protocol(&self, globals: &GlobalList, qh: &QueueHandle<MutexBackendState>) -> Result<(), String> {
+        let data_control_manager = globals
+            .bind::<ZwlrDataControlManagerV1, _, _>(qh, 2..=2, ())
+            .map_err(|_| "Failed to bind wlroots data control manager".to_string())?;
+
+        let mut state = self.backend_state.lock().unwrap();
+        state.active_protocol = Some(DataControlProtocol::Wlr);
+        state.data_control_manager = Some(data_control_manager.clone());
+
+        // Create device now that we have seat
+        if let Some(seat) = &state.seat {
+            let device = data_control_manager.get_data_device(seat, qh, ());
+            state.data_control_device = Some(device);
+        }
+
+        info!("Using wlroots data control protocol (zwlr_data_control_manager_v1)");
+        Ok(())
+    }
+
+    fn bind_ext_protocol(&self, globals: &GlobalList, qh: &QueueHandle<MutexBackendState>) -> Result<(), String> {
+        let data_control_manager = globals
+            .bind::<ext_data_control::ExtDataControlManagerV1, _, _>(qh, 1..=1, ())
+            .map_err(|_| "Failed to bind ext data control manager".to_string())?;
+
+        let mut state = self.backend_state.lock().unwrap();
+        state.active_protocol = Some(DataControlProtocol::Ext);
+        state.ext_data_control_manager = Some(data_control_manager.clone());
+
+        // Create device now that we have seat
+        if let Some(seat) = &state.seat {
+            let device = data_control_manager.get_data_device(seat, qh, ());
+            state.ext_data_control_device = Some(device);
+        }
+
+        info!("Using standard data control protocol (ext_data_control_manager_v1)");
+        Ok(())
+    }
 }
 
 impl Drop for WaylandClipboardMonitor {
     fn drop(&mut self) {
         if let Ok(mut state) = self.backend_state.lock() {
+            // Clean up wlroots objects
             if let Some(dev) = state.data_control_device.take() {
                 dev.destroy();
             }
@@ -107,7 +147,19 @@ impl Drop for WaylandClipboardMonitor {
             if let Some(mgr) = state.data_control_manager.take() {
                 mgr.destroy();
             }
-            state.seat.take(); // wl_seat proxies auto-drop; no explicit destroy
+
+            // Clean up ext objects
+            if let Some(dev) = state.ext_data_control_device.take() {
+                dev.destroy();
+            }
+            if let Some(src) = state.ext_current_source_object.take() {
+                src.destroy();
+            }
+            if let Some(mgr) = state.ext_data_control_manager.take() {
+                mgr.destroy();
+            }
+
+            state.seat.take();
             if let Some(conn) = &state.connection {
                 let _ = conn.flush();
             }
@@ -115,7 +167,7 @@ impl Drop for WaylandClipboardMonitor {
     }
 }
 
-// ================= Dispatch Implementations =================
+// ================= Dispatch Implementations for wlroots =================
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
     fn event(
@@ -127,17 +179,22 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
         _qh: &QueueHandle<Self>,
     ) {
         let mut state = wrapper.backend_state.lock().unwrap();
-        
+
+        // Only process if we're using wlroots protocol
+        if state.active_protocol != Some(DataControlProtocol::Wlr) {
+            return;
+        }
+
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
                 let object_id = id.id();
-                debug!("New data offer received with ID: {object_id:?}");
+                debug!("New data offer received with ID: {:?}", object_id);
                 state.mime_type_offers.insert(object_id, Vec::new());
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
                 if let Some(offer_id) = id {
                     let offer_key = offer_id.id();
-                    debug!("Selection changed to offer ID: {offer_key:?}");
+                    debug!("Selection changed to offer ID: {:?}", offer_key);
 
                     let already_current = state.current_data_offer.as_ref().is_some_and(|o| o == &offer_key);
                     if let Some(mime_list) = state.mime_type_offers.get(&offer_key).cloned() {
@@ -148,11 +205,9 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                             offer_id.destroy();
                         } else if !already_current {
                             state.current_data_offer = Some(offer_key);
-                            process_all_data_formats(&offer_id, mime_list, conn, &mut state);
-                            //remove old offer entries and their corresponding MIME types as new ones will be generated for future selections
+                            process_all_data_formats_wlr(&offer_id, mime_list, conn, &mut state);
                             state.mime_type_offers.clear();
                             offer_id.destroy();
-
                         }
                     }
                 } else {
@@ -205,13 +260,13 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
     fn event(
         wrapper: &mut Self,
         event_source: &ZwlrDataControlSourceV1,
-        event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
+        event: zwlr_data_control_source_v1::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         let mut state = wrapper.backend_state.lock().unwrap();
-        
+
         match event {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
                 debug!("Data source Send event for MIME type: {mime_type}");
@@ -239,8 +294,6 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
             }
             zwlr_data_control_source_v1::Event::Cancelled => {
                 debug!("Data source cancelled. Last offered content (object id {:?})", event_source.id());
-                //Re-enabled reading new selections if currently active selection is cancelled, therefore external client took over 
-                //if the cancelled event is not for the currently active selection, it was our previous selection -> new entry chosen within clipboard manager
                 if state.current_source_object.as_ref().map(Proxy::id) == Some(event_source.id()) {
                     state.suppress_next_selection_read = false;
                     state.current_source_object = None;
@@ -274,7 +327,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState
 
 // ================= Helper functions =================
 
-/// Create a pipe for reading clipboard data, returning `OwnedFd` handles.
 fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dyn std::error::Error>> {
     use std::os::fd::FromRawFd;
     let mut fds = [0; 2];
@@ -286,7 +338,7 @@ fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dy
     Ok((reader, writer))
 }
 
-fn process_all_data_formats(
+fn process_all_data_formats_wlr(
     data_offer: &ZwlrDataControlOfferV1,
     mime_types: Vec<String>,
     conn: &Connection,
@@ -306,10 +358,9 @@ fn process_all_data_formats(
         };
         debug!("Requesting {mime} content...");
         data_offer.receive(mime.clone(), writer_fd.as_fd());
-        // Drop writer side so the provider gets EOF after writing
         drop(writer_fd);
         if let Err(e) = conn.flush() { warn!("Flush failed: {e}"); }
-        // Convert OwnedFd to File for reading
+
         let mut reader_file = std::fs::File::from(reader_fd);
         let mut buf = Vec::new();
         match reader_file.read_to_end(&mut buf) {
@@ -322,7 +373,6 @@ fn process_all_data_formats(
 
     if !mime_map.is_empty() {
         if let Some(new_id) = backend_state.add_clipboard_item_from_mime_map(mime_map) {
-            // Only take ownership if we're NOT in monitor-only mode
             if !backend_state.monitor_only && !backend_state.suppress_next_selection_read {
                 if let Err(e) = backend_state.set_clipboard_by_id(new_id) {
                     warn!("Failed to take ownership of selection id {new_id}: {e}");
@@ -333,5 +383,3 @@ fn process_all_data_formats(
         }
     }
 }
-
-
