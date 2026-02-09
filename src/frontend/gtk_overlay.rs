@@ -15,21 +15,11 @@ use log::{info, debug, warn, error};
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
-pub static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
     static OVERLAY_WINDOW: RefCell<Option<adw::ApplicationWindow>> = const { RefCell::new(None) };
     static OVERLAY_APP: RefCell<Option<Application>> = const { RefCell::new(None) };
-    static OVERLAY_GEOMETRY: RefCell<Option<OverlayGeometry>> = const { RefCell::new(None) };
-}
-
-#[derive(Debug, Copy, Clone)]
-struct OverlayGeometry {
-    x: f64,
-    y: f64,
-    width: i32,
-    height: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,20 +79,6 @@ pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
 }
 
-pub fn is_menu_open() -> bool {
-    MENU_OPEN.load(Ordering::Relaxed)
-}
-
-pub fn is_point_inside_overlay(x: f64, y: f64) -> bool {
-    OVERLAY_GEOMETRY.with(|geom| {
-        if let Some(geo) = *geom.borrow() {
-            let within_x = x >= geo.x && x <= geo.x + geo.width as f64;
-            let within_y = y >= geo.y && y <= geo.y + geo.height as f64;
-            return within_x && within_y;
-        }
-        false
-    })
-}
 
 // Centralized quit path to avoid double-close reentrancy and ensure flags + app quit
 fn request_quit() {
@@ -199,15 +175,6 @@ fn create_layer_shell_window(
     // Make window keyboard interactive
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::Exclusive);
 
-    OVERLAY_GEOMETRY.with(|geom| {
-        *geom.borrow_mut() = Some(OverlayGeometry {
-            x,
-            y,
-            width: 0,
-            height: 0,
-        });
-    });
-
 
     // Apply custom styling
     apply_custom_styling(&window);
@@ -238,21 +205,6 @@ fn generate_overlay_content(
 ) -> (Box, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
-    main_box.add_tick_callback(|widget, _| {
-        let allocation = widget.allocation();
-        OVERLAY_GEOMETRY.with(|geom| {
-            let mut current = geom.borrow_mut();
-            if let Some(existing) = *current {
-                *current = Some(OverlayGeometry {
-                    x: existing.x,
-                    y: existing.y,
-                    width: allocation.width(),
-                    height: allocation.height(),
-                });
-            }
-        });
-        gtk4::glib::ControlFlow::Continue
-    });
 
     // Header bar 
     let header_bar = adw::HeaderBar::new();
@@ -400,7 +352,6 @@ fn generate_overlay_content(
     three_dot_menu.connect_clicked(move |_| {
         let next_state = !menu_revealer_toggle.is_child_revealed();
         menu_revealer_toggle.set_reveal_child(next_state);
-        MENU_OPEN.store(next_state, Ordering::Relaxed);
     });
 
     // Connect button signals
