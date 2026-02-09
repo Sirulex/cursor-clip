@@ -1,22 +1,84 @@
 use gtk4::prelude::*;
-use gtk4::{Application, Button, Label, Box, Orientation, Align};
+use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, MenuButton, Popover};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::path::PathBuf;
+use std::fs;
+use serde::{Deserialize, Serialize};
 use crate::shared::{ClipboardItemPreview, ClipboardContentType};
 use crate::frontend::ipc_client::FrontendClient;
 use log::{info, debug, warn, error};
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+pub static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
     static OVERLAY_WINDOW: RefCell<Option<adw::ApplicationWindow>> = const { RefCell::new(None) };
     static OVERLAY_APP: RefCell<Option<Application>> = const { RefCell::new(None) };
+    static OVERLAY_GEOMETRY: RefCell<Option<OverlayGeometry>> = const { RefCell::new(None) };
+}
+
+#[derive(Debug, Copy, Clone)]
+struct OverlayGeometry {
+    x: f64,
+    y: f64,
+    width: i32,
+    height: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserConfig {
+    show_trash: bool,
+}
+
+impl Default for UserConfig {
+    fn default() -> Self {
+        Self { show_trash: true }
+    }
+}
+
+fn config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".config")
+        .join("cursor-clip")
+        .join("config.toml")
+}
+
+fn load_or_create_config() -> UserConfig {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            warn!("Failed to create config directory: {}", e);
+        }
+    }
+
+    if let Ok(contents) = fs::read_to_string(&path) {
+        if let Ok(config) = toml::from_str::<UserConfig>(&contents) {
+            return config;
+        }
+    }
+
+    let config = UserConfig::default();
+    if let Err(e) = save_config(&config) {
+        warn!("Failed to write default config: {}", e);
+    }
+    config
+}
+
+fn save_config(config: &UserConfig) -> Result<(), std::io::Error> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contents = toml::to_string_pretty(config).unwrap_or_else(|_| "show_trash = true\n".to_string());
+    fs::write(path, contents)
 }
 
 pub fn is_close_requested() -> bool {
@@ -25,6 +87,21 @@ pub fn is_close_requested() -> bool {
 
 pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
+}
+
+pub fn is_menu_open() -> bool {
+    MENU_OPEN.load(Ordering::Relaxed)
+}
+
+pub fn is_point_inside_overlay(x: f64, y: f64) -> bool {
+    OVERLAY_GEOMETRY.with(|geom| {
+        if let Some(geo) = *geom.borrow() {
+            let within_x = x >= geo.x && x <= geo.x + geo.width as f64;
+            let within_y = y >= geo.y && y <= geo.y + geo.height as f64;
+            return within_x && within_y;
+        }
+        false
+    })
 }
 
 // Centralized quit path to avoid double-close reentrancy and ensure flags + app quit
@@ -122,6 +199,16 @@ fn create_layer_shell_window(
     // Make window keyboard interactive
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::Exclusive);
 
+    OVERLAY_GEOMETRY.with(|geom| {
+        *geom.borrow_mut() = Some(OverlayGeometry {
+            x,
+            y,
+            width: 0,
+            height: 0,
+        });
+    });
+
+
     // Apply custom styling
     apply_custom_styling(&window);
 
@@ -151,6 +238,20 @@ fn generate_overlay_content(
 ) -> (Box, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
+    main_box.connect_realize(|widget| {
+        let allocation = widget.allocation();
+        OVERLAY_GEOMETRY.with(|geom| {
+            let mut current = geom.borrow_mut();
+            if let Some(existing) = *current {
+                *current = Some(OverlayGeometry {
+                    x: existing.x,
+                    y: existing.y,
+                    width: allocation.width(),
+                    height: allocation.height(),
+                });
+            }
+        });
+    });
 
     // Header bar 
     let header_bar = adw::HeaderBar::new();
@@ -159,12 +260,37 @@ fn generate_overlay_content(
     header_bar.set_show_end_title_buttons(true);
     header_bar.set_show_start_title_buttons(false);
     
+    let config_state = Rc::new(RefCell::new(load_or_create_config()));
+    let show_trash_default = config_state.borrow().show_trash;
+
     // Add a three-dot menu button (icon-only) next to the close button on the right
-    let three_dot_menu = Button::builder()
+    let three_dot_menu = MenuButton::builder()
         .icon_name("view-more-symbolic")
         .build();
     three_dot_menu.add_css_class("flat");
-    three_dot_menu.set_tooltip_text(Some("Test Hide and Show overlay"));
+    three_dot_menu.set_tooltip_text(Some("Options"));
+
+    let menu_popover = Popover::new();
+    menu_popover.connect_visible_notify(|popover| {
+        MENU_OPEN.store(popover.is_visible(), Ordering::Relaxed);
+    });
+    let menu_box = Box::new(Orientation::Vertical, 8);
+    menu_box.set_margin_top(8);
+    menu_box.set_margin_bottom(8);
+    menu_box.set_margin_start(10);
+    menu_box.set_margin_end(10);
+
+    let toggle_row = Box::new(Orientation::Horizontal, 8);
+    let toggle_label = Label::new(Some("Show delete button"));
+    toggle_label.set_halign(Align::Start);
+    toggle_label.set_hexpand(true);
+    let toggle_check = CheckButton::new();
+    toggle_check.set_active(show_trash_default);
+    toggle_row.append(&toggle_label);
+    toggle_row.append(&toggle_check);
+    menu_box.append(&toggle_row);
+    menu_popover.set_child(Some(&menu_box));
+    three_dot_menu.set_popover(Some(&menu_popover));
     header_bar.pack_end(&three_dot_menu);
     
     // Add clear all button to header
@@ -208,7 +334,12 @@ fn generate_overlay_content(
     {
         let items = items_state.borrow();
         for item in items.iter() {
-            let row = generate_listboxrow_from_preview(item, &list_box, &items_state);
+            let row = generate_listboxrow_from_preview(
+                item,
+                &list_box,
+                &items_state,
+                show_trash_default,
+            );
             list_box.append(&row);
         }
     }
@@ -247,15 +378,23 @@ fn generate_overlay_content(
     scrolled_window.set_child(Some(&list_box));
     main_box.append(&scrolled_window);
 
-    // Connect button signals
-    // When the three-dot menu button is clicked: hide overlay, wait 0s, then show overlay again
-    three_dot_menu.connect_clicked(move |_| {
-        hide_overlay();
-        gtk4::glib::timeout_add_seconds_local(0, || {
-            show_overlay();
-            gtk4::glib::ControlFlow::Break
-        });
+    set_delete_buttons_visible(&list_box, show_trash_default);
+
+    let list_box_for_toggle = list_box.clone();
+    let config_for_toggle = config_state.clone();
+    toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        {
+            let mut config = config_for_toggle.borrow_mut();
+            config.show_trash = state;
+            if let Err(e) = save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+        }
+        set_delete_buttons_visible(&list_box_for_toggle, state);
     });
+
+    // Connect button signals
     clear_button.connect_clicked(move |_| {
     match FrontendClient::new() {
             Ok(mut client) => {
@@ -466,6 +605,7 @@ fn generate_listboxrow_from_preview(
     item: &ClipboardItemPreview,
     list_box: &gtk4::ListBox,
     items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    show_trash: bool,
 ) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
@@ -499,6 +639,7 @@ fn generate_listboxrow_from_preview(
     delete_button.add_css_class("destructive-action");
     delete_button.add_css_class("clipboard-delete");
     delete_button.set_tooltip_text(Some("Delete item"));
+    delete_button.set_visible(show_trash);
 
     header_box.append(&type_label);
     header_box.append(&type_text);
@@ -569,6 +710,30 @@ fn make_placeholder_row() -> gtk4::ListBoxRow {
     placeholder_row.set_selectable(false);
     placeholder_row.set_activatable(false);
     placeholder_row
+}
+
+fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
+    let mut child = list_box.first_child();
+    while let Some(widget) = child {
+        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>() {
+            if let Some(delete_button) = find_delete_button_in_row(&row) {
+                delete_button.set_visible(visible);
+            }
+        }
+        child = widget.next_sibling();
+    }
+}
+
+fn find_delete_button_in_row(row: &gtk4::ListBoxRow) -> Option<gtk4::Button> {
+    let main_box = row.child()?.downcast::<gtk4::Box>().ok()?;
+    let header_box = main_box.first_child()?.downcast::<gtk4::Box>().ok()?;
+    let delete_widget = header_box.last_child()?;
+    let delete_button = delete_widget.downcast::<gtk4::Button>().ok()?;
+    if delete_button.has_css_class("clipboard-delete") {
+        Some(delete_button)
+    } else {
+        None
+    }
 }
 
 /// Format Unix timestamp to relative time string
