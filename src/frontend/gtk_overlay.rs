@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, MenuButton, Popover};
+use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, Revealer};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
@@ -238,7 +238,7 @@ fn generate_overlay_content(
 ) -> (Box, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
-    main_box.connect_realize(|widget| {
+    main_box.add_tick_callback(|widget, _| {
         let allocation = widget.allocation();
         OVERLAY_GEOMETRY.with(|geom| {
             let mut current = geom.borrow_mut();
@@ -251,6 +251,7 @@ fn generate_overlay_content(
                 });
             }
         });
+        gtk4::glib::ControlFlow::Continue
     });
 
     // Header bar 
@@ -264,16 +265,17 @@ fn generate_overlay_content(
     let show_trash_default = config_state.borrow().show_trash;
 
     // Add a three-dot menu button (icon-only) next to the close button on the right
-    let three_dot_menu = MenuButton::builder()
+    let three_dot_menu = Button::builder()
         .icon_name("view-more-symbolic")
         .build();
     three_dot_menu.add_css_class("flat");
     three_dot_menu.set_tooltip_text(Some("Options"));
 
-    let menu_popover = Popover::new();
-    menu_popover.connect_visible_notify(|popover| {
-        MENU_OPEN.store(popover.is_visible(), Ordering::Relaxed);
-    });
+    let menu_revealer = Revealer::new();
+    menu_revealer.set_reveal_child(false);
+    menu_revealer.set_transition_duration(120);
+    menu_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
+
     let menu_box = Box::new(Orientation::Vertical, 8);
     menu_box.set_margin_top(8);
     menu_box.set_margin_bottom(8);
@@ -289,8 +291,7 @@ fn generate_overlay_content(
     toggle_row.append(&toggle_label);
     toggle_row.append(&toggle_check);
     menu_box.append(&toggle_row);
-    menu_popover.set_child(Some(&menu_box));
-    three_dot_menu.set_popover(Some(&menu_popover));
+    menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&three_dot_menu);
     
     // Add clear all button to header
@@ -299,6 +300,7 @@ fn generate_overlay_content(
     header_bar.pack_start(&clear_button);
 
     main_box.append(&header_bar);
+    main_box.append(&menu_revealer);
 
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
@@ -392,6 +394,13 @@ fn generate_overlay_content(
             }
         }
         set_delete_buttons_visible(&list_box_for_toggle, state);
+    });
+
+    let menu_revealer_toggle = menu_revealer.clone();
+    three_dot_menu.connect_clicked(move |_| {
+        let next_state = !menu_revealer_toggle.is_child_revealed();
+        menu_revealer_toggle.set_reveal_child(next_state);
+        MENU_OPEN.store(next_state, Ordering::Relaxed);
     });
 
     // Connect button signals
