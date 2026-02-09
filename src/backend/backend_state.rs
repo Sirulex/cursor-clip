@@ -126,6 +126,25 @@ impl BackendState {
         self.history.clear(); 
     }
 
+    pub fn delete_item_by_id(&mut self, entry_id: u64) -> Result<(), String> {
+        let index = self
+            .history
+            .iter()
+            .position(|item| item.item_id == entry_id)
+            .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
+
+        self.history.remove(index);
+
+        if self.current_source_entry_id == Some(entry_id) {
+            if let Some(prev) = self.current_source_object.take() {
+                prev.destroy();
+            }
+            self.current_source_entry_id = None;
+        }
+
+        Ok(())
+    }
+
     pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
         let item = self.get_item_by_id(entry_id).ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
         

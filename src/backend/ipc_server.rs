@@ -89,6 +89,13 @@ async fn handle_client(
                 state.clear_history();
                 BackendMessage::HistoryCleared
             }
+            FrontendMessage::DeleteItemById { id } => {
+                let mut state = state.lock().unwrap();
+                match state.delete_item_by_id(id) {
+                    Ok(()) => BackendMessage::ItemDeleted { id },
+                    Err(e) => BackendMessage::Error { message: e },
+                }
+            }
         };
 
         let response_json = serde_json::to_string(&response)?;

@@ -5,6 +5,7 @@ use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
+use std::rc::Rc;
 use crate::shared::{ClipboardItemPreview, ClipboardContentType};
 use crate::frontend::ipc_client::FrontendClient;
 use log::{info, debug, warn, error};
@@ -199,29 +200,29 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
         }
     }
 
-        // Populate the list with clipboard items
-    for item in &prefetched_items {
-        let row = generate_listboxrow_from_preview(item);
-        list_box.append(&row);
+    let items_state = Rc::new(RefCell::new(prefetched_items));
+
+    // Populate the list with clipboard items
+    {
+        let items = items_state.borrow();
+        for item in items.iter() {
+            let row = generate_listboxrow_from_preview(item, &list_box, &items_state);
+            list_box.append(&row);
+        }
     }
 
-        // If no items, show a placeholder
-    if prefetched_items.is_empty() {
-        let placeholder_row = gtk4::ListBoxRow::new();
-        let placeholder_label = Label::new(Some("No clipboard history yet"));
-        placeholder_label.add_css_class("dim-label");
-        placeholder_label.set_margin_top(20);
-        placeholder_label.set_margin_bottom(20);
-        placeholder_row.set_child(Some(&placeholder_label));
-        list_box.append(&placeholder_row);
+    // If no items, show a placeholder
+    if items_state.borrow().is_empty() {
+        list_box.append(&make_placeholder_row());
     }
 
     // Handle item activation (Enter/Space/double-click) instead of mere selection
-    let items_for_activation: Vec<ClipboardItemPreview> = prefetched_items;
+    let items_for_activation = items_state.clone();
     list_box.connect_row_activated(move |_, row| {
         let index = row.index() as usize;
-        if index < items_for_activation.len() {
-            let item = &items_for_activation[index];
+        let items = items_for_activation.borrow();
+        if index < items.len() {
+            let item = &items[index];
             debug!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
 
             match FrontendClient::new() {
@@ -375,6 +376,16 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             font-size: 0.8em;
             opacity: 0.6;
         }
+
+        .clipboard-delete {
+            color: #bfc3c7;
+            padding: 2px 4px;
+        }
+
+        .clipboard-item:hover .clipboard-delete,
+        .clipboard-delete:hover {
+            color: #ffffff;
+        }
         "
     );
 
@@ -405,7 +416,11 @@ pub fn hide_overlay() {
 }
 
 /// Create a clipboard history item row from backend data
-fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBoxRow {
+fn generate_listboxrow_from_preview(
+    item: &ClipboardItemPreview,
+    list_box: &gtk4::ListBox,
+    items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
 
@@ -431,9 +446,18 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
     time_label.add_css_class("clipboard-time");
     time_label.set_halign(Align::End);
 
+    let delete_button = Button::builder()
+        .icon_name("user-trash-symbolic")
+        .build();
+    delete_button.add_css_class("flat");
+    delete_button.add_css_class("destructive-action");
+    delete_button.add_css_class("clipboard-delete");
+    delete_button.set_tooltip_text(Some("Delete item"));
+
     header_box.append(&type_label);
     header_box.append(&type_text);
     header_box.append(&time_label);
+    header_box.append(&delete_button);
     
     main_box.append(&header_box);
 
@@ -452,7 +476,53 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
     main_box.append(&content_label);
 
     row.set_child(Some(&main_box));
+
+    let list_box = list_box.clone();
+    let items_state = items_state.clone();
+    let row_weak = row.downgrade();
+    let item_id = item.item_id;
+    delete_button.connect_clicked(move |_| {
+        match FrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.delete_item_by_id(item_id) {
+                    error!("Error deleting clipboard item by ID: {}", e);
+                    return;
+                }
+            }
+            Err(e) => {
+                error!("Error creating frontend client: {}", e);
+                return;
+            }
+        }
+
+        {
+            let mut items = items_state.borrow_mut();
+            if let Some(index) = items.iter().position(|entry| entry.item_id == item_id) {
+                items.remove(index);
+            }
+        }
+
+        if let Some(row) = row_weak.upgrade() {
+            list_box.remove(&row);
+        }
+
+        if items_state.borrow().is_empty() {
+            list_box.append(&make_placeholder_row());
+        }
+    });
     row
+}
+
+fn make_placeholder_row() -> gtk4::ListBoxRow {
+    let placeholder_row = gtk4::ListBoxRow::new();
+    let placeholder_label = Label::new(Some("No clipboard history yet"));
+    placeholder_label.add_css_class("dim-label");
+    placeholder_label.set_margin_top(20);
+    placeholder_label.set_margin_bottom(20);
+    placeholder_row.set_child(Some(&placeholder_label));
+    placeholder_row.set_selectable(false);
+    placeholder_row.set_activatable(false);
+    placeholder_row
 }
 
 /// Format Unix timestamp to relative time string

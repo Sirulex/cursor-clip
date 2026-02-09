@@ -48,6 +48,8 @@ pub enum FrontendMessage {
     GetHistory,
     /// Set clipboard content by ID
     SetClipboardById { id: u64 },
+    /// Delete a single clipboard item by ID
+    DeleteItemById { id: u64 },
     /// Clear all clipboard history
     ClearHistory,
 }
@@ -60,6 +62,8 @@ pub enum BackendMessage {
     NewItem { item: ClipboardItemPreview },
     /// Clipboard content set successfully
     ClipboardSet,
+    /// Clipboard item deleted
+    ItemDeleted { id: u64 },
     /// History cleared
     HistoryCleared,
     /// Error occurred
