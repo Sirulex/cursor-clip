@@ -126,11 +126,11 @@ fn create_layer_shell_window(
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let (content, list_box) = generate_overlay_content(prefetched_items);
+    let (content, list_box, items_state) = generate_overlay_content(prefetched_items);
     window.set_content(Some(&content));
 
     // Add key controller (Esc/j/k/Enter navigation & activation)
-    let key_controller = generate_key_controller(&list_box);
+    let key_controller = generate_key_controller(&list_box, &items_state);
     window.add_controller(key_controller);
 
     // Add close request handler to ensure any window close goes through our logic
@@ -146,7 +146,9 @@ fn create_layer_shell_window(
 
 /// Create a Windows 11-style clipboard history list with provided (prefetched) backend data.
 /// Falls back to a lazy on-demand fetch only if the provided vector is empty.
-fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> (Box, gtk4::ListBox) {
+fn generate_overlay_content(
+    mut prefetched_items: Vec<ClipboardItemPreview>,
+) -> (Box, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -271,13 +273,17 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
         }
     });
 
-    (main_box, list_box)
+    (main_box, list_box, items_state)
 }
 
 /// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
-fn generate_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
+fn generate_key_controller(
+    list_box: &gtk4::ListBox,
+    items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+) -> gtk4::EventControllerKey {
     let controller = gtk4::EventControllerKey::new();
     let list_box_for_keys = list_box.clone();
+    let items_state_for_keys = items_state.clone();
     controller.connect_key_pressed(move |_, key, _, _| {
         use gtk4::gdk::Key;
         match key {
@@ -316,6 +322,46 @@ fn generate_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey
             Key::Return | Key::KP_Enter => {
                 if let Some(row) = list_box_for_keys.selected_row() {
                     row.emit_by_name::<()>("activate", &[]);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
+            Key::Delete => {
+                if let Some(row) = list_box_for_keys.selected_row() {
+                    let index = row.index() as usize;
+                    let item_id = {
+                        let items = items_state_for_keys.borrow();
+                        if index >= items.len() {
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                        items[index].item_id
+                    };
+
+                    match FrontendClient::new() {
+                        Ok(mut client) => {
+                            if let Err(e) = client.delete_item_by_id(item_id) {
+                                error!("Error deleting clipboard item by ID: {}", e);
+                                return gtk4::glib::Propagation::Stop;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error creating frontend client: {}", e);
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                    }
+
+                    {
+                        let mut items = items_state_for_keys.borrow_mut();
+                        if index < items.len() {
+                            items.remove(index);
+                        }
+                    }
+
+                    list_box_for_keys.remove(&row);
+
+                    if items_state_for_keys.borrow().is_empty() {
+                        list_box_for_keys.append(&make_placeholder_row());
+                    }
                     return gtk4::glib::Propagation::Stop;
                 }
                 gtk4::glib::Propagation::Proceed
