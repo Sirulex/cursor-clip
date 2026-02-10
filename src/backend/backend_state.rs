@@ -102,12 +102,18 @@ impl BackendState {
             content_type,
             content_preview,
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            pinned: false,
             mime_data: mime_content.drain(..).collect(),
         };
 
         // remove duplicates (todo change to more robust solution -> hashes)
         self.history.retain(|existing| existing.content_preview != item.content_preview);
-        self.history.insert(0, item);
+        let insert_index = self
+            .history
+            .iter()
+            .position(|existing| !existing.pinned)
+            .unwrap_or(self.history.len());
+        self.history.insert(insert_index, item);
         if self.history.len() > 100 { self.history.truncate(100); }
         let new_id = self.id_for_next_entry;
         self.id_for_next_entry += 1;
@@ -176,6 +182,29 @@ impl BackendState {
             if let Err(e) = conn.flush() { warn!("Failed to flush Wayland connection after setting selection: {e}"); }
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
+        Ok(())
+    }
+
+    pub fn set_pinned(&mut self, entry_id: u64, pinned: bool) -> Result<(), String> {
+        let index = self
+            .history
+            .iter()
+            .position(|item| item.item_id == entry_id)
+            .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
+
+        let mut item = self.history.remove(index);
+        item.pinned = pinned;
+
+        let insert_index = if pinned {
+            0
+        } else {
+            self.history
+                .iter()
+                .position(|existing| !existing.pinned)
+                .unwrap_or(self.history.len())
+        };
+
+        self.history.insert(insert_index, item);
         Ok(())
     }
 }

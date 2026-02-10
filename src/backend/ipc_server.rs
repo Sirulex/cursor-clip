@@ -84,6 +84,13 @@ async fn handle_client(
                     Err(e) => BackendMessage::Error { message: e },
                 }
             }
+            FrontendMessage::SetPinned { id, pinned } => {
+                let mut state = state.lock().unwrap();
+                match state.set_pinned(id, pinned) {
+                    Ok(()) => BackendMessage::ItemPinned { id, pinned },
+                    Err(e) => BackendMessage::Error { message: e },
+                }
+            }
             FrontendMessage::ClearHistory => {
                 let mut state = state.lock().unwrap();
                 state.clear_history();

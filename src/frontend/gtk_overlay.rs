@@ -510,22 +510,55 @@ fn generate_key_controller(
             Key::p | Key::P => {
                 if let Some(row) = list_box_for_keys.selected_row() {
                     let index = row.index() as usize;
-                    let item = {
+                    let (item_id, pinned, target_index) = {
                         let mut items = items_state_for_keys.borrow_mut();
                         if index >= items.len() {
                             return gtk4::glib::Propagation::Stop;
                         }
-                        let item = items.remove(index);
-                        items.insert(0, item.clone());
-                        item
+                        let mut item = items.remove(index);
+                        let new_pinned = !item.pinned;
+                        item.pinned = new_pinned;
+                        let insert_index = if new_pinned {
+                            0
+                        } else {
+                            items
+                                .iter()
+                                .position(|existing| !existing.pinned)
+                                .unwrap_or(items.len())
+                        };
+                        let item_id = item.item_id;
+                        items.insert(insert_index, item);
+                        (item_id, new_pinned, insert_index)
                     };
 
+                    match FrontendClient::new() {
+                        Ok(mut client) => {
+                            if let Err(e) = client.set_pinned(item_id, pinned) {
+                                error!("Error updating pinned state: {}", e);
+                                return gtk4::glib::Propagation::Stop;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error creating frontend client: {}", e);
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                    }
+
                     list_box_for_keys.remove(&row);
-                    list_box_for_keys.insert(&row, 0);
+                    list_box_for_keys.insert(&row, target_index as i32);
                     list_box_for_keys.select_row(Some(&row));
                     row.grab_focus();
 
-                    debug!("Pinned clipboard item ID {}: {}", item.item_id, item.content_preview);
+                    if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+                        if pinned {
+                            pin_button.add_css_class("pinned");
+                            pin_button.set_tooltip_text(Some("Unpin"));
+                        } else {
+                            pin_button.remove_css_class("pinned");
+                            pin_button.set_tooltip_text(Some("Pin"));
+                        }
+                    }
+                    debug!("Updated pinned state for clipboard item ID {}", item_id);
                     return gtk4::glib::Propagation::Stop;
                 }
                 gtk4::glib::Propagation::Proceed
@@ -610,6 +643,10 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             color: #ffffff;
         }
 
+        .clipboard-pin.pinned {
+            color: #ffffff;
+        }
+
         .menu-revealer {
             background: #2b2b2f;
             border-radius: 8px;
@@ -682,7 +719,12 @@ fn generate_listboxrow_from_preview(
         .build();
     pin_button.add_css_class("flat");
     pin_button.add_css_class("clipboard-pin");
-    pin_button.set_tooltip_text(Some("Pin"));
+    if item.pinned {
+        pin_button.add_css_class("pinned");
+        pin_button.set_tooltip_text(Some("Unpin"));
+    } else {
+        pin_button.set_tooltip_text(Some("Pin"));
+    }
     pin_button.set_visible(show_pin);
 
     let delete_button = Button::builder()
@@ -766,21 +808,54 @@ fn generate_listboxrow_from_preview(
             None => return,
         };
         let index = row.index() as usize;
-        let item = {
+        let (item_id, pinned, target_index) = {
             let mut items = items_state_for_pin.borrow_mut();
             if index >= items.len() {
                 return;
             }
-            let item = items.remove(index);
-            items.insert(0, item.clone());
-            item
+            let mut item = items.remove(index);
+            let new_pinned = !item.pinned;
+            item.pinned = new_pinned;
+            let insert_index = if new_pinned {
+                0
+            } else {
+                items
+                    .iter()
+                    .position(|existing| !existing.pinned)
+                    .unwrap_or(items.len())
+            };
+            let item_id = item.item_id;
+            items.insert(insert_index, item);
+            (item_id, new_pinned, insert_index)
         };
 
+        match FrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.set_pinned(item_id, pinned) {
+                    error!("Error updating pinned state: {}", e);
+                    return;
+                }
+            }
+            Err(e) => {
+                error!("Error creating frontend client: {}", e);
+                return;
+            }
+        }
+
         list_box_for_pin.remove(&row);
-        list_box_for_pin.insert(&row, 0);
+        list_box_for_pin.insert(&row, target_index as i32);
         list_box_for_pin.select_row(Some(&row));
         row.grab_focus();
-        debug!("Pinned clipboard item ID {}: {}", item.item_id, item.content_preview);
+        if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+            if pinned {
+                pin_button.add_css_class("pinned");
+                pin_button.set_tooltip_text(Some("Unpin"));
+            } else {
+                pin_button.remove_css_class("pinned");
+                pin_button.set_tooltip_text(Some("Pin"));
+            }
+        }
+        debug!("Updated pinned state for clipboard item ID {}", item_id);
     });
     row
 }

@@ -50,6 +50,16 @@ impl FrontendClient {
         }
     }
 
+    /// Set pinned state by ID
+    pub fn set_pinned(&mut self, id: u64, pinned: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let response = self.send_message(FrontendMessage::SetPinned { id, pinned })?;
+        match response {
+            BackendMessage::ItemPinned { .. } => Ok(()),
+            BackendMessage::Error { message } => Err(message.into()),
+            _ => Err("Unexpected response".into()),
+        }
+    }
+
     /// Clear history
     pub fn clear_history(&mut self) -> Result<(), Box<dyn std::error::Error>> {
     let response = self.send_message(FrontendMessage::ClearHistory)?;

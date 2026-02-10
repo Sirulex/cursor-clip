@@ -8,6 +8,8 @@ pub struct ClipboardItem {
     pub content_preview: String,
     pub content_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
+    #[serde(default)]
+    pub pinned: bool,
     pub mime_data: IndexMap<String, Bytes>, // content type -> payload bytes
 }
 
@@ -18,6 +20,8 @@ pub struct ClipboardItemPreview {
     pub content_preview: String,
     pub content_type: ClipboardContentType,
     pub timestamp: u64, // Unix timestamp
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl From<&ClipboardItem> for ClipboardItemPreview {
@@ -27,6 +31,7 @@ impl From<&ClipboardItem> for ClipboardItemPreview {
             content_preview: full.content_preview.clone(),
             content_type: full.content_type,
             timestamp: full.timestamp,
+            pinned: full.pinned,
         }
     }
 }
@@ -48,6 +53,8 @@ pub enum FrontendMessage {
     GetHistory,
     /// Set clipboard content by ID
     SetClipboardById { id: u64 },
+    /// Set pinned state by ID
+    SetPinned { id: u64, pinned: bool },
     /// Delete a single clipboard item by ID
     DeleteItemById { id: u64 },
     /// Clear all clipboard history
@@ -64,6 +71,8 @@ pub enum BackendMessage {
     ClipboardSet,
     /// Clipboard item deleted
     ItemDeleted { id: u64 },
+    /// Clipboard item pinned state updated
+    ItemPinned { id: u64, pinned: bool },
     /// History cleared
     HistoryCleared,
     /// Error occurred
