@@ -48,16 +48,14 @@ fn config_path() -> PathBuf {
 
 fn load_or_create_config() -> UserConfig {
     let path = config_path();
-    if let Some(parent) = path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            warn!("Failed to create config directory: {}", e);
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = fs::create_dir_all(parent) {
+        warn!("Failed to create config directory: {}", e);
     }
 
-    if let Ok(contents) = fs::read_to_string(&path) {
-        if let Ok(config) = toml::from_str::<UserConfig>(&contents) {
-            return config;
-        }
+    if let Ok(contents) = fs::read_to_string(&path)
+        && let Ok(config) = toml::from_str::<UserConfig>(&contents) {
+        return config;
     }
 
     let config = UserConfig::default();
@@ -92,7 +90,6 @@ fn request_quit() {
     OVERLAY_APP.with(|a| {
         if let Some(ref app) = *a.borrow() {
             app.quit();
-            return;
         }
     });
 
@@ -856,10 +853,9 @@ fn make_placeholder_row() -> gtk4::ListBoxRow {
 fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
     let mut child = list_box.first_child();
     while let Some(widget) = child {
-        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>() {
-            if let Some(delete_button) = find_button_in_row(&row, "clipboard-delete") {
-                delete_button.set_visible(visible);
-            }
+        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>()
+            && let Some(delete_button) = find_button_in_row(&row, "clipboard-delete") {
+            delete_button.set_visible(visible);
         }
         child = widget.next_sibling();
     }
@@ -868,10 +864,9 @@ fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
 fn set_pin_icons_visible(list_box: &gtk4::ListBox, visible: bool) {
     let mut child = list_box.first_child();
     while let Some(widget) = child {
-        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>() {
-            if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
-                pin_button.set_visible(visible);
-            }
+        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>()
+            && let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+            pin_button.set_visible(visible);
         }
         child = widget.next_sibling();
     }

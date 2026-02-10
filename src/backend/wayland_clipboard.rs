@@ -168,13 +168,13 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                         let mime_map = read_all_data_formats(&offer_id, mime_list, conn);
                         if !mime_map.is_empty() {
                             let mut state = wrapper.backend_state.lock().unwrap();
-                            if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map) {
-                                if !state.monitor_only && !state.suppress_next_selection_read {
-                                    if let Err(e) = state.set_clipboard_by_id(new_id) {
-                                        warn!("Failed to take ownership of selection id {new_id}: {e}");
-                                    } else {
-                                        debug!("Took ownership of external selection (id {new_id})");
-                                    }
+                            if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map)
+                                && !state.monitor_only
+                                && !state.suppress_next_selection_read {
+                                if let Err(e) = state.set_clipboard_by_id(new_id) {
+                                    warn!("Failed to take ownership of selection id {new_id}: {e}");
+                                } else {
+                                    debug!("Took ownership of external selection (id {new_id})");
                                 }
                             }
                         }
@@ -219,8 +219,9 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
             let object_id = offer.id();
             debug!("Offer event: MIME type offered: {mime_type}");
             let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id) {
-                if !mime_type.starts_with("video") { mime_list.push(mime_type); }
+            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id)
+                && !mime_type.starts_with("video") {
+                mime_list.push(mime_type);
             }
         }
     }

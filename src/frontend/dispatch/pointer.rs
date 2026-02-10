@@ -72,11 +72,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 debug!("Pointer button {button:?} at time {time}: {button_state:?}");
                 
                 // Check for left mouse button click (button 272 = left click)
-                if button == 272 {
-                    if let WEnum::Value(wl_pointer::ButtonState::Pressed) = button_state {
-                        debug!("Left mouse button clicked on capture layer - requesting close");
-                        state.capture_layer_clicked = true; // future handling of outside click to close overlay
-                    }
+                if button == 272
+                    && let WEnum::Value(wl_pointer::ButtonState::Pressed) = button_state {
+                    debug!("Left mouse button clicked on capture layer - requesting close");
+                    state.capture_layer_clicked = true; // future handling of outside click to close overlay
                 }
             }
             _ => {}

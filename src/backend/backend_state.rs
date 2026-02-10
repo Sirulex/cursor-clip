@@ -178,8 +178,9 @@ impl BackendState {
         // Prevent reading back our own just-set selection (would deadlock due to event queue handling)
         self.suppress_next_selection_read = true;
         // Flush the Wayland connection so the compositor sees our selection (very important)
-        if let Some(conn) = &self.connection {
-            if let Err(e) = conn.flush() { warn!("Failed to flush Wayland connection after setting selection: {e}"); }
+        if let Some(conn) = &self.connection
+            && let Err(e) = conn.flush() {
+            warn!("Failed to flush Wayland connection after setting selection: {e}");
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
         Ok(())
