@@ -10,8 +10,8 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
 use std::sync::Arc as StdArc; // for event_created_child return type clarity
+use crate::backend::backend_state::BackendState;
 
-use super::backend_state::BackendState;
 use indexmap::IndexMap;
 use bytes::Bytes;
 use log::{info, debug, warn, error};
@@ -139,21 +139,46 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
                     let offer_key = offer_id.id();
                     debug!("Selection changed to offer ID: {offer_key:?}");
 
-                    let already_current = state.current_data_offer.as_ref().is_some_and(|o| o == &offer_key);
-                    if let Some(mime_list) = state.mime_type_offers.get(&offer_key).cloned() {
+                    let (mime_list, already_current, suppress_read) = {
+                        let already_current =
+                            state.current_data_offer.as_ref().is_some_and(|o| o == &offer_key);
+                        let mime_list = state.mime_type_offers.get(&offer_key).cloned();
+                        (mime_list, already_current, state.suppress_next_selection_read)
+                    };
+
+                    if let Some(mime_list) = mime_list {
                         debug!("New clipboard content available with {} MIME types", mime_list.len());
-                        if state.suppress_next_selection_read {
+                        if suppress_read {
                             state.current_data_offer = Some(offer_key);
                             debug!("Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads");
                             offer_id.destroy();
-                        } else if !already_current {
-                            state.current_data_offer = Some(offer_key);
-                            process_all_data_formats(&offer_id, mime_list, conn, &mut state);
-                            //remove old offer entries and their corresponding MIME types as new ones will be generated for future selections
-                            state.mime_type_offers.clear();
-                            offer_id.destroy();
-
+                            return;
                         }
+
+                        if already_current {
+                            offer_id.destroy();
+                            return;
+                        }
+
+                        state.current_data_offer = Some(offer_key);
+                        // Remove old offer entries as new ones will be generated for future selections
+                        state.mime_type_offers.clear();
+                        drop(state);
+
+                        let mime_map = read_all_data_formats(&offer_id, mime_list, conn);
+                        if !mime_map.is_empty() {
+                            let mut state = wrapper.backend_state.lock().unwrap();
+                            if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map)
+                                && !state.monitor_only
+                                && !state.suppress_next_selection_read {
+                                if let Err(e) = state.set_clipboard_by_id(new_id) {
+                                    warn!("Failed to take ownership of selection id {new_id}: {e}");
+                                } else {
+                                    debug!("Took ownership of external selection (id {new_id})");
+                                }
+                            }
+                        }
+                        offer_id.destroy();
                     }
                 } else {
                     debug!("Selection cleared");
@@ -194,8 +219,9 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
             let object_id = offer.id();
             debug!("Offer event: MIME type offered: {mime_type}");
             let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id) {
-                if !mime_type.starts_with("video") { mime_list.push(mime_type); }
+            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id)
+                && !mime_type.starts_with("video") {
+                mime_list.push(mime_type);
             }
         }
     }
@@ -286,18 +312,19 @@ fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dy
     Ok((reader, writer))
 }
 
-fn process_all_data_formats(
+fn read_all_data_formats(
     data_offer: &ZwlrDataControlOfferV1,
     mime_types: Vec<String>,
     conn: &Connection,
-    backend_state: &mut BackendState,
-) {
+)-> IndexMap<String, Bytes> {
     use std::os::fd::AsFd;
     use std::io::Read;
 
-    if mime_types.is_empty() { return; }
-
     let mut mime_map: IndexMap<String, Bytes> = IndexMap::new();
+
+    if mime_types.is_empty() {
+        return mime_map;
+    }
 
     for mime in mime_types {
         let (reader_fd, writer_fd) = match create_pipes() {
@@ -320,18 +347,7 @@ fn process_all_data_formats(
         }
     }
 
-    if !mime_map.is_empty() {
-        if let Some(new_id) = backend_state.add_clipboard_item_from_mime_map(mime_map) {
-            // Only take ownership if we're NOT in monitor-only mode
-            if !backend_state.monitor_only && !backend_state.suppress_next_selection_read {
-                if let Err(e) = backend_state.set_clipboard_by_id(new_id) {
-                    warn!("Failed to take ownership of selection id {new_id}: {e}");
-                } else {
-                    debug!("Took ownership of external selection (id {new_id})");
-                }
-            }
-        }
-    }
+    mime_map
 }
 
 

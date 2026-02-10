@@ -102,17 +102,34 @@ impl BackendState {
             content_type,
             content_preview,
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            pinned: false,
             mime_data: mime_content.drain(..).collect(),
         };
 
         // remove duplicates (todo change to more robust solution -> hashes)
         self.history.retain(|existing| existing.content_preview != item.content_preview);
-        self.history.insert(0, item);
+        let insert_index = self
+            .history
+            .iter()
+            .position(|existing| !existing.pinned)
+            .unwrap_or(self.history.len());
+        self.history.insert(insert_index, item);
         if self.history.len() > 100 { self.history.truncate(100); }
         let new_id = self.id_for_next_entry;
         self.id_for_next_entry += 1;
         Some(new_id)
     }
+
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    pub fn add_clipboard_item_from_text(&mut self, text: &str) -> Option<u64> {
+        let mut mime_content = IndexMap::new();
+        mime_content.insert(
+            "text/plain;charset=utf-8".to_string(),
+            Bytes::copy_from_slice(text.as_bytes()),
+        );
+        self.add_clipboard_item_from_mime_map(mime_content)
+    }
+    
 
     pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 
     self.history.iter().map(ClipboardItemPreview::from).collect()
@@ -124,6 +141,25 @@ impl BackendState {
     
     pub fn clear_history(&mut self) { 
         self.history.clear(); 
+    }
+
+    pub fn delete_item_by_id(&mut self, entry_id: u64) -> Result<(), String> {
+        let index = self
+            .history
+            .iter()
+            .position(|item| item.item_id == entry_id)
+            .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
+
+        self.history.remove(index);
+
+        if self.current_source_entry_id == Some(entry_id) {
+            if let Some(prev) = self.current_source_object.take() {
+                prev.destroy();
+            }
+            self.current_source_entry_id = None;
+        }
+
+        Ok(())
     }
 
     pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
@@ -153,10 +189,34 @@ impl BackendState {
         // Prevent reading back our own just-set selection (would deadlock due to event queue handling)
         self.suppress_next_selection_read = true;
         // Flush the Wayland connection so the compositor sees our selection (very important)
-        if let Some(conn) = &self.connection {
-            if let Err(e) = conn.flush() { warn!("Failed to flush Wayland connection after setting selection: {e}"); }
+        if let Some(conn) = &self.connection
+            && let Err(e) = conn.flush() {
+            warn!("Failed to flush Wayland connection after setting selection: {e}");
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
+        Ok(())
+    }
+
+    pub fn set_pinned(&mut self, entry_id: u64, pinned: bool) -> Result<(), String> {
+        let index = self
+            .history
+            .iter()
+            .position(|item| item.item_id == entry_id)
+            .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
+
+        let mut item = self.history.remove(index);
+        item.pinned = pinned;
+
+        let insert_index = if pinned {
+            0
+        } else {
+            self.history
+                .iter()
+                .position(|existing| !existing.pinned)
+                .unwrap_or(self.history.len())
+        };
+
+        self.history.insert(insert_index, item);
         Ok(())
     }
 }

@@ -1,10 +1,14 @@
 use gtk4::prelude::*;
-use gtk4::{Application, Button, Label, Box, Orientation, Align};
+use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, Revealer, Overlay};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
+use std::rc::Rc;
+use std::path::PathBuf;
+use std::fs;
+use serde::{Deserialize, Serialize};
 use crate::shared::{ClipboardItemPreview, ClipboardContentType};
 use crate::frontend::ipc_client::FrontendClient;
 use log::{info, debug, warn, error};
@@ -18,6 +22,58 @@ thread_local! {
     static OVERLAY_APP: RefCell<Option<Application>> = const { RefCell::new(None) };
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct UserConfig {
+    show_trash: bool,
+    show_pin: bool,
+}
+
+impl Default for UserConfig {
+    fn default() -> Self {
+        Self {
+            show_trash: true,
+            show_pin: true,
+        }
+    }
+}
+
+fn config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".config")
+        .join("cursor-clip")
+        .join("config.toml")
+}
+
+fn load_or_create_config() -> UserConfig {
+    let path = config_path();
+    if let Some(parent) = path.parent()
+        && let Err(e) = fs::create_dir_all(parent) {
+        warn!("Failed to create config directory: {}", e);
+    }
+
+    if let Ok(contents) = fs::read_to_string(&path)
+        && let Ok(config) = toml::from_str::<UserConfig>(&contents) {
+        return config;
+    }
+
+    let config = UserConfig::default();
+    if let Err(e) = save_config(&config) {
+        warn!("Failed to write default config: {}", e);
+    }
+    config
+}
+
+fn save_config(config: &UserConfig) -> Result<(), std::io::Error> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contents = toml::to_string_pretty(config).unwrap_or_else(|_| "show_trash = true\n".to_string());
+    fs::write(path, contents)
+}
+
 pub fn is_close_requested() -> bool {
     CLOSE_REQUESTED.load(Ordering::Relaxed)
 }
@@ -26,6 +82,7 @@ pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
 }
 
+
 // Centralized quit path to avoid double-close reentrancy and ensure flags + app quit
 fn request_quit() {
     CLOSE_REQUESTED.store(true, Ordering::Relaxed);
@@ -33,7 +90,6 @@ fn request_quit() {
     OVERLAY_APP.with(|a| {
         if let Some(ref app) = *a.borrow() {
             app.quit();
-            return;
         }
     });
 
@@ -121,15 +177,16 @@ fn create_layer_shell_window(
     // Make window keyboard interactive
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::Exclusive);
 
+
     // Apply custom styling
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let (content, list_box) = generate_overlay_content(prefetched_items);
+    let (content, list_box, items_state) = generate_overlay_content(prefetched_items);
     window.set_content(Some(&content));
 
     // Add key controller (Esc/j/k/Enter navigation & activation)
-    let key_controller = generate_key_controller(&list_box);
+    let key_controller = generate_key_controller(&list_box, &items_state);
     window.add_controller(key_controller);
 
     // Add close request handler to ensure any window close goes through our logic
@@ -145,7 +202,9 @@ fn create_layer_shell_window(
 
 /// Create a Windows 11-style clipboard history list with provided (prefetched) backend data.
 /// Falls back to a lazy on-demand fetch only if the provided vector is empty.
-fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> (Box, gtk4::ListBox) {
+fn generate_overlay_content(
+    mut prefetched_items: Vec<ClipboardItemPreview>,
+) -> (Overlay, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -156,12 +215,54 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
     header_bar.set_show_end_title_buttons(true);
     header_bar.set_show_start_title_buttons(false);
     
+    let config_state = Rc::new(RefCell::new(load_or_create_config()));
+    let show_trash_default = config_state.borrow().show_trash;
+    let show_pin_default = config_state.borrow().show_pin;
+
     // Add a three-dot menu button (icon-only) next to the close button on the right
     let three_dot_menu = Button::builder()
         .icon_name("view-more-symbolic")
         .build();
     three_dot_menu.add_css_class("flat");
-    three_dot_menu.set_tooltip_text(Some("Test Hide and Show overlay"));
+    three_dot_menu.set_tooltip_text(Some("Options"));
+
+    let menu_revealer = Revealer::new();
+    menu_revealer.set_reveal_child(false);
+    menu_revealer.set_visible(false);
+    menu_revealer.set_transition_duration(120);
+    menu_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
+    menu_revealer.set_halign(Align::End);
+    menu_revealer.set_valign(Align::Start);
+    menu_revealer.set_margin_top(46);
+    menu_revealer.set_margin_end(10);
+    menu_revealer.add_css_class("menu-revealer");
+
+    let menu_box = Box::new(Orientation::Vertical, 8);
+    menu_box.set_margin_top(8);
+    menu_box.set_margin_bottom(8);
+    menu_box.set_margin_start(10);
+    menu_box.set_margin_end(10);
+
+    let toggle_row = Box::new(Orientation::Horizontal, 8);
+    let toggle_label = Label::new(Some("Show delete button"));
+    toggle_label.set_halign(Align::Start);
+    toggle_label.set_hexpand(true);
+    let toggle_check = CheckButton::new();
+    toggle_check.set_active(show_trash_default);
+    toggle_row.append(&toggle_label);
+    toggle_row.append(&toggle_check);
+    menu_box.append(&toggle_row);
+
+    let pin_toggle_row = Box::new(Orientation::Horizontal, 8);
+    let pin_toggle_label = Label::new(Some("Show pin icon"));
+    pin_toggle_label.set_halign(Align::Start);
+    pin_toggle_label.set_hexpand(true);
+    let pin_toggle_check = CheckButton::new();
+    pin_toggle_check.set_active(show_pin_default);
+    pin_toggle_row.append(&pin_toggle_label);
+    pin_toggle_row.append(&pin_toggle_check);
+    menu_box.append(&pin_toggle_row);
+    menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&three_dot_menu);
     
     // Add clear all button to header
@@ -199,29 +300,35 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
         }
     }
 
-        // Populate the list with clipboard items
-    for item in &prefetched_items {
-        let row = generate_listboxrow_from_preview(item);
-        list_box.append(&row);
+    let items_state = Rc::new(RefCell::new(prefetched_items));
+
+    // Populate the list with clipboard items
+    {
+        let items = items_state.borrow();
+        for item in items.iter() {
+            let row = generate_listboxrow_from_preview(
+                item,
+                &list_box,
+                &items_state,
+                show_trash_default,
+                show_pin_default,
+            );
+            list_box.append(&row);
+        }
     }
 
-        // If no items, show a placeholder
-    if prefetched_items.is_empty() {
-        let placeholder_row = gtk4::ListBoxRow::new();
-        let placeholder_label = Label::new(Some("No clipboard history yet"));
-        placeholder_label.add_css_class("dim-label");
-        placeholder_label.set_margin_top(20);
-        placeholder_label.set_margin_bottom(20);
-        placeholder_row.set_child(Some(&placeholder_label));
-        list_box.append(&placeholder_row);
+    // If no items, show a placeholder
+    if items_state.borrow().is_empty() {
+        list_box.append(&make_placeholder_row());
     }
 
     // Handle item activation (Enter/Space/double-click) instead of mere selection
-    let items_for_activation: Vec<ClipboardItemPreview> = prefetched_items;
+    let items_for_activation = items_state.clone();
     list_box.connect_row_activated(move |_, row| {
         let index = row.index() as usize;
-        if index < items_for_activation.len() {
-            let item = &items_for_activation[index];
+        let items = items_for_activation.borrow();
+        if index < items.len() {
+            let item = &items[index];
             debug!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
 
             match FrontendClient::new() {
@@ -244,15 +351,45 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
     scrolled_window.set_child(Some(&list_box));
     main_box.append(&scrolled_window);
 
-    // Connect button signals
-    // When the three-dot menu button is clicked: hide overlay, wait 0s, then show overlay again
-    three_dot_menu.connect_clicked(move |_| {
-        hide_overlay();
-        gtk4::glib::timeout_add_seconds_local(0, || {
-            show_overlay();
-            gtk4::glib::ControlFlow::Break
-        });
+    set_delete_buttons_visible(&list_box, show_trash_default);
+    set_pin_icons_visible(&list_box, show_pin_default);
+
+    let list_box_for_toggle = list_box.clone();
+    let config_for_toggle = config_state.clone();
+    toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        {
+            let mut config = config_for_toggle.borrow_mut();
+            config.show_trash = state;
+            if let Err(e) = save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+        }
+        set_delete_buttons_visible(&list_box_for_toggle, state);
     });
+
+    let list_box_for_pin_toggle = list_box.clone();
+    let config_for_pin_toggle = config_state.clone();
+    pin_toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        {
+            let mut config = config_for_pin_toggle.borrow_mut();
+            config.show_pin = state;
+            if let Err(e) = save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+        }
+        set_pin_icons_visible(&list_box_for_pin_toggle, state);
+    });
+
+    let menu_revealer_toggle = menu_revealer.clone();
+    three_dot_menu.connect_clicked(move |_| {
+        let next_state = !menu_revealer_toggle.is_child_revealed();
+        menu_revealer_toggle.set_visible(next_state);
+        menu_revealer_toggle.set_reveal_child(next_state);
+    });
+
+    // Connect button signals
     clear_button.connect_clicked(move |_| {
     match FrontendClient::new() {
             Ok(mut client) => {
@@ -270,13 +407,21 @@ fn generate_overlay_content(mut prefetched_items: Vec<ClipboardItemPreview>) -> 
         }
     });
 
-    (main_box, list_box)
+    let overlay = Overlay::new();
+    overlay.set_child(Some(&main_box));
+    overlay.add_overlay(&menu_revealer);
+
+    (overlay, list_box, items_state)
 }
 
 /// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
-fn generate_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey {
+fn generate_key_controller(
+    list_box: &gtk4::ListBox,
+    items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+) -> gtk4::EventControllerKey {
     let controller = gtk4::EventControllerKey::new();
     let list_box_for_keys = list_box.clone();
+    let items_state_for_keys = items_state.clone();
     controller.connect_key_pressed(move |_, key, _, _| {
         use gtk4::gdk::Key;
         match key {
@@ -315,6 +460,102 @@ fn generate_key_controller(list_box: &gtk4::ListBox) -> gtk4::EventControllerKey
             Key::Return | Key::KP_Enter => {
                 if let Some(row) = list_box_for_keys.selected_row() {
                     row.emit_by_name::<()>("activate", &[]);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
+            Key::Delete => {
+                if let Some(row) = list_box_for_keys.selected_row() {
+                    let index = row.index() as usize;
+                    let item_id = {
+                        let items = items_state_for_keys.borrow();
+                        if index >= items.len() {
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                        items[index].item_id
+                    };
+
+                    match FrontendClient::new() {
+                        Ok(mut client) => {
+                            if let Err(e) = client.delete_item_by_id(item_id) {
+                                error!("Error deleting clipboard item by ID: {}", e);
+                                return gtk4::glib::Propagation::Stop;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error creating frontend client: {}", e);
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                    }
+
+                    {
+                        let mut items = items_state_for_keys.borrow_mut();
+                        if index < items.len() {
+                            items.remove(index);
+                        }
+                    }
+
+                    list_box_for_keys.remove(&row);
+
+                    if items_state_for_keys.borrow().is_empty() {
+                        list_box_for_keys.append(&make_placeholder_row());
+                    }
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
+            Key::p | Key::P => {
+                if let Some(row) = list_box_for_keys.selected_row() {
+                    let index = row.index() as usize;
+                    let (item_id, pinned, target_index) = {
+                        let mut items = items_state_for_keys.borrow_mut();
+                        if index >= items.len() {
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                        let mut item = items.remove(index);
+                        let new_pinned = !item.pinned;
+                        item.pinned = new_pinned;
+                        let insert_index = if new_pinned {
+                            0
+                        } else {
+                            items
+                                .iter()
+                                .position(|existing| !existing.pinned)
+                                .unwrap_or(items.len())
+                        };
+                        let item_id = item.item_id;
+                        items.insert(insert_index, item);
+                        (item_id, new_pinned, insert_index)
+                    };
+
+                    match FrontendClient::new() {
+                        Ok(mut client) => {
+                            if let Err(e) = client.set_pinned(item_id, pinned) {
+                                error!("Error updating pinned state: {}", e);
+                                return gtk4::glib::Propagation::Stop;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error creating frontend client: {}", e);
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                    }
+
+                    list_box_for_keys.remove(&row);
+                    list_box_for_keys.insert(&row, target_index as i32);
+                    list_box_for_keys.select_row(Some(&row));
+                    row.grab_focus();
+
+                    if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+                        if pinned {
+                            pin_button.add_css_class("pinned");
+                            pin_button.set_tooltip_text(Some("Unpin"));
+                        } else {
+                            pin_button.remove_css_class("pinned");
+                            pin_button.set_tooltip_text(Some("Pin"));
+                        }
+                    }
+                    debug!("Updated pinned state for clipboard item ID {}", item_id);
                     return gtk4::glib::Propagation::Stop;
                 }
                 gtk4::glib::Propagation::Proceed
@@ -375,6 +616,39 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             font-size: 0.8em;
             opacity: 0.6;
         }
+
+        .clipboard-delete {
+            color: #bfc3c7;
+            padding: 2px 4px;
+        }
+
+        .clipboard-pin {
+            color: #bfc3c7;
+            padding: 2px 4px;
+        }
+
+        .clipboard-item:hover .clipboard-delete,
+        .clipboard-delete:hover {
+            color: #ffffff;
+        }
+
+        .clipboard-item:hover .clipboard-pin {
+            color: #ffffff;
+        }
+
+        .clipboard-pin:hover {
+            color: #ffffff;
+        }
+
+        .clipboard-pin.pinned {
+            color: #ffffff;
+        }
+
+        .menu-revealer {
+            background: #2b2b2f;
+            border-radius: 8px;
+            padding: 6px 8px;
+        }
         "
     );
 
@@ -385,27 +659,14 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
     );
 }
 
-/// Show the overlay if it's hidden
-pub fn show_overlay() {
-    OVERLAY_WINDOW.with(|window| {
-        if let Some(ref win) = *window.borrow() {
-            win.set_visible(true);
-            win.present();
-        }
-    });
-}
-
-/// Hide the overlay without closing it
-pub fn hide_overlay() {
-    OVERLAY_WINDOW.with(|window| {
-        if let Some(ref win) = *window.borrow() {
-            win.set_visible(false);
-        }
-    });
-}
-
 /// Create a clipboard history item row from backend data
-fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBoxRow {
+fn generate_listboxrow_from_preview(
+    item: &ClipboardItemPreview,
+    list_box: &gtk4::ListBox,
+    items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    show_trash: bool,
+    show_pin: bool,
+) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
 
@@ -431,9 +692,36 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
     time_label.add_css_class("clipboard-time");
     time_label.set_halign(Align::End);
 
+    let pin_button = Button::builder()
+        .icon_name("view-pin-symbolic")
+        .build();
+    pin_button.add_css_class("flat");
+    pin_button.add_css_class("clipboard-pin");
+    if item.pinned {
+        pin_button.add_css_class("pinned");
+        pin_button.set_tooltip_text(Some("Unpin"));
+    } else {
+        pin_button.set_tooltip_text(Some("Pin"));
+    }
+    pin_button.set_visible(show_pin);
+
+    let delete_button = Button::builder()
+        .icon_name("user-trash-symbolic")
+        .build();
+    delete_button.add_css_class("flat");
+    delete_button.add_css_class("destructive-action");
+    delete_button.add_css_class("clipboard-delete");
+    delete_button.set_tooltip_text(Some("Delete item"));
+    delete_button.set_visible(show_trash);
+
     header_box.append(&type_label);
     header_box.append(&type_text);
+    let action_box = Box::new(Orientation::Horizontal, 0);
+    action_box.append(&pin_button);
+    action_box.append(&delete_button);
+
     header_box.append(&time_label);
+    header_box.append(&action_box);
     
     main_box.append(&header_box);
 
@@ -452,7 +740,157 @@ fn generate_listboxrow_from_preview(item: &ClipboardItemPreview) -> gtk4::ListBo
     main_box.append(&content_label);
 
     row.set_child(Some(&main_box));
+
+    let list_box = list_box.clone();
+    let items_state = items_state.clone();
+    let row_weak = row.downgrade();
+    let item_id = item.item_id;
+    let list_box_for_delete = list_box.clone();
+    let items_state_for_delete = items_state.clone();
+    let row_weak_for_delete = row_weak.clone();
+    delete_button.connect_clicked(move |_| {
+        match FrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.delete_item_by_id(item_id) {
+                    error!("Error deleting clipboard item by ID: {}", e);
+                    return;
+                }
+            }
+            Err(e) => {
+                error!("Error creating frontend client: {}", e);
+                return;
+            }
+        }
+
+        {
+            let mut items = items_state_for_delete.borrow_mut();
+            if let Some(index) = items.iter().position(|entry| entry.item_id == item_id) {
+                items.remove(index);
+            }
+        }
+
+        if let Some(row) = row_weak_for_delete.upgrade() {
+            list_box_for_delete.remove(&row);
+        }
+
+        if items_state_for_delete.borrow().is_empty() {
+            list_box_for_delete.append(&make_placeholder_row());
+        }
+    });
+    let list_box_for_pin = list_box.clone();
+    let items_state_for_pin = items_state.clone();
+    let row_weak_for_pin = row_weak.clone();
+    pin_button.connect_clicked(move |_| {
+        let row = match row_weak_for_pin.upgrade() {
+            Some(row) => row,
+            None => return,
+        };
+        let index = row.index() as usize;
+        let (item_id, pinned, target_index) = {
+            let mut items = items_state_for_pin.borrow_mut();
+            if index >= items.len() {
+                return;
+            }
+            let mut item = items.remove(index);
+            let new_pinned = !item.pinned;
+            item.pinned = new_pinned;
+            let insert_index = if new_pinned {
+                0
+            } else {
+                items
+                    .iter()
+                    .position(|existing| !existing.pinned)
+                    .unwrap_or(items.len())
+            };
+            let item_id = item.item_id;
+            items.insert(insert_index, item);
+            (item_id, new_pinned, insert_index)
+        };
+
+        match FrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.set_pinned(item_id, pinned) {
+                    error!("Error updating pinned state: {}", e);
+                    return;
+                }
+            }
+            Err(e) => {
+                error!("Error creating frontend client: {}", e);
+                return;
+            }
+        }
+
+        list_box_for_pin.remove(&row);
+        list_box_for_pin.insert(&row, target_index as i32);
+        list_box_for_pin.select_row(Some(&row));
+        row.grab_focus();
+        if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+            if pinned {
+                pin_button.add_css_class("pinned");
+                pin_button.set_tooltip_text(Some("Unpin"));
+            } else {
+                pin_button.remove_css_class("pinned");
+                pin_button.set_tooltip_text(Some("Pin"));
+            }
+        }
+        debug!("Updated pinned state for clipboard item ID {}", item_id);
+    });
     row
+}
+
+fn make_placeholder_row() -> gtk4::ListBoxRow {
+    let placeholder_row = gtk4::ListBoxRow::new();
+    let placeholder_label = Label::new(Some("No clipboard history yet"));
+    placeholder_label.add_css_class("dim-label");
+    placeholder_label.set_margin_top(20);
+    placeholder_label.set_margin_bottom(20);
+    placeholder_row.set_child(Some(&placeholder_label));
+    placeholder_row.set_selectable(false);
+    placeholder_row.set_activatable(false);
+    placeholder_row
+}
+
+fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
+    let mut child = list_box.first_child();
+    while let Some(widget) = child {
+        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>()
+            && let Some(delete_button) = find_button_in_row(&row, "clipboard-delete") {
+            delete_button.set_visible(visible);
+        }
+        child = widget.next_sibling();
+    }
+}
+
+fn set_pin_icons_visible(list_box: &gtk4::ListBox, visible: bool) {
+    let mut child = list_box.first_child();
+    while let Some(widget) = child {
+        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>()
+            && let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+            pin_button.set_visible(visible);
+        }
+        child = widget.next_sibling();
+    }
+}
+fn find_button_in_row(row: &gtk4::ListBoxRow, class_name: &str) -> Option<gtk4::Button> {
+    let main_box = row.child()?.downcast::<gtk4::Box>().ok()?;
+    let header_box = main_box.first_child()?.downcast::<gtk4::Box>().ok()?;
+    let mut child = header_box.first_child();
+    while let Some(widget) = child {
+        if widget.has_css_class(class_name) {
+            return widget.downcast::<gtk4::Button>().ok();
+        }
+        if let Ok(container) = widget.clone().downcast::<gtk4::Box>() {
+            let mut inner = container.first_child();
+            while let Some(inner_widget) = inner {
+                if inner_widget.has_css_class(class_name) {
+                    return inner_widget.downcast::<gtk4::Button>().ok();
+                }
+                inner = inner_widget.next_sibling();
+            }
+        }
+        child = widget.next_sibling();
+    }
+    None
 }
 
 /// Format Unix timestamp to relative time string

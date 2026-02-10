@@ -240,7 +240,7 @@ fn create_transparent_buffer(
     let shm = state
         .shm
         .as_ref()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "wl_shm not available for fallback"))?;
+        .ok_or_else(|| std::io::Error::other("wl_shm not available for fallback"))?;
 
     // 1x1 pixel ARGB8888 (4 bytes)
     let size: i32 = 4;
