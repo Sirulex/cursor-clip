@@ -23,13 +23,18 @@ thread_local! {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 struct UserConfig {
     show_trash: bool,
+    show_pin: bool,
 }
 
 impl Default for UserConfig {
     fn default() -> Self {
-        Self { show_trash: true }
+        Self {
+            show_trash: true,
+            show_pin: true,
+        }
     }
 }
 
@@ -215,6 +220,7 @@ fn generate_overlay_content(
     
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
     let show_trash_default = config_state.borrow().show_trash;
+    let show_pin_default = config_state.borrow().show_pin;
 
     // Add a three-dot menu button (icon-only) next to the close button on the right
     let three_dot_menu = Button::builder()
@@ -243,6 +249,16 @@ fn generate_overlay_content(
     toggle_row.append(&toggle_label);
     toggle_row.append(&toggle_check);
     menu_box.append(&toggle_row);
+
+    let pin_toggle_row = Box::new(Orientation::Horizontal, 8);
+    let pin_toggle_label = Label::new(Some("Show pin icon"));
+    pin_toggle_label.set_halign(Align::Start);
+    pin_toggle_label.set_hexpand(true);
+    let pin_toggle_check = CheckButton::new();
+    pin_toggle_check.set_active(show_pin_default);
+    pin_toggle_row.append(&pin_toggle_label);
+    pin_toggle_row.append(&pin_toggle_check);
+    menu_box.append(&pin_toggle_row);
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&three_dot_menu);
     
@@ -293,6 +309,7 @@ fn generate_overlay_content(
                 &list_box,
                 &items_state,
                 show_trash_default,
+                show_pin_default,
             );
             list_box.append(&row);
         }
@@ -333,6 +350,7 @@ fn generate_overlay_content(
     main_box.append(&scrolled_window);
 
     set_delete_buttons_visible(&list_box, show_trash_default);
+    set_pin_icons_visible(&list_box, show_pin_default);
 
     let list_box_for_toggle = list_box.clone();
     let config_for_toggle = config_state.clone();
@@ -346,6 +364,20 @@ fn generate_overlay_content(
             }
         }
         set_delete_buttons_visible(&list_box_for_toggle, state);
+    });
+
+    let list_box_for_pin_toggle = list_box.clone();
+    let config_for_pin_toggle = config_state.clone();
+    pin_toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        {
+            let mut config = config_for_pin_toggle.borrow_mut();
+            config.show_pin = state;
+            if let Err(e) = save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+        }
+        set_pin_icons_visible(&list_box_for_pin_toggle, state);
     });
 
     let menu_revealer_toggle = menu_revealer.clone();
@@ -465,6 +497,29 @@ fn generate_key_controller(
                 }
                 gtk4::glib::Propagation::Proceed
             }
+            Key::p | Key::P => {
+                if let Some(row) = list_box_for_keys.selected_row() {
+                    let index = row.index() as usize;
+                    let item = {
+                        let mut items = items_state_for_keys.borrow_mut();
+                        if index >= items.len() {
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                        let item = items.remove(index);
+                        items.insert(0, item.clone());
+                        item
+                    };
+
+                    list_box_for_keys.remove(&row);
+                    list_box_for_keys.insert(&row, 0);
+                    list_box_for_keys.select_row(Some(&row));
+                    row.grab_focus();
+
+                    debug!("Pinned clipboard item ID {}: {}", item.item_id, item.content_preview);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
             _ => gtk4::glib::Propagation::Proceed,
         }
     });
@@ -527,8 +582,21 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             padding: 2px 4px;
         }
 
+        .clipboard-pin {
+            color: #bfc3c7;
+            padding: 2px 4px;
+        }
+
         .clipboard-item:hover .clipboard-delete,
         .clipboard-delete:hover {
+            color: #ffffff;
+        }
+
+        .clipboard-item:hover .clipboard-pin {
+            color: #ffffff;
+        }
+
+        .clipboard-pin:hover {
             color: #ffffff;
         }
         "
@@ -566,6 +634,7 @@ fn generate_listboxrow_from_preview(
     list_box: &gtk4::ListBox,
     items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
     show_trash: bool,
+    show_pin: bool,
 ) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
@@ -592,6 +661,14 @@ fn generate_listboxrow_from_preview(
     time_label.add_css_class("clipboard-time");
     time_label.set_halign(Align::End);
 
+    let pin_button = Button::builder()
+        .icon_name("view-pin-symbolic")
+        .build();
+    pin_button.add_css_class("flat");
+    pin_button.add_css_class("clipboard-pin");
+    pin_button.set_tooltip_text(Some("Pin"));
+    pin_button.set_visible(show_pin);
+
     let delete_button = Button::builder()
         .icon_name("user-trash-symbolic")
         .build();
@@ -603,8 +680,12 @@ fn generate_listboxrow_from_preview(
 
     header_box.append(&type_label);
     header_box.append(&type_text);
+    let action_box = Box::new(Orientation::Horizontal, 0);
+    action_box.append(&pin_button);
+    action_box.append(&delete_button);
+
     header_box.append(&time_label);
-    header_box.append(&delete_button);
+    header_box.append(&action_box);
     
     main_box.append(&header_box);
 
@@ -628,6 +709,9 @@ fn generate_listboxrow_from_preview(
     let items_state = items_state.clone();
     let row_weak = row.downgrade();
     let item_id = item.item_id;
+    let list_box_for_delete = list_box.clone();
+    let items_state_for_delete = items_state.clone();
+    let row_weak_for_delete = row_weak.clone();
     delete_button.connect_clicked(move |_| {
         match FrontendClient::new() {
             Ok(mut client) => {
@@ -643,19 +727,44 @@ fn generate_listboxrow_from_preview(
         }
 
         {
-            let mut items = items_state.borrow_mut();
+            let mut items = items_state_for_delete.borrow_mut();
             if let Some(index) = items.iter().position(|entry| entry.item_id == item_id) {
                 items.remove(index);
             }
         }
 
-        if let Some(row) = row_weak.upgrade() {
-            list_box.remove(&row);
+        if let Some(row) = row_weak_for_delete.upgrade() {
+            list_box_for_delete.remove(&row);
         }
 
-        if items_state.borrow().is_empty() {
-            list_box.append(&make_placeholder_row());
+        if items_state_for_delete.borrow().is_empty() {
+            list_box_for_delete.append(&make_placeholder_row());
         }
+    });
+    let list_box_for_pin = list_box.clone();
+    let items_state_for_pin = items_state.clone();
+    let row_weak_for_pin = row_weak.clone();
+    pin_button.connect_clicked(move |_| {
+        let row = match row_weak_for_pin.upgrade() {
+            Some(row) => row,
+            None => return,
+        };
+        let index = row.index() as usize;
+        let item = {
+            let mut items = items_state_for_pin.borrow_mut();
+            if index >= items.len() {
+                return;
+            }
+            let item = items.remove(index);
+            items.insert(0, item.clone());
+            item
+        };
+
+        list_box_for_pin.remove(&row);
+        list_box_for_pin.insert(&row, 0);
+        list_box_for_pin.select_row(Some(&row));
+        row.grab_focus();
+        debug!("Pinned clipboard item ID {}: {}", item.item_id, item.content_preview);
     });
     row
 }
@@ -676,7 +785,7 @@ fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
     let mut child = list_box.first_child();
     while let Some(widget) = child {
         if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>() {
-            if let Some(delete_button) = find_delete_button_in_row(&row) {
+            if let Some(delete_button) = find_button_in_row(&row, "clipboard-delete") {
                 delete_button.set_visible(visible);
             }
         }
@@ -684,16 +793,37 @@ fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
     }
 }
 
-fn find_delete_button_in_row(row: &gtk4::ListBoxRow) -> Option<gtk4::Button> {
+fn set_pin_icons_visible(list_box: &gtk4::ListBox, visible: bool) {
+    let mut child = list_box.first_child();
+    while let Some(widget) = child {
+        if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>() {
+            if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+                pin_button.set_visible(visible);
+            }
+        }
+        child = widget.next_sibling();
+    }
+}
+fn find_button_in_row(row: &gtk4::ListBoxRow, class_name: &str) -> Option<gtk4::Button> {
     let main_box = row.child()?.downcast::<gtk4::Box>().ok()?;
     let header_box = main_box.first_child()?.downcast::<gtk4::Box>().ok()?;
-    let delete_widget = header_box.last_child()?;
-    let delete_button = delete_widget.downcast::<gtk4::Button>().ok()?;
-    if delete_button.has_css_class("clipboard-delete") {
-        Some(delete_button)
-    } else {
-        None
+    let mut child = header_box.first_child();
+    while let Some(widget) = child {
+        if widget.has_css_class(class_name) {
+            return widget.downcast::<gtk4::Button>().ok();
+        }
+        if let Ok(container) = widget.clone().downcast::<gtk4::Box>() {
+            let mut inner = container.first_child();
+            while let Some(inner_widget) = inner {
+                if inner_widget.has_css_class(class_name) {
+                    return inner_widget.downcast::<gtk4::Button>().ok();
+                }
+                inner = inner_widget.next_sibling();
+            }
+        }
+        child = widget.next_sibling();
     }
+    None
 }
 
 /// Format Unix timestamp to relative time string
