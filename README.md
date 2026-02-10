@@ -15,11 +15,13 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Rich previews**: Formatted content display with truncation
 - **Timestamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to the clipboard
+- **Pin or delete items**: Manage your history with ease
 
 ### 🖱️ **Advanced Wayland Integration**
 - **Layer Shell Protocol**: Proper overlay positioning above all windows
 - **Precise Cursor Tracking**: Real-time mouse position detection
 - **Multi-output Support**: Works across multiple monitors
+- **Multi-input Support**: Fully controllable with mouse and keyboard
 
 ### 🎨 **Native GNOME Design**
 - **Libadwaita styling**: Follows GNOME Human Interface Guidelines
@@ -106,13 +108,15 @@ cargo build --release
    - **Recent clipboard items** with content previews
    - **Content type icons** (text, URL, code, password, file)
    - **Timestamps** showing when items were copied
-   - **Quick actions**: Clear All and Close
+   - **Quick actions**: Clear All, Delete, Pin and Close
 5. **Interact**: 
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
    - **Clear All** to remove all history items
-   - **Keyboard navigation**: Use arrow keys or J/K to navigate, Enter to select, Esc to close
-
+   - **Delete** to remove a single item from history
+   - **Pin** to keep an item permanently at the top of the list
+   - **Keyboard navigation**: Use *Arrow keys* or *J/K* to navigate, *Enter* to select, *Delete* to remove, *P* to pin, *Esc* to close
+   - **Three-dot menu** on the window header allows you to toggle **Delete** and **Pin** button visibility (config stored permanently in `~/.config/cursor-clip/config.toml`)
 
 ## Key Components
 
