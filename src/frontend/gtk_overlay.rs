@@ -662,25 +662,6 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
     );
 }
 
-/// Show the overlay if it's hidden
-pub fn show_overlay() {
-    OVERLAY_WINDOW.with(|window| {
-        if let Some(ref win) = *window.borrow() {
-            win.set_visible(true);
-            win.present();
-        }
-    });
-}
-
-/// Hide the overlay without closing it
-pub fn hide_overlay() {
-    OVERLAY_WINDOW.with(|window| {
-        if let Some(ref win) = *window.borrow() {
-            win.set_visible(false);
-        }
-    });
-}
-
 /// Create a clipboard history item row from backend data
 fn generate_listboxrow_from_preview(
     item: &ClipboardItemPreview,
