@@ -6,7 +6,6 @@ use crate::shared::{BackendMessage, FrontendMessage};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 use super::backend_state::BackendState;
 use log::{info, error};
-use bytes::Bytes;
 
 pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> { 
     // Remove existing socket if it exists
@@ -43,9 +42,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
             "impl Display for MyStruct {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"MyStruct\")\n    }\n}",
             "Password4234!Cursor-Clip",
         ] {
-            let mut map = indexmap::IndexMap::new();
-            map.insert("text/plain;charset=utf-8".to_string(), Bytes::from_static(sample.as_bytes()));
-            let _ = state_lock.add_clipboard_item_from_mime_map(map);
+            let _ = state_lock.add_clipboard_item_from_text(sample);
         }
     }
 

@@ -120,6 +120,17 @@ impl BackendState {
         Some(new_id)
     }
 
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    pub fn add_clipboard_item_from_text(&mut self, text: &str) -> Option<u64> {
+        let mut mime_content = IndexMap::new();
+        mime_content.insert(
+            "text/plain;charset=utf-8".to_string(),
+            Bytes::copy_from_slice(text.as_bytes()),
+        );
+        self.add_clipboard_item_from_mime_map(mime_content)
+    }
+    
+
     pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 
     self.history.iter().map(ClipboardItemPreview::from).collect()
     }
