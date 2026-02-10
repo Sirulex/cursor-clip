@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, Revealer};
+use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, Revealer, Overlay};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use std::sync::Once;
@@ -207,7 +207,7 @@ fn create_layer_shell_window(
 /// Falls back to a lazy on-demand fetch only if the provided vector is empty.
 fn generate_overlay_content(
     mut prefetched_items: Vec<ClipboardItemPreview>,
-) -> (Box, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
+) -> (Overlay, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -231,8 +231,14 @@ fn generate_overlay_content(
 
     let menu_revealer = Revealer::new();
     menu_revealer.set_reveal_child(false);
+    menu_revealer.set_visible(false);
     menu_revealer.set_transition_duration(120);
     menu_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
+    menu_revealer.set_halign(Align::End);
+    menu_revealer.set_valign(Align::Start);
+    menu_revealer.set_margin_top(46);
+    menu_revealer.set_margin_end(10);
+    menu_revealer.add_css_class("menu-revealer");
 
     let menu_box = Box::new(Orientation::Vertical, 8);
     menu_box.set_margin_top(8);
@@ -268,7 +274,6 @@ fn generate_overlay_content(
     header_bar.pack_start(&clear_button);
 
     main_box.append(&header_bar);
-    main_box.append(&menu_revealer);
 
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
@@ -383,6 +388,7 @@ fn generate_overlay_content(
     let menu_revealer_toggle = menu_revealer.clone();
     three_dot_menu.connect_clicked(move |_| {
         let next_state = !menu_revealer_toggle.is_child_revealed();
+        menu_revealer_toggle.set_visible(next_state);
         menu_revealer_toggle.set_reveal_child(next_state);
     });
 
@@ -404,7 +410,11 @@ fn generate_overlay_content(
         }
     });
 
-    (main_box, list_box, items_state)
+    let overlay = Overlay::new();
+    overlay.set_child(Some(&main_box));
+    overlay.add_overlay(&menu_revealer);
+
+    (overlay, list_box, items_state)
 }
 
 /// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
@@ -598,6 +608,12 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
 
         .clipboard-pin:hover {
             color: #ffffff;
+        }
+
+        .menu-revealer {
+            background: #2b2b2f;
+            border-radius: 8px;
+            padding: 6px 8px;
         }
         "
     );
