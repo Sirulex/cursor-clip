@@ -169,6 +169,7 @@ dependencies = [
  "bytes",
  "clap",
  "env_logger",
+ "glib",
  "gtk4",
  "gtk4-layer-shell",
  "indexmap",
