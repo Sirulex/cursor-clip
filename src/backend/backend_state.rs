@@ -1,5 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
+use std::io::Cursor;
+use image::{ImageFormat, imageops::FilterType};
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_seat;
 use wayland_protocols_wlr::data_control::v1::client::{
@@ -78,8 +80,14 @@ impl BackendState {
         if mime_content.is_empty() { return None; }
 
         // If we have image/png, prefer showing mime_type + bytes and set type to Image
-        let (content_preview, content_type) = if let Some(png_bytes) = mime_content.get("image/png") {
-            (format!("<image/png {} bytes>", png_bytes.len()), ClipboardContentType::Image)
+        let (content_preview, content_type, thumbnail) = if let Some(png_bytes) =
+            mime_content.get("image/png")
+        {
+            (
+                format!("<image/png {} bytes>", png_bytes.len()),
+                ClipboardContentType::Image,
+                Self::scale_image(png_bytes),
+            )
         } else {
             // Otherwise, if we have text/plain;charset=utf-8, show up to first 200 chars and infer type
             let preview: String = if let Some(txt_bytes) = mime_content.get("text/plain;charset=utf-8") {
@@ -93,9 +101,8 @@ impl BackendState {
                 format!("<{mime_name} {len} bytes>")
             };
             let content_type = ClipboardContentType::type_from_preview(&preview);
-            (preview, content_type)
+            (preview, content_type, None)
         };
-
 
         let item = ClipboardItem {
             item_id: self.id_for_next_entry,
@@ -104,6 +111,7 @@ impl BackendState {
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             pinned: false,
             mime_data: mime_content.drain(..).collect(),
+            thumbnail,
         };
 
         // remove duplicates (todo change to more robust solution -> hashes)
@@ -120,6 +128,20 @@ impl BackendState {
         Some(new_id)
     }
 
+    fn scale_image(img_bytes: &Bytes) -> Option<Bytes> {
+        image::load_from_memory(img_bytes.as_ref())
+            .ok()
+            .and_then(|img| {
+                let scaled = img.resize(300, 180, FilterType::Nearest);
+                let mut buffer = Cursor::new(Vec::new());
+                if scaled.write_to(&mut buffer, ImageFormat::Jpeg).is_ok() {
+                    Some(Bytes::from(buffer.into_inner()))
+                } else {
+                    None
+                }
+            })
+    }
+
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn add_clipboard_item_from_text(&mut self, text: &str) -> Option<u64> {
         let mut mime_content = IndexMap::new();
@@ -129,7 +151,6 @@ impl BackendState {
         );
         self.add_clipboard_item_from_mime_map(mime_content)
     }
-    
 
     pub fn get_history(&self) -> Vec<ClipboardItemPreview> { 
     self.history.iter().map(ClipboardItemPreview::from).collect()

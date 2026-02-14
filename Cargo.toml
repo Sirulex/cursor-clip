@@ -27,3 +27,4 @@ memmap2 = "0.9"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 glib = "0.21.5"
+image = "0.25.9"

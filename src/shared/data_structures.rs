@@ -11,6 +11,7 @@ pub struct ClipboardItem {
     #[serde(default)]
     pub pinned: bool,
     pub mime_data: IndexMap<String, Bytes>, // content type -> payload bytes
+    pub thumbnail: Option<Bytes>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,24 +22,18 @@ pub struct ClipboardItemPreview {
     pub timestamp: u64, // Unix timestamp
     #[serde(default)]
     pub pinned: bool,
-    pub thumbnail: Option<Vec<u8>>,
+    pub thumbnail: Option<Bytes>,
 }
 
 impl From<&ClipboardItem> for ClipboardItemPreview {
     fn from(full: &ClipboardItem) -> Self {
-        let thumbnail = if full.content_type == ClipboardContentType::Image {
-            full.mime_data.get("image/png").map(|bytes| bytes.to_vec())
-        } else {
-            None
-        };
-
         Self {
             item_id: full.item_id,
             content_preview: full.content_preview.clone(),
             content_type: full.content_type,
             timestamp: full.timestamp,
             pinned: full.pinned,
-            thumbnail,
+            thumbnail: full.thumbnail.clone(),
         }
     }
 }
