@@ -132,7 +132,7 @@ impl BackendState {
         image::load_from_memory(img_bytes.as_ref())
             .ok()
             .and_then(|img| {
-                let scaled = img.resize(300, 180, FilterType::Nearest);
+                let scaled = img.resize(300, 180, FilterType::Triangle);
                 let mut buffer = Cursor::new(Vec::new());
                 if scaled.write_to(&mut buffer, ImageFormat::Jpeg).is_ok() {
                     Some(Bytes::from(buffer.into_inner()))
