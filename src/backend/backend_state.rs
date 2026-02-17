@@ -5,7 +5,13 @@ use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
 use wayland_client::backend::ObjectId;
+use wayland_client::Proxy;
 use wayland_client::protocol::wl_seat;
+use wayland_protocols::ext::data_control::v1::client::{
+    ext_data_control_device_v1::ExtDataControlDeviceV1,
+    ext_data_control_manager_v1::ExtDataControlManagerV1,
+    ext_data_control_source_v1::ExtDataControlSourceV1,
+};
 use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
     zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
@@ -19,6 +25,89 @@ use indexmap::IndexMap;
 use bytes::Bytes;
 use log::{debug, info, warn};
 
+#[derive(Debug, Clone)]
+pub enum DataControlManager {
+    Wlr(ZwlrDataControlManagerV1),
+    Ext(ExtDataControlManagerV1),
+}
+
+#[derive(Debug, Clone)]
+pub enum DataControlDevice {
+    Wlr(ZwlrDataControlDeviceV1),
+    Ext(ExtDataControlDeviceV1),
+}
+
+#[derive(Debug, Clone)]
+pub enum DataControlSource {
+    Wlr(ZwlrDataControlSourceV1),
+    Ext(ExtDataControlSourceV1),
+}
+
+impl DataControlManager {
+    pub fn destroy(self) {
+        match self {
+            Self::Wlr(manager) => manager.destroy(),
+            Self::Ext(manager) => manager.destroy(),
+        }
+    }
+
+    pub fn create_data_source(&self, qh: &QueueHandle<MutexBackendState>) -> DataControlSource {
+        match self {
+            Self::Wlr(manager) => DataControlSource::Wlr(manager.create_data_source(qh, ())),
+            Self::Ext(manager) => DataControlSource::Ext(manager.create_data_source(qh, ())),
+        }
+    }
+
+    pub fn get_data_device(&self, seat: &wl_seat::WlSeat, qh: &QueueHandle<MutexBackendState>) -> DataControlDevice {
+        match self {
+            Self::Wlr(manager) => DataControlDevice::Wlr(manager.get_data_device(seat, qh, ())),
+            Self::Ext(manager) => DataControlDevice::Ext(manager.get_data_device(seat, qh, ())),
+        }
+    }
+}
+
+impl DataControlDevice {
+    pub fn destroy(self) {
+        match self {
+            Self::Wlr(device) => device.destroy(),
+            Self::Ext(device) => device.destroy(),
+        }
+    }
+
+    pub fn set_selection(&self, source: Option<&DataControlSource>) {
+        match (self, source) {
+            (Self::Wlr(device), Some(DataControlSource::Wlr(source))) => device.set_selection(Some(source)),
+            (Self::Wlr(device), None) => device.set_selection(None),
+            (Self::Ext(device), Some(DataControlSource::Ext(source))) => device.set_selection(Some(source)),
+            (Self::Ext(device), None) => device.set_selection(None),
+            _ => warn!("Mismatched data control protocol between device and source"),
+        }
+    }
+}
+
+impl DataControlSource {
+    pub fn destroy(self) {
+        match self {
+            Self::Wlr(source) => source.destroy(),
+            Self::Ext(source) => source.destroy(),
+        }
+    }
+
+    pub fn offer(&self, mime_type: String) {
+        match self {
+            Self::Wlr(source) => source.offer(mime_type),
+            Self::Ext(source) => source.offer(mime_type),
+        }
+    }
+
+    pub fn id(&self) -> ObjectId {
+        match self {
+            Self::Wlr(source) => source.id(),
+            Self::Ext(source) => source.id(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct BackendState {
     // Clipboard history and management
@@ -26,8 +115,8 @@ pub struct BackendState {
     pub id_for_next_entry: u64,
     
     // Wayland objects for clipboard operations
-    pub data_control_manager: Option<ZwlrDataControlManagerV1>,
-    pub data_control_device: Option<ZwlrDataControlDeviceV1>,
+    pub data_control_manager: Option<DataControlManager>,
+    pub data_control_device: Option<DataControlDevice>,
     pub qh: Option<QueueHandle<MutexBackendState>>,
     pub seat: Option<wl_seat::WlSeat>,
     pub connection: Option<Connection>,
@@ -37,7 +126,7 @@ pub struct BackendState {
     pub mime_type_offers: HashMap<ObjectId, Vec<String>>,
     // Currently selected offer id (if any)
     pub current_data_offer: Option<ObjectId>,
-    pub current_source_object: Option<ZwlrDataControlSourceV1>,
+    pub current_source_object: Option<DataControlSource>,
     pub current_source_entry_id: Option<u64>,
     // When we programmatically set the selection, the compositor will echo it
     // back as a new offer/selection. If we immediately try to read that offer
@@ -237,7 +326,7 @@ impl BackendState {
             prev.destroy();
         }
 
-        let source = manager.create_data_source(qh, ());
+        let source = manager.create_data_source(qh);
         for (mime, _data) in &item.mime_data { source.offer(mime.clone()); }
         device.set_selection(Some(&source));
         self.current_source_object = Some(source);
