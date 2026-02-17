@@ -10,7 +10,7 @@ use wayland_protocols_wlr::{
 use wayland_protocols::{
     wp::{
         single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
-        viewporter::client::wp_viewporter,
+        viewporter::client::{wp_viewporter, wp_viewport},
     },
 };
 
@@ -38,6 +38,8 @@ pub struct State {
     pub update_surface: Option<wl_surface::WlSurface>,
     pub update_layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     pub update_frame_callback: Option<wl_callback::WlCallback>,
+    pub capture_viewport: Option<wp_viewport::WpViewport>,
+    pub update_viewport: Option<wp_viewport::WpViewport>,
     pub clipboard_history: Vec<ClipboardItemPreview>,
 }
 
@@ -65,6 +67,8 @@ impl State {
             update_surface: None,
             update_layer_surface: None,
             update_frame_callback: None,
+            capture_viewport: None,
+            update_viewport: None,
             clipboard_history: Vec::new(),
         }
     }
