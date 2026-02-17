@@ -1,7 +1,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 use std::io::Cursor;
-use image::{ImageFormat, imageops::FilterType};
+use fast_image_resize as fir;
+use fast_image_resize::images::Image;
+use image::{ImageFormat, RgbaImage};
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_seat;
 use wayland_protocols_wlr::data_control::v1::client::{
@@ -129,17 +131,50 @@ impl BackendState {
     }
 
     fn scale_image(img_bytes: &Bytes) -> Option<Bytes> {
-        image::load_from_memory(img_bytes.as_ref())
-            .ok()
-            .and_then(|img| {
-                let scaled = img.resize(300, 180, FilterType::Triangle);
-                let mut buffer = Cursor::new(Vec::new());
-                if scaled.write_to(&mut buffer, ImageFormat::Jpeg).is_ok() {
-                    Some(Bytes::from(buffer.into_inner()))
-                } else {
-                    None
-                }
-            })
+        let source = image::load_from_memory(img_bytes.as_ref()).ok()?.to_rgba8();
+        let (src_width, src_height) = source.dimensions();
+
+        if src_width == 0 || src_height == 0 {
+            return None;
+        }
+
+        let max_width = 300u32;
+        let max_height = 180u32;
+        let scale = (max_width as f32 / src_width as f32).min(max_height as f32 / src_height as f32);
+        let dst_width = ((src_width as f32 * scale).round() as u32).max(1);
+        let dst_height = ((src_height as f32 * scale).round() as u32).max(1);
+
+        let src_image = Image::from_vec_u8(
+            src_width,
+            src_height,
+            source.into_raw(),
+            fir::PixelType::U8x4,
+        )
+        .ok()?;
+
+        let mut dst_image = Image::new(dst_width, dst_height, fir::PixelType::U8x4);
+        let mut resizer = fir::Resizer::new();
+        let options = fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(
+            fir::FilterType::Bilinear,
+        ));
+
+        resizer.resize(&src_image, &mut dst_image, Some(&options)).ok()?;
+
+        let thumbnail = RgbaImage::from_raw(
+            dst_image.width(),
+            dst_image.height(),
+            dst_image.into_vec(),
+        )?;
+
+        let mut buffer = Cursor::new(Vec::new());
+        if image::DynamicImage::ImageRgba8(thumbnail)
+            .write_to(&mut buffer, ImageFormat::Jpeg)
+            .is_ok()
+        {
+            Some(Bytes::from(buffer.into_inner()))
+        } else {
+            None
+        }
     }
 
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
