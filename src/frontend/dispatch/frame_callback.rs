@@ -1,9 +1,9 @@
-use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::protocol::wl_callback;
+use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-use crate::frontend::frontend_state::State;
 use crate::frontend::dispatch::layer_shell::cleanup_update_layer;
+use crate::frontend::frontend_state::State;
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -53,7 +53,7 @@ fn setup_update_layer(state: &mut State, qhandle: &QueueHandle<State>) {
         eprintln!("Layer shell not available");
         return;
     };
-    
+
     let Some(update_surface) = &state.update_surface else {
         eprintln!("Update surface not available");
         return;
@@ -88,9 +88,12 @@ fn setup_update_layer(state: &mut State, qhandle: &QueueHandle<State>) {
 fn schedule_next_frame_check(state: &mut State, qhandle: &QueueHandle<State>, frame_count: u8) {
     if let Some(update_surface) = &state.update_surface {
         debug!("Scheduling frame check #{}", frame_count + 1);
-        let frame_callback = update_surface.frame(qhandle, FrameCallbackData::UpdateLayerFrameCount(frame_count));
+        let frame_callback = update_surface.frame(
+            qhandle,
+            FrameCallbackData::UpdateLayerFrameCount(frame_count),
+        );
         state.update_frame_callback = Some(frame_callback);
-        
+
         // Commit to trigger the next frame
         update_surface.commit();
     } else {

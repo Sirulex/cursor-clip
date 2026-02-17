@@ -3,31 +3,27 @@ use wayland_client::{
     globals::{GlobalList, registry_queue_init},
     protocol::{wl_compositor, wl_seat, wl_shm},
 };
-use wayland_protocols_wlr::{
-    layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
+use wayland_protocols::wp::{
+    single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
+    viewporter::client::wp_viewporter,
 };
-use wayland_protocols::{
-    wp::{
-        single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
-        viewporter::client::wp_viewporter,
-    },
-};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-use crate::frontend::{frontend_state::State, gtk_overlay};
 use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
 use crate::frontend::ipc_client::FrontendClient;
-use log::{debug, warn, error};
+use crate::frontend::{frontend_state::State, gtk_overlay};
+use log::{debug, error, warn};
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::OpenOptions;
 use std::os::fd::BorrowedFd;
 use std::os::unix::io::AsRawFd;
 
 fn run_main_event_loop(
-    state: &mut State, 
-    queue: &mut EventQueue<State>
+    state: &mut State,
+    queue: &mut EventQueue<State>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut gtk_window_created = false;
-    
+
     loop {
         // Process Wayland events
         queue.blocking_dispatch(state)?;
@@ -39,20 +35,23 @@ fn run_main_event_loop(
             debug!("Capture layer ready; creating GTK overlay window at ({x}, {y})");
 
             // Create the GTK window using the unified client backend communication
-            if let Err(e) = gtk_overlay::init_clipboard_overlay(x, y, state.clipboard_history.clone()) {
+            if let Err(e) =
+                gtk_overlay::init_clipboard_overlay(x, y, state.clipboard_history.clone())
+            {
                 error!("Error creating GTK overlay: {e:?}");
             }
-            
+
             gtk_window_created = true;
         }
-        
+
         // Handle close requests
-        if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked) {
+        if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked)
+        {
             gtk_overlay::reset_close_flags();
             cleanup_capture_layer(state);
             break;
         }
-        
+
         // Process GTK events if window has been created
         if gtk_window_created {
             gtk4::glib::MainContext::default().iteration(false);
@@ -70,7 +69,10 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
         match client.get_history() {
             Ok(items) => {
                 state.clipboard_history = items;
-                debug!("Prefetched {} clipboard history items", state.clipboard_history.len());
+                debug!(
+                    "Prefetched {} clipboard history items",
+                    state.clipboard_history.len()
+                );
             }
             Err(e) => warn!("Failed to prefetch clipboard history: {e}"),
         }
@@ -138,7 +140,9 @@ fn init_wayland_protocols(
     }
 
     // Bind wp_viewporter
-    if let Ok(viewporter) = globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ()) {
+    if let Ok(viewporter) =
+        globals.bind::<wp_viewporter::WpViewporter, _, _>(&queue.handle(), 1..=1, ())
+    {
         state.viewporter = Some(viewporter);
     } else {
         debug!("wp_viewporter not available");
@@ -216,12 +220,11 @@ fn setup_capture_layer(state: &mut State, queue: &EventQueue<State>) {
         zwlr_layer_surface_v1::Anchor::Top
             | zwlr_layer_surface_v1::Anchor::Left
             | zwlr_layer_surface_v1::Anchor::Right
-            | zwlr_layer_surface_v1::Anchor::Bottom
+            | zwlr_layer_surface_v1::Anchor::Bottom,
     );
 
     state.capture_layer_surface = Some(capture_layer_surface);
     capture_surface_ref.commit();
-
 }
 
 // Helper to create a 1x1 fully transparent buffer either via SPBM or SHM fallback
@@ -231,7 +234,8 @@ fn create_transparent_buffer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Prefer wp_single_pixel_buffer_manager if available
     if let Some(spbm) = state.single_pixel_buffer_manager.as_ref() {
-        let transparent_buffer = spbm.create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x00, &queue.handle(), ());
+        let transparent_buffer =
+            spbm.create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x00, &queue.handle(), ());
         state.transparent_buffer = Some(transparent_buffer);
         return Ok(());
     }
@@ -250,7 +254,9 @@ fn create_transparent_buffer(
     let unique = format!(
         "cursor-clip-shm-{}-{}.bin",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
     );
     path.push(unique);
 
@@ -273,9 +279,10 @@ fn create_transparent_buffer(
     let borrow_fd: BorrowedFd<'_> = unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) };
     let pool = shm.create_pool(borrow_fd, size, &queue.handle(), ());
     let buffer = pool.create_buffer(
-        0,     // offset
-        1, 1,  // width, height
-        4,     // stride (bytes per row)
+        0, // offset
+        1,
+        1, // width, height
+        4, // stride (bytes per row)
         wl_shm::Format::Argb8888,
         &queue.handle(),
         (),

@@ -1,17 +1,13 @@
+use std::fs::File;
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_pointer, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
-use std::fs::File;
 
-use wayland_protocols_wlr::{
-    layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1},
-};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-use wayland_protocols::{
-    wp::{
-        single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
-        viewporter::client::{wp_viewporter, wp_viewport},
-    },
+use wayland_protocols::wp::{
+    single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1,
+    viewporter::client::{wp_viewport, wp_viewporter},
 };
 
 use crate::shared::ClipboardItemPreview;
@@ -21,7 +17,8 @@ pub struct State {
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub seat: Option<wl_seat::WlSeat>,
-    pub single_pixel_buffer_manager: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
+    pub single_pixel_buffer_manager:
+        Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
     pub shm: Option<wl_shm::WlShm>,
     pub shm_pool: Option<wl_shm_pool::WlShmPool>,
