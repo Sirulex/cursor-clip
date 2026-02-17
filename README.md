@@ -12,7 +12,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 ### 📋 **Windows 11-Style Clipboard History**
 - **Clean list interface**: Similar to Windows 11 clipboard history
 - **Content type indicators**: Icons for text, URLs, code, files, etc.
-- **Rich previews**: Formatted content display with truncation
+- **Rich previews**: Formatted content display for text, images, and file paths
 - **Timestamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to the clipboard
 - **Pin or delete items**: Manage your history with ease
