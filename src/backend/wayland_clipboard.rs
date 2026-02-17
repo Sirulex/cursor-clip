@@ -312,6 +312,19 @@ fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dy
     Ok((reader, writer))
 }
 
+/// Filters out mime types to speed up processing
+fn select_target_mimes(available_mimes: &[String]) -> Vec<String> {
+    let best_image_mime = available_mimes.iter().find(|m| *m == "image/png")
+        .or_else(|| available_mimes.iter().find(|m| *m == "image/jpeg"))
+        .or_else(|| available_mimes.iter().find(|m| *m == "image/bmp"));
+
+    if let Some(img) = best_image_mime {
+        return vec![img.clone()];
+    }
+
+    available_mimes.to_vec()
+}
+
 fn read_all_data_formats(
     data_offer: &ZwlrDataControlOfferV1,
     mime_types: Vec<String>,
@@ -326,7 +339,9 @@ fn read_all_data_formats(
         return mime_map;
     }
 
-    for mime in mime_types {
+    let targets = select_target_mimes(&mime_types);
+
+    for mime in targets {
         let (reader_fd, writer_fd) = match create_pipes() {
             Ok(pair) => pair,
             Err(err) => { warn!("Could not open pipe to read data for {mime}: {err:?}"); continue; }

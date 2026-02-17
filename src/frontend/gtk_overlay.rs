@@ -725,19 +725,36 @@ fn generate_listboxrow_from_preview(
     
     main_box.append(&header_box);
 
-    let content_label = Label::new(Some(&item.content_preview));
-    content_label.add_css_class("clipboard-preview");
-    if matches!(item.content_type, ClipboardContentType::Code | ClipboardContentType::File) {
-        content_label.add_css_class("monospace");
-    }
-    content_label.set_halign(Align::Start);
-    content_label.set_wrap(true);
-    content_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
-    content_label.set_max_width_chars(50);
-    content_label.set_lines(3);
-    content_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    let rendered_image = item.thumbnail.as_ref().and_then(|bytes| {
+        let gbytes = glib::Bytes::from(bytes);
+        gtk4::gdk::Texture::from_bytes(&gbytes).ok()
+    });
 
-    main_box.append(&content_label);
+    if let Some(texture) = rendered_image {
+        let picture = gtk4::Picture::for_paintable(&texture);
+        picture.set_can_shrink(true);
+        picture.set_hexpand(true);
+        picture.set_height_request(180);
+        picture.set_halign(gtk4::Align::Center);
+        picture.add_css_class("clipboard-preview");
+        main_box.append(&picture);
+    } else {
+        let content_label = Label::new(Some(&item.content_preview));
+        content_label.add_css_class("clipboard-preview");
+        if matches!(
+            item.content_type,
+            ClipboardContentType::Code | ClipboardContentType::File
+        ) {
+            content_label.add_css_class("monospace");
+        }
+        content_label.set_halign(Align::Start);
+        content_label.set_wrap(true);
+        content_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+        content_label.set_max_width_chars(50);
+        content_label.set_lines(3);
+        content_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        main_box.append(&content_label);
+    }
 
     row.set_child(Some(&main_box));
 
