@@ -1,13 +1,13 @@
 use std::sync::{Arc, Mutex};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
 
-use crate::shared::{BackendMessage, FrontendMessage};
-use super::wayland_clipboard::WaylandClipboardMonitor;
 use super::backend_state::BackendState;
-use log::{info, error};
+use super::wayland_clipboard::WaylandClipboardMonitor;
+use crate::shared::{BackendMessage, FrontendMessage};
+use log::{error, info};
 
-pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> { 
+pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Remove existing socket if it exists
     let socket_path = "/tmp/cursor-clip.sock";
     let _ = std::fs::remove_file(socket_path);
@@ -50,7 +50,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
     loop {
         let (stream, _addr) = listener.accept().await?;
         let state_clone = state.clone();
-        
+
         tokio::spawn(async move {
             if let Err(e) = handle_client(stream, state_clone).await {
                 error!("Client error: {e}");
@@ -68,11 +68,13 @@ async fn handle_client(
 
     while let Some(line) = lines.next_line().await? {
         let message: FrontendMessage = serde_json::from_str(&line)?;
-        
+
         let response = match message {
             FrontendMessage::GetHistory => {
                 let state = state.lock().unwrap();
-                BackendMessage::History { items: state.get_history() }
+                BackendMessage::History {
+                    items: state.get_history(),
+                }
             }
             FrontendMessage::SetClipboardById { id } => {
                 let mut state = state.lock().unwrap();

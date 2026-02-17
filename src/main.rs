@@ -1,5 +1,5 @@
 use clap::{Arg, Command};
-use log::{info, error};
+use log::{error, info};
 
 mod backend;
 mod frontend;

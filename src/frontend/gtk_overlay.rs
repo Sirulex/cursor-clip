@@ -1,17 +1,17 @@
+use crate::frontend::ipc_client::FrontendClient;
+use crate::shared::{ClipboardContentType, ClipboardItemPreview};
 use gtk4::prelude::*;
-use gtk4::{Application, Button, CheckButton, Label, Box, Orientation, Align, Revealer, Overlay};
+use gtk4::{Align, Application, Box, Button, CheckButton, Label, Orientation, Overlay, Revealer};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
+use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::fs;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::path::PathBuf;
-use std::fs;
-use serde::{Deserialize, Serialize};
-use crate::shared::{ClipboardItemPreview, ClipboardContentType};
-use crate::frontend::ipc_client::FrontendClient;
-use log::{info, debug, warn, error};
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -49,12 +49,14 @@ fn config_path() -> PathBuf {
 fn load_or_create_config() -> UserConfig {
     let path = config_path();
     if let Some(parent) = path.parent()
-        && let Err(e) = fs::create_dir_all(parent) {
+        && let Err(e) = fs::create_dir_all(parent)
+    {
         warn!("Failed to create config directory: {}", e);
     }
 
     if let Ok(contents) = fs::read_to_string(&path)
-        && let Ok(config) = toml::from_str::<UserConfig>(&contents) {
+        && let Ok(config) = toml::from_str::<UserConfig>(&contents)
+    {
         return config;
     }
 
@@ -70,7 +72,8 @@ fn save_config(config: &UserConfig) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let contents = toml::to_string_pretty(config).unwrap_or_else(|_| "show_trash = true\n".to_string());
+    let contents =
+        toml::to_string_pretty(config).unwrap_or_else(|_| "show_trash = true\n".to_string());
     fs::write(path, contents)
 }
 
@@ -81,7 +84,6 @@ pub fn is_close_requested() -> bool {
 pub fn reset_close_flags() {
     CLOSE_REQUESTED.store(false, Ordering::Relaxed);
 }
-
 
 // Centralized quit path to avoid double-close reentrancy and ensure flags + app quit
 fn request_quit() {
@@ -101,7 +103,11 @@ fn request_quit() {
     });
 }
 
-pub fn init_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardItemPreview>) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
+pub fn init_clipboard_overlay(
+    x: f64,
+    y: f64,
+    prefetched_items: Vec<ClipboardItemPreview>,
+) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
         adw::init().expect("Failed to initialize libadwaita");
     });
@@ -111,22 +117,22 @@ pub fn init_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardIte
         .application_id("com.cursor-clip")
         .build()
         .upcast();
-    
+
     let app_clone = app.clone();
     app.connect_activate(move |_| {
         let window = create_layer_shell_window(&app_clone, x, y, prefetched_items.clone());
-        
+
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
             *w.borrow_mut() = Some(window.clone());
         });
-        
+
         OVERLAY_APP.with(|a| {
             *a.borrow_mut() = Some(app_clone.clone());
         });
-        
+
         window.present();
-        
+
         debug!("Libadwaita overlay window created at ({}, {})", x, y);
     });
 
@@ -145,16 +151,16 @@ pub fn init_clipboard_overlay(x: f64, y: f64, prefetched_items: Vec<ClipboardIte
 
 /// Create and configure the sync layer shell window
 fn create_layer_shell_window(
-    app: &Application, 
-    x: f64, 
+    app: &Application,
+    x: f64,
     y: f64,
-    prefetched_items: Vec<ClipboardItemPreview>
+    prefetched_items: Vec<ClipboardItemPreview>,
 ) -> adw::ApplicationWindow {
     // Create the main window using Adwaita ApplicationWindow
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Clipboard History")
-        .decorated(false) 
+        .decorated(false)
         .build();
 
     // Initialize layer shell for this window
@@ -167,16 +173,15 @@ fn create_layer_shell_window(
     // Anchor to top-left corner for precise positioning
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
-    
+
     // Set margins to position the window at the specified coordinates
     window.set_margin(Edge::Top, y as i32);
     window.set_margin(Edge::Left, x as i32);
-    
-    window.set_exclusive_zone(-1); 
+
+    window.set_exclusive_zone(-1);
 
     // Make window keyboard interactive
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::Exclusive);
-
 
     // Apply custom styling
     apply_custom_styling(&window);
@@ -204,25 +209,27 @@ fn create_layer_shell_window(
 /// Falls back to a lazy on-demand fetch only if the provided vector is empty.
 fn generate_overlay_content(
     mut prefetched_items: Vec<ClipboardItemPreview>,
-) -> (Overlay, gtk4::ListBox, Rc<RefCell<Vec<ClipboardItemPreview>>>) {
+) -> (
+    Overlay,
+    gtk4::ListBox,
+    Rc<RefCell<Vec<ClipboardItemPreview>>>,
+) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
-    // Header bar 
+    // Header bar
     let header_bar = adw::HeaderBar::new();
     header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
     // Use standard end title buttons (includes the normal close button with Adwaita styling)
     header_bar.set_show_end_title_buttons(true);
     header_bar.set_show_start_title_buttons(false);
-    
+
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
     let show_trash_default = config_state.borrow().show_trash;
     let show_pin_default = config_state.borrow().show_pin;
 
     // Add a three-dot menu button (icon-only) next to the close button on the right
-    let three_dot_menu = Button::builder()
-        .icon_name("view-more-symbolic")
-        .build();
+    let three_dot_menu = Button::builder().icon_name("view-more-symbolic").build();
     three_dot_menu.add_css_class("flat");
     three_dot_menu.set_tooltip_text(Some("Options"));
 
@@ -264,7 +271,7 @@ fn generate_overlay_content(
     menu_box.append(&pin_toggle_row);
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&three_dot_menu);
-    
+
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
     clear_button.add_css_class("destructive-action");
@@ -289,7 +296,7 @@ fn generate_overlay_content(
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
 
     // Start with prefetched items; if empty try one lazy fetch (non-fatal if it fails)
-    
+
     if prefetched_items.is_empty() {
         debug!("Prefetched clipboard history empty - trying on-demand fetch...");
         if let Ok(mut client) = FrontendClient::new() {
@@ -329,7 +336,10 @@ fn generate_overlay_content(
         let items = items_for_activation.borrow();
         if index < items.len() {
             let item = &items[index];
-            debug!("Activated clipboard item ID {}: {}", item.item_id, item.content_preview);
+            debug!(
+                "Activated clipboard item ID {}: {}",
+                item.item_id, item.content_preview
+            );
 
             match FrontendClient::new() {
                 Ok(mut client) => {
@@ -346,7 +356,6 @@ fn generate_overlay_content(
             }
         }
     });
-
 
     scrolled_window.set_child(Some(&list_box));
     main_box.append(&scrolled_window);
@@ -391,7 +400,7 @@ fn generate_overlay_content(
 
     // Connect button signals
     clear_button.connect_clicked(move |_| {
-    match FrontendClient::new() {
+        match FrontendClient::new() {
             Ok(mut client) => {
                 if let Err(e) = client.clear_history() {
                     error!("Error clearing clipboard history: {}", e);
@@ -649,7 +658,7 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             border-radius: 8px;
             padding: 6px 8px;
         }
-        "
+        ",
     );
 
     gtk4::style_context_add_provider_for_display(
@@ -678,23 +687,21 @@ fn generate_listboxrow_from_preview(
 
     // Header with content type and time
     let header_box = Box::new(Orientation::Horizontal, 8);
-    
+
     let type_label = Label::new(Some(item.content_type.icon()));
     type_label.add_css_class("caption");
-    
+
     let type_text = Label::new(Some(item.content_type.as_str()));
     type_text.add_css_class("caption");
     type_text.set_halign(Align::Start);
     type_text.set_hexpand(true);
-    
+
     let time_label = Label::new(Some(&format_timestamp(item.timestamp)));
     time_label.add_css_class("caption");
     time_label.add_css_class("clipboard-time");
     time_label.set_halign(Align::End);
 
-    let pin_button = Button::builder()
-        .icon_name("view-pin-symbolic")
-        .build();
+    let pin_button = Button::builder().icon_name("view-pin-symbolic").build();
     pin_button.add_css_class("flat");
     pin_button.add_css_class("clipboard-pin");
     if item.pinned {
@@ -705,9 +712,7 @@ fn generate_listboxrow_from_preview(
     }
     pin_button.set_visible(show_pin);
 
-    let delete_button = Button::builder()
-        .icon_name("user-trash-symbolic")
-        .build();
+    let delete_button = Button::builder().icon_name("user-trash-symbolic").build();
     delete_button.add_css_class("flat");
     delete_button.add_css_class("destructive-action");
     delete_button.add_css_class("clipboard-delete");
@@ -722,7 +727,7 @@ fn generate_listboxrow_from_preview(
 
     header_box.append(&time_label);
     header_box.append(&action_box);
-    
+
     main_box.append(&header_box);
 
     let rendered_image = item.thumbnail.as_ref().and_then(|bytes| {
@@ -871,7 +876,8 @@ fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {
     let mut child = list_box.first_child();
     while let Some(widget) = child {
         if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>()
-            && let Some(delete_button) = find_button_in_row(&row, "clipboard-delete") {
+            && let Some(delete_button) = find_button_in_row(&row, "clipboard-delete")
+        {
             delete_button.set_visible(visible);
         }
         child = widget.next_sibling();
@@ -882,7 +888,8 @@ fn set_pin_icons_visible(list_box: &gtk4::ListBox, visible: bool) {
     let mut child = list_box.first_child();
     while let Some(widget) = child {
         if let Ok(row) = widget.clone().downcast::<gtk4::ListBoxRow>()
-            && let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
+            && let Some(pin_button) = find_button_in_row(&row, "clipboard-pin")
+        {
             pin_button.set_visible(visible);
         }
         child = widget.next_sibling();
@@ -916,14 +923,18 @@ fn format_timestamp(timestamp: u64) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     let diff = now.saturating_sub(timestamp);
-    
+
     if diff < 30 {
         "Just now".to_string()
     } else if diff < 3600 {
         let minutes = diff / 60;
-        format!("{} minute{} ago", minutes, if minutes == 1 { "" } else { "s" })
+        format!(
+            "{} minute{} ago",
+            minutes,
+            if minutes == 1 { "" } else { "s" }
+        )
     } else if diff < 86400 {
         let hours = diff / 3600;
         format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })

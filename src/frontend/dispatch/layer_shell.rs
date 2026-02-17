@@ -1,10 +1,8 @@
 use wayland_client::{Connection, Dispatch, QueueHandle};
-use wayland_protocols_wlr::layer_shell::v1::client::{
-    zwlr_layer_surface_v1,
-};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
-use crate::frontend::frontend_state::State;
 use crate::frontend::dispatch::frame_callback::FrameCallbackData;
+use crate::frontend::frontend_state::State;
 use log::debug;
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
@@ -27,7 +25,9 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
 
                 // Check if this is the capture layer surface
                 if Some(layer_surface) == state.capture_layer_surface.as_ref() {
-                    let Some(capture_surface) = &state.capture_surface else { return; };
+                    let Some(capture_surface) = &state.capture_surface else {
+                        return;
+                    };
                     if let Some(buffer) = &state.transparent_buffer {
                         capture_surface.attach(Some(buffer), 0, 0);
                     }
@@ -46,7 +46,8 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                     if !state.capture_layer_ready {
                         state.capture_layer_ready = true;
                         debug!("Setting capture_layer_ready to true");
-                        let frame_callback = capture_surface.frame(qhandle, FrameCallbackData::CaptureLayer);
+                        let frame_callback =
+                            capture_surface.frame(qhandle, FrameCallbackData::CaptureLayer);
                         state.capture_frame_callback = Some(frame_callback);
                     }
                     capture_surface.commit();
@@ -54,7 +55,9 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
 
                 // Check if this is the update layer surface
                 if Some(layer_surface) == state.update_layer_surface.as_ref() {
-                    let Some(update_surface) = &state.update_surface else { return; };
+                    let Some(update_surface) = &state.update_surface else {
+                        return;
+                    };
                     if let Some(buffer) = &state.transparent_buffer {
                         update_surface.attach(Some(buffer), 0, 0);
                     }
@@ -69,10 +72,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                         viewport.set_destination(width as i32, height as i32);
                     }
                     update_surface.damage(0, 0, width as i32, height as i32);
-                    
-                    let frame_callback = update_surface.frame(qhandle, FrameCallbackData::UpdateLayer);
+
+                    let frame_callback =
+                        update_surface.frame(qhandle, FrameCallbackData::UpdateLayer);
                     state.update_frame_callback = Some(frame_callback);
-                    
+
                     update_surface.commit();
                 }
             }

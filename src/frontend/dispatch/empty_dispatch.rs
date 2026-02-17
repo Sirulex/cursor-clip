@@ -4,28 +4,22 @@ use wayland_client::delegate_noop;
 
 // Core protocol objects
 use wayland_client::protocol::{
-    wl_compositor::WlCompositor,
-    wl_surface::WlSurface,
-    wl_region::WlRegion,
-    wl_buffer::WlBuffer,
-    wl_registry::WlRegistry,
-    wl_shm::WlShm,
-    wl_shm_pool::WlShmPool,
+    wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_region::WlRegion, wl_registry::WlRegistry,
+    wl_shm::WlShm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
 
 // WLR layer shell
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 
 // Viewporter & single pixel buffer
-use wayland_protocols::wp::viewporter::client::{
-    wp_viewporter::WpViewporter,
-    wp_viewport::WpViewport,
-};
 use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
+use wayland_protocols::wp::viewporter::client::{
+    wp_viewport::WpViewport, wp_viewporter::WpViewporter,
+};
 
 // Generate the noop dispatch implementations
 delegate_noop!(State: WlCompositor);
-delegate_noop!(State: WlRegion);   
+delegate_noop!(State: WlRegion);
 delegate_noop!(State: WlSurface);
 delegate_noop!(State: ZwlrLayerShellV1);
 delegate_noop!(State: WpViewporter);
@@ -42,8 +36,8 @@ delegate_noop!(State: ignore WlShm);
 // Manual Dispatch implementations for specific interfaces needing custom logic
 //-------------------------------------------------------------------------------
 
-use wayland_client::{Connection, QueueHandle, Dispatch};
 use wayland_client::globals::GlobalListContents;
+use wayland_client::{Connection, Dispatch, QueueHandle};
 
 // WlRegistry needs a custom Dispatch due to custom UserData (GlobalListContents)
 impl Dispatch<WlRegistry, GlobalListContents> for State {
@@ -58,4 +52,3 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
         // No-op
     }
 }
-
