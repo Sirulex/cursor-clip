@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use indexmap::IndexMap;
 use bytes::Bytes;
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardItem {
@@ -11,9 +11,9 @@ pub struct ClipboardItem {
     #[serde(default)]
     pub pinned: bool,
     pub mime_data: IndexMap<String, Bytes>, // content type -> payload bytes
+    pub thumbnail: Option<Bytes>,
 }
 
-/// Lightweight version sent to the frontend in history listings (no payload bytes)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardItemPreview {
     pub item_id: u64,
@@ -22,6 +22,7 @@ pub struct ClipboardItemPreview {
     pub timestamp: u64, // Unix timestamp
     #[serde(default)]
     pub pinned: bool,
+    pub thumbnail: Option<Bytes>,
 }
 
 impl From<&ClipboardItem> for ClipboardItemPreview {
@@ -32,11 +33,12 @@ impl From<&ClipboardItem> for ClipboardItemPreview {
             content_type: full.content_type,
             timestamp: full.timestamp,
             pinned: full.pinned,
+            thumbnail: full.thumbnail.clone(),
         }
     }
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ClipboardContentType {
     Text,
     Url,
@@ -84,11 +86,18 @@ impl ClipboardContentType {
         const PASSWORD_SPECIALS: &str = "!@#$%^&*()-_=+[]{};:,.<>?/\\|`~";
         if content.starts_with("http://") || content.starts_with("https://") {
             Self::Url
-        } else if content.contains("fn ") || content.contains("impl ") || content.contains("struct ") {
+        } else if content.contains("fn ")
+            || content.contains("impl ")
+            || content.contains("struct ")
+        {
             Self::Code
         } else if content.contains('/') && !content.contains(' ') && content.len() < 256 {
             Self::File
-        } else if !content.is_empty() && content.len() < 50 && !content.contains(' ') && content.chars().any(|c| PASSWORD_SPECIALS.contains(c)) {
+        } else if !content.is_empty()
+            && content.len() < 50
+            && !content.contains(' ')
+            && content.chars().any(|c| PASSWORD_SPECIALS.contains(c))
+        {
             Self::Password
         } else {
             Self::Text

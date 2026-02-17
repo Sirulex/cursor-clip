@@ -12,7 +12,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 ### 📋 **Windows 11-Style Clipboard History**
 - **Clean list interface**: Similar to Windows 11 clipboard history
 - **Content type indicators**: Icons for text, URLs, code, files, etc.
-- **Rich previews**: Formatted content display with truncation
+- **Rich previews**: Formatted content display for text, images, and file paths
 - **Timestamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to the clipboard
 - **Pin or delete items**: Manage your history with ease
@@ -144,16 +144,17 @@ cargo build --release
 ## Dependencies
 
 ### Core Libraries
-- **GTK4** (0.10): Modern UI toolkit
-- **Libadwaita** (0.8): GNOME's design system
-- **gtk4-layer-shell** (0.6): Wayland layer shell integration
-- **wayland-client** (0.31): Wayland protocol bindings
-- **wayland-protocols** (0.32): Extended Wayland protocols
-- **wayland-protocols-wlr** (0.3.9): wlroots-specific Wayland protocols
-- **Tokio runtime** (1.47): Asynchronous runtime
-- **serde** (1.0): Serialization framework
-- **indexmap** (2.11): Ordered map for clipboard history
-- **env_logger** (0.11): Logging framework
+- **GTK4**: Modern UI toolkit
+- **Libadwaita**: GNOME's design system
+- **gtk4-layer-shell**: Wayland layer shell integration
+- **wayland-client**: Wayland protocol bindings
+- **wayland-protocols**: Extended Wayland protocols
+- **wayland-protocols-wlr**: wlroots-specific Wayland protocols
+- **Tokio runtime**: Asynchronous runtime
+- **serde**: Serialization framework
+- **indexmap**: Ordered map for clipboard history
+- **fast_image_resize**: Efficient image resizing for previews
+- **env_logger**: Logging framework
 ---
 
 **Built with ❤️ using Rust, GTK4, Libadwaita, and Wayland Layer Shell**
