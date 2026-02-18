@@ -72,8 +72,8 @@ fn save_config(config: &UserConfig) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let contents =
-        toml::to_string_pretty(config).unwrap_or_else(|_| "show_trash = true\n".to_string());
+    let contents = toml::to_string_pretty(config)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     fs::write(path, contents)
 }
 
@@ -196,7 +196,7 @@ fn create_layer_shell_window(
 
     // Add close request handler to ensure any window close goes through our logic
     window.connect_close_request(|_window| {
-        println!("Window close requested - ensuring both overlay and capture layer close");
+        debug!("Window close requested - closing overlay and capture layer");
         request_quit();
         // Stop default handler to avoid double-close reentrancy during teardown
         gtk4::glib::Propagation::Stop

@@ -152,12 +152,12 @@ pub struct BackendState {
 
 impl Default for BackendState {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl BackendState {
-    pub fn new() -> Self {
+    pub fn new(monitor_only: bool) -> Self {
         Self {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
@@ -171,7 +171,7 @@ impl BackendState {
             qh: None,
             suppress_next_selection_read: false,
             connection: None,
-            monitor_only: false,
+            monitor_only,
         }
     }
 
@@ -289,7 +289,7 @@ impl BackendState {
         }
     }
 
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    #[cfg(debug_assertions)]
     pub fn add_clipboard_item_from_text(&mut self, text: &str) -> Option<u64> {
         let mut mime_content = IndexMap::new();
         mime_content.insert(
@@ -338,10 +338,8 @@ impl BackendState {
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
-        info!("Setting clipboard content by ID {entry_id}");
-        debug!(
-            "Setting clipboard content by ID {entry_id}: {}",
-            item.content_preview
+        info!(
+            "Setting clipboard content by ID {entry_id}"
         );
 
         let (Some(manager), Some(device), Some(qh)) = (

@@ -149,24 +149,11 @@ pub fn cleanup_update_layer(state: &mut State) {
     if let Some(viewport) = state.update_viewport.take() {
         viewport.destroy();
     }
-
-    // Destroy the update layer surface if it exists
     if let Some(update_layer_surface) = state.update_layer_surface.take() {
-        debug!("Destroying update layer surface");
         update_layer_surface.destroy();
     }
-
-    // Clean up the update surface
     if let Some(update_surface) = state.update_surface.take() {
-        debug!("Destroying update surface");
         update_surface.destroy();
     }
-
-    // Clear the update frame callback reference (callback-resources are auto-cleaned)
-    if state.update_frame_callback.is_some() {
-        debug!("Clearing update frame callback reference");
-        state.update_frame_callback = None;
-    }
-
-    debug!("Update layer cleanup completed");
+    state.update_frame_callback = None;
 }

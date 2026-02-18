@@ -18,12 +18,8 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
             capabilities: cap_event_enum,
         } = event
         {
-            //detangle Capabilities enum
             if let WEnum::Value(capabilities) = cap_event_enum {
-                debug!("Pointer capabilities detected");
-
                 if capabilities.contains(wl_seat::Capability::Pointer) {
-                    //no pattern matching as wl_seat::Capability is a bitfield
                     let pointer = seat.get_pointer(qhandle, ());
                     state.pointer = Some(pointer);
                     debug!("Pointer created");
@@ -34,7 +30,6 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
                 debug!("Unknown capability enumerator");
             }
         }
-        //impl release events todo
     }
 }
 

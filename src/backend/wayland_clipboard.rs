@@ -37,80 +37,67 @@ impl WaylandClipboardMonitor {
     }
 
     pub fn start_monitoring(&self) -> Result<(), String> {
-        // Establish Wayland connection
         let connection = Connection::connect_to_env()
             .map_err(|e| format!("Failed to connect to Wayland: {e}"))?;
         let (globals, mut event_queue): (GlobalList, EventQueue<MutexBackendState>) =
             registry_queue_init::<MutexBackendState>(&connection)
                 .map_err(|e| format!("Failed to init registry: {e}"))?;
 
-        // Create wrapper for shared state
         let mut shared_state_wrapper = MutexBackendState {
             backend_state: self.backend_state.clone(),
         };
 
-        // Bind required globals
         let qh = event_queue.handle();
-        // Store queue handle inside BackendState for direct selection setting
         {
             let mut state = self.backend_state.lock().unwrap();
             state.qh = Some(qh.clone());
             state.connection = Some(connection);
         }
 
-        // Bind seat
-        if let Ok(seat) =
-            globals.bind::<wayland_client::protocol::wl_seat::WlSeat, _, _>(&qh, 1..=9, ())
-        {
-            let mut state = self.backend_state.lock().unwrap();
-            state.seat = Some(seat);
-        } else {
-            // `wl_seat` is a core Wayland interface needed to create a data device for clipboard monitoring.
-            // Without it, we cannot function. Exit with a clear explanation.
-            let msg = "Critical Wayland interface 'wl_seat' is not available. \
-            Your current compositor/session did not expose an input seat, which is required to create a data device for clipboard access. \
-            Clipboard monitoring cannot start, exiting.";
-            error!("{msg}");
-            std::process::exit(1);
+        // Bind wl_seat — required to create a data device for clipboard access.
+        match globals.bind::<wayland_client::protocol::wl_seat::WlSeat, _, _>(&qh, 1..=9, ()) {
+            Ok(seat) => self.backend_state.lock().unwrap().seat = Some(seat),
+            Err(_) => {
+                error!(
+                    "Critical Wayland interface 'wl_seat' is not available. \
+                    Your compositor did not expose an input seat, which is required \
+                    for clipboard access. Exiting."
+                );
+                std::process::exit(1);
+            }
         }
 
-        // Bind data control manager: prefer standard ext-data-control, fallback to wlr-data-control.
+        // Bind data control manager: prefer ext-data-control, fall back to wlr-data-control.
         if let Ok(manager) = globals.bind::<ExtDataControlManagerV1, _, _>(&qh, 1..=1, ()) {
-            let mut state = self.backend_state.lock().unwrap();
-            state.data_control_manager = Some(DataControlManager::Ext(manager));
-            if let (Some(data_control_manager), Some(seat)) =
-                (&state.data_control_manager, &state.seat)
-            {
-                let device = data_control_manager.get_data_device(seat, &qh);
-                state.data_control_device = Some(device);
-            }
+            self.bind_data_device(DataControlManager::Ext(manager), &qh);
             info!("Using ext_data_control_manager_v1 clipboard protocol");
-        } else if let Ok(manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
-            let mut state = self.backend_state.lock().unwrap();
-            state.data_control_manager = Some(DataControlManager::Wlr(manager));
-            if let (Some(data_control_manager), Some(seat)) =
-                (&state.data_control_manager, &state.seat)
-            {
-                let device = data_control_manager.get_data_device(seat, &qh);
-                state.data_control_device = Some(device);
-            }
+        } else if let Ok(manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ())
+        {
+            self.bind_data_device(DataControlManager::Wlr(manager), &qh);
             info!("Using zwlr_data_control_manager_v1 clipboard protocol");
         } else {
-            let msg = "Critical Wayland global objects for clipboard are unavailable. \
-            Neither 'ext_data_control_manager_v1' nor 'zwlr_data_control_manager_v1' is exposed by this compositor/session. \
-            Clipboard monitoring cannot function without one of these protocols, exiting.";
-            error!("{msg}");
+            error!(
+                "Neither 'ext_data_control_manager_v1' nor 'zwlr_data_control_manager_v1' is \
+                available. Clipboard monitoring cannot function without one of these protocols. Exiting."
+            );
             std::process::exit(1);
         }
 
         info!("Wayland clipboard monitor initialized, monitoring changes...");
 
         loop {
-            // Dispatch pending events, then block waiting for new ones
             event_queue
                 .blocking_dispatch(&mut shared_state_wrapper)
                 .map_err(|e| format!("Failed to dispatch events: {e}"))?;
         }
+    }
+
+    fn bind_data_device(&self, manager: DataControlManager, qh: &QueueHandle<MutexBackendState>) {
+        let mut state = self.backend_state.lock().unwrap();
+        // seat is guaranteed set before this is called
+        let device = manager.get_data_device(state.seat.as_ref().unwrap(), qh);
+        state.data_control_manager = Some(manager);
+        state.data_control_device = Some(device);
     }
 }
 
@@ -134,6 +121,128 @@ impl Drop for WaylandClipboardMonitor {
     }
 }
 
+// ================= Shared event helpers =================
+
+/// Handle a new data offer from either Wlr or Ext device.
+fn handle_data_offer(state: &mut BackendState, offer_id: wayland_client::backend::ObjectId) {
+    debug!("New data offer received with ID: {offer_id:?}");
+    state.mime_type_offers.insert(offer_id, Vec::new());
+}
+
+/// Register an offered MIME type for the given offer object, filtering out video types.
+fn handle_offer_mime(state: &mut BackendState, offer_id: wayland_client::backend::ObjectId, mime_type: String) {
+    debug!("Offer event: MIME type offered: {mime_type}");
+    if let Some(mime_list) = state.mime_type_offers.get_mut(&offer_id)
+        && !mime_type.starts_with("video")
+    {
+        mime_list.push(mime_type);
+    }
+}
+
+/// Handle a Selection event from either Wlr or Ext device.
+/// `read_mime_data` is called (with the lock released) to read the data from the offer.
+fn handle_selection_event<F>(
+    wrapper: &mut MutexBackendState,
+    offer_id: wayland_client::backend::ObjectId,
+    destroy_offer: impl FnOnce(),
+    read_mime_data: F,
+) where
+    F: FnOnce(Vec<String>) -> IndexMap<String, Bytes>,
+{
+    let (mime_list, already_current, suppress_read) = {
+        let state = wrapper.backend_state.lock().unwrap();
+        let already_current = state
+            .current_data_offer
+            .as_ref()
+            .is_some_and(|o| o == &offer_id);
+        let mime_list = state.mime_type_offers.get(&offer_id).cloned();
+        (mime_list, already_current, state.suppress_next_selection_read)
+    };
+
+    let Some(mime_list) = mime_list else {
+        return;
+    };
+
+    debug!("New clipboard content available with {} MIME types", mime_list.len());
+
+    if suppress_read {
+        wrapper.backend_state.lock().unwrap().current_data_offer = Some(offer_id);
+        debug!("Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads");
+        destroy_offer();
+        return;
+    }
+
+    if already_current {
+        destroy_offer();
+        return;
+    }
+
+    {
+        let mut state = wrapper.backend_state.lock().unwrap();
+        state.current_data_offer = Some(offer_id);
+        state.mime_type_offers.clear();
+    }
+
+    let mime_map = read_mime_data(mime_list);
+    if !mime_map.is_empty() {
+        let mut state = wrapper.backend_state.lock().unwrap();
+        if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map)
+            && !state.monitor_only
+            && !state.suppress_next_selection_read
+        {
+            if let Err(e) = state.set_clipboard_by_id(new_id) {
+                warn!("Failed to take ownership of selection id {new_id}: {e}");
+            } else {
+                debug!("Took ownership of external selection (id {new_id})");
+            }
+        }
+    }
+    destroy_offer();
+}
+
+/// Handle a Source Send event for either Wlr or Ext source.
+fn handle_source_send(state: &BackendState, mime_type: String, fd: std::os::fd::OwnedFd) {
+    use std::io::Write;
+    debug!("Data source Send event for MIME type: {mime_type}");
+    let Some(item_id) = state.current_source_entry_id else {
+        warn!("No current_source_id set when Send event received");
+        return;
+    };
+    let Some(item) = state.get_item_by_id(item_id) else {
+        warn!("Clipboard item id {item_id} no longer exists in history");
+        return;
+    };
+    let mut file: std::fs::File = fd.into();
+    if let Some(bytes) = item.mime_data.get(&mime_type) {
+        if let Err(e) = file.write_all(bytes.as_ref()) {
+            error!("Failed writing selection data (id {item_id}, mime {mime_type}): {e}");
+        } else {
+            debug!("Wrote {} bytes for id {item_id} (mime {mime_type})", bytes.len());
+        }
+    } else {
+        warn!("No data stored for MIME {mime_type} (id {item_id}), nothing written");
+    }
+}
+
+/// Handle a Source Cancelled event. Re-enables selection reading if this is the active source.
+fn handle_source_cancelled(
+    state: &mut BackendState,
+    source_id: wayland_client::backend::ObjectId,
+) {
+    debug!("Data source cancelled (object id {source_id:?})");
+    // If the cancelled source is still the active one, an external client took ownership — re-enable reads.
+    if state
+        .current_source_object
+        .as_ref()
+        .map(|s| s.id())
+        == Some(source_id)
+    {
+        state.suppress_next_selection_read = false;
+        state.current_source_object = None;
+        debug!("Re-enabled selection reading (external client took over)");
+    }
+}
+
 // ================= Dispatch Implementations =================
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
@@ -145,80 +254,27 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
         conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        let mut state = wrapper.backend_state.lock().unwrap();
-
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
-                let object_id = id.id();
-                debug!("New data offer received with ID: {object_id:?}");
-                state.mime_type_offers.insert(object_id, Vec::new());
+                handle_data_offer(&mut wrapper.backend_state.lock().unwrap(), id.id());
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
                 if let Some(offer_id) = id {
                     let offer_key = offer_id.id();
                     debug!("Selection changed to offer ID: {offer_key:?}");
-
-                    let (mime_list, already_current, suppress_read) = {
-                        let already_current = state
-                            .current_data_offer
-                            .as_ref()
-                            .is_some_and(|o| o == &offer_key);
-                        let mime_list = state.mime_type_offers.get(&offer_key).cloned();
-                        (
-                            mime_list,
-                            already_current,
-                            state.suppress_next_selection_read,
-                        )
-                    };
-
-                    if let Some(mime_list) = mime_list {
-                        debug!(
-                            "New clipboard content available with {} MIME types",
-                            mime_list.len()
-                        );
-                        if suppress_read {
-                            state.current_data_offer = Some(offer_key);
-                            debug!(
-                                "Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads"
-                            );
-                            offer_id.destroy();
-                            return;
-                        }
-
-                        if already_current {
-                            offer_id.destroy();
-                            return;
-                        }
-
-                        state.current_data_offer = Some(offer_key);
-                        // Remove old offer entries as new ones will be generated for future selections
-                        state.mime_type_offers.clear();
-                        drop(state);
-
-                        let mime_map = read_all_data_formats_wlr(&offer_id, mime_list, conn);
-                        if !mime_map.is_empty() {
-                            let mut state = wrapper.backend_state.lock().unwrap();
-                            if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map)
-                                && !state.monitor_only
-                                && !state.suppress_next_selection_read
-                            {
-                                if let Err(e) = state.set_clipboard_by_id(new_id) {
-                                    warn!("Failed to take ownership of selection id {new_id}: {e}");
-                                } else {
-                                    debug!("Took ownership of external selection (id {new_id})");
-                                }
-                            }
-                        }
-                        offer_id.destroy();
-                    }
+                    let conn = conn.clone();
+                    handle_selection_event(
+                        wrapper,
+                        offer_key,
+                        || offer_id.destroy(),
+                        |mime_list| read_all_data_formats(&offer_id, mime_list, &conn),
+                    );
                 } else {
                     debug!("Selection cleared");
-                    state.current_data_offer = None;
+                    wrapper.backend_state.lock().unwrap().current_data_offer = None;
                 }
             }
-            zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {
-                // We ignore primary selection
-            }
+            zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {}
             _ => {}
         }
     }
@@ -228,10 +284,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
         qhandle: &QueueHandle<Self>,
     ) -> StdArc<dyn wayland_client::backend::ObjectData> {
         match opcode {
-            0 => {
-                // DataOffer event - create a data offer object data
-                qhandle.make_data::<ZwlrDataControlOfferV1, ()>(())
-            }
+            0 => qhandle.make_data::<ZwlrDataControlOfferV1, ()>(()),
             _ => panic!("Unknown child object for opcode {opcode}"),
         }
     }
@@ -247,14 +300,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
         _: &QueueHandle<Self>,
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-            let object_id = offer.id();
-            debug!("Offer event: MIME type offered: {mime_type}");
-            let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id)
-                && !mime_type.starts_with("video")
-            {
-                mime_list.push(mime_type);
-            }
+            handle_offer_mime(&mut wrapper.backend_state.lock().unwrap(), offer.id(), mime_type);
         }
     }
 }
@@ -268,56 +314,13 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let mut state = wrapper.backend_state.lock().unwrap();
-
         match event {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
-                debug!("Data source Send event for MIME type: {mime_type}");
-                if let Some(item_id) = state.current_source_entry_id {
-                    if let Some(item) = state.get_item_by_id(item_id) {
-                        use std::io::Write;
-                        let mut file: std::fs::File = fd.into();
-                        if let Some(bytes) = item.mime_data.get(&mime_type) {
-                            if let Err(e) = file.write_all(bytes.as_ref()) {
-                                error!(
-                                    "Failed writing selection data (id {item_id}, mime {mime_type}): {e}",
-                                );
-                            } else {
-                                debug!(
-                                    "Wrote {} bytes for id {item_id} (mime {mime_type})",
-                                    bytes.len()
-                                );
-                            }
-                        } else {
-                            warn!(
-                                "No data stored for MIME {mime_type} (id {item_id}), nothing written"
-                            );
-                        }
-                    } else {
-                        warn!("Clipboard item id {item_id} no longer exists in history");
-                    }
-                } else {
-                    warn!("No current_source_id set when Send event received");
-                }
+                handle_source_send(&wrapper.backend_state.lock().unwrap(), mime_type, fd);
             }
             zwlr_data_control_source_v1::Event::Cancelled => {
-                debug!(
-                    "Data source cancelled. Last offered content (object id {:?})",
-                    event_source.id()
-                );
-                //Re-enabled reading new selections if currently active selection is cancelled, therefore external client took over
-                //if the cancelled event is not for the currently active selection, it was our previous selection -> new entry chosen within clipboard manager
-                if state
-                    .current_source_object
-                    .as_ref()
-                    .map(|source| source.id())
-                    == Some(event_source.id())
-                {
-                    state.suppress_next_selection_read = false;
-                    state.current_source_object = None;
-                    debug!("Re-enabled selection reading (external client took over)");
-                }
-                drop(state);
+                let source_id = event_source.id();
+                handle_source_cancelled(&mut wrapper.backend_state.lock().unwrap(), source_id);
                 event_source.destroy();
             }
             _ => {}
@@ -334,79 +337,27 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for MutexBackendState {
         conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        let mut state = wrapper.backend_state.lock().unwrap();
-
         match event {
             ext_data_control_device_v1::Event::DataOffer { id } => {
-                let object_id = id.id();
-                debug!("New data offer received with ID: {object_id:?}");
-                state.mime_type_offers.insert(object_id, Vec::new());
+                handle_data_offer(&mut wrapper.backend_state.lock().unwrap(), id.id());
             }
             ext_data_control_device_v1::Event::Selection { id } => {
                 if let Some(offer_id) = id {
                     let offer_key = offer_id.id();
                     debug!("Selection changed to offer ID: {offer_key:?}");
-
-                    let (mime_list, already_current, suppress_read) = {
-                        let already_current = state
-                            .current_data_offer
-                            .as_ref()
-                            .is_some_and(|o| o == &offer_key);
-                        let mime_list = state.mime_type_offers.get(&offer_key).cloned();
-                        (
-                            mime_list,
-                            already_current,
-                            state.suppress_next_selection_read,
-                        )
-                    };
-
-                    if let Some(mime_list) = mime_list {
-                        debug!(
-                            "New clipboard content available with {} MIME types",
-                            mime_list.len()
-                        );
-                        if suppress_read {
-                            state.current_data_offer = Some(offer_key);
-                            debug!(
-                                "Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads"
-                            );
-                            offer_id.destroy();
-                            return;
-                        }
-
-                        if already_current {
-                            offer_id.destroy();
-                            return;
-                        }
-
-                        state.current_data_offer = Some(offer_key);
-                        state.mime_type_offers.clear();
-                        drop(state);
-
-                        let mime_map = read_all_data_formats_ext(&offer_id, mime_list, conn);
-                        if !mime_map.is_empty() {
-                            let mut state = wrapper.backend_state.lock().unwrap();
-                            if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map)
-                                && !state.monitor_only
-                                && !state.suppress_next_selection_read
-                            {
-                                if let Err(e) = state.set_clipboard_by_id(new_id) {
-                                    warn!("Failed to take ownership of selection id {new_id}: {e}");
-                                } else {
-                                    debug!("Took ownership of external selection (id {new_id})");
-                                }
-                            }
-                        }
-                        offer_id.destroy();
-                    }
+                    let conn = conn.clone();
+                    handle_selection_event(
+                        wrapper,
+                        offer_key,
+                        || offer_id.destroy(),
+                        |mime_list| read_all_data_formats(&offer_id, mime_list, &conn),
+                    );
                 } else {
                     debug!("Selection cleared");
-                    state.current_data_offer = None;
+                    wrapper.backend_state.lock().unwrap().current_data_offer = None;
                 }
             }
-            ext_data_control_device_v1::Event::PrimarySelection { .. } => {
-                // We ignore primary selection
-            }
+            ext_data_control_device_v1::Event::PrimarySelection { .. } => {}
             _ => {}
         }
     }
@@ -432,14 +383,7 @@ impl Dispatch<ExtDataControlOfferV1, ()> for MutexBackendState {
         _: &QueueHandle<Self>,
     ) {
         if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
-            let object_id = offer.id();
-            debug!("Offer event: MIME type offered: {mime_type}");
-            let mut state = wrapper.backend_state.lock().unwrap();
-            if let Some(mime_list) = state.mime_type_offers.get_mut(&object_id)
-                && !mime_type.starts_with("video")
-            {
-                mime_list.push(mime_type);
-            }
+            handle_offer_mime(&mut wrapper.backend_state.lock().unwrap(), offer.id(), mime_type);
         }
     }
 }
@@ -453,54 +397,13 @@ impl Dispatch<ExtDataControlSourceV1, ()> for MutexBackendState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let mut state = wrapper.backend_state.lock().unwrap();
-
         match event {
             ext_data_control_source_v1::Event::Send { mime_type, fd } => {
-                debug!("Data source Send event for MIME type: {mime_type}");
-                if let Some(item_id) = state.current_source_entry_id {
-                    if let Some(item) = state.get_item_by_id(item_id) {
-                        use std::io::Write;
-                        let mut file: std::fs::File = fd.into();
-                        if let Some(bytes) = item.mime_data.get(&mime_type) {
-                            if let Err(e) = file.write_all(bytes.as_ref()) {
-                                error!(
-                                    "Failed writing selection data (id {item_id}, mime {mime_type}): {e}",
-                                );
-                            } else {
-                                debug!(
-                                    "Wrote {} bytes for id {item_id} (mime {mime_type})",
-                                    bytes.len()
-                                );
-                            }
-                        } else {
-                            warn!(
-                                "No data stored for MIME {mime_type} (id {item_id}), nothing written"
-                            );
-                        }
-                    } else {
-                        warn!("Clipboard item id {item_id} no longer exists in history");
-                    }
-                } else {
-                    warn!("No current_source_id set when Send event received");
-                }
+                handle_source_send(&wrapper.backend_state.lock().unwrap(), mime_type, fd);
             }
             ext_data_control_source_v1::Event::Cancelled => {
-                debug!(
-                    "Data source cancelled. Last offered content (object id {:?})",
-                    event_source.id()
-                );
-                if state
-                    .current_source_object
-                    .as_ref()
-                    .map(|source| source.id())
-                    == Some(event_source.id())
-                {
-                    state.suppress_next_selection_read = false;
-                    state.current_source_object = None;
-                    debug!("Re-enabled selection reading (external client took over)");
-                }
-                drop(state);
+                let source_id = event_source.id();
+                handle_source_cancelled(&mut wrapper.backend_state.lock().unwrap(), source_id);
                 event_source.destroy();
             }
             _ => {}
@@ -529,7 +432,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState
 
 // ================= Helper functions =================
 
-/// Create a pipe for reading clipboard data, returning `OwnedFd` handles.
+/// Create a pipe, returning `OwnedFd` handles for the read and write ends.
 fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dyn std::error::Error>>
 {
     use std::os::fd::FromRawFd;
@@ -542,7 +445,8 @@ fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dy
     Ok((reader, writer))
 }
 
-/// Filters out mime types to speed up processing
+/// Select the MIME types to actually read from the available list.
+/// For images, pick the best format. Otherwise pass all types through.
 fn select_target_mimes(available_mimes: &[String]) -> Vec<String> {
     let best_image_mime = available_mimes
         .iter()
@@ -557,55 +461,26 @@ fn select_target_mimes(available_mimes: &[String]) -> Vec<String> {
     available_mimes.to_vec()
 }
 
-fn read_all_data_formats_wlr(
-    data_offer: &ZwlrDataControlOfferV1,
-    mime_types: Vec<String>,
-    conn: &Connection,
-) -> IndexMap<String, Bytes> {
-    use std::io::Read;
-    use std::os::fd::AsFd;
-
-    let mut mime_map: IndexMap<String, Bytes> = IndexMap::new();
-
-    if mime_types.is_empty() {
-        return mime_map;
-    }
-
-    let targets = select_target_mimes(&mime_types);
-
-    for mime in targets {
-        let (reader_fd, writer_fd) = match create_pipes() {
-            Ok(pair) => pair,
-            Err(err) => {
-                warn!("Could not open pipe to read data for {mime}: {err:?}");
-                continue;
-            }
-        };
-        debug!("Requesting {mime} content...");
-        data_offer.receive(mime.clone(), writer_fd.as_fd());
-        // Drop writer side so the provider gets EOF after writing
-        drop(writer_fd);
-        if let Err(e) = conn.flush() {
-            warn!("Flush failed: {e}");
-        }
-        // Convert OwnedFd to File for reading
-        let mut reader_file = std::fs::File::from(reader_fd);
-        let mut buf = Vec::new();
-        match reader_file.read_to_end(&mut buf) {
-            Ok(_) => {
-                if !buf.is_empty() {
-                    mime_map.insert(mime, Bytes::from(buf));
-                }
-            }
-            Err(e) => warn!("Failed reading data for mime: {e}"),
-        }
-    }
-
-    mime_map
+/// Trait abstracting over offer types that can receive data via a pipe fd.
+trait DataOfferReceive {
+    fn receive_mime(&self, mime_type: String, fd: std::os::fd::BorrowedFd<'_>);
 }
 
-fn read_all_data_formats_ext(
-    data_offer: &ExtDataControlOfferV1,
+impl DataOfferReceive for ZwlrDataControlOfferV1 {
+    fn receive_mime(&self, mime_type: String, fd: std::os::fd::BorrowedFd<'_>) {
+        self.receive(mime_type, fd);
+    }
+}
+
+impl DataOfferReceive for ExtDataControlOfferV1 {
+    fn receive_mime(&self, mime_type: String, fd: std::os::fd::BorrowedFd<'_>) {
+        self.receive(mime_type, fd);
+    }
+}
+
+/// Read clipboard data for all target MIME types from any offer type.
+fn read_all_data_formats<O: DataOfferReceive>(
+    data_offer: &O,
     mime_types: Vec<String>,
     conn: &Connection,
 ) -> IndexMap<String, Bytes> {
@@ -618,9 +493,7 @@ fn read_all_data_formats_ext(
         return mime_map;
     }
 
-    let targets = select_target_mimes(&mime_types);
-
-    for mime in targets {
+    for mime in select_target_mimes(&mime_types) {
         let (reader_fd, writer_fd) = match create_pipes() {
             Ok(pair) => pair,
             Err(err) => {
@@ -629,7 +502,8 @@ fn read_all_data_formats_ext(
             }
         };
         debug!("Requesting {mime} content...");
-        data_offer.receive(mime.clone(), writer_fd.as_fd());
+        data_offer.receive_mime(mime.clone(), writer_fd.as_fd());
+        // Drop the write end so the provider gets EOF after writing.
         drop(writer_fd);
         if let Err(e) = conn.flush() {
             warn!("Flush failed: {e}");
@@ -637,11 +511,10 @@ fn read_all_data_formats_ext(
         let mut reader_file = std::fs::File::from(reader_fd);
         let mut buf = Vec::new();
         match reader_file.read_to_end(&mut buf) {
-            Ok(_) => {
-                if !buf.is_empty() {
-                    mime_map.insert(mime, Bytes::from(buf));
-                }
+            Ok(_) if !buf.is_empty() => {
+                mime_map.insert(mime, Bytes::from(buf));
             }
+            Ok(_) => {}
             Err(e) => warn!("Failed reading data for mime: {e}"),
         }
     }
