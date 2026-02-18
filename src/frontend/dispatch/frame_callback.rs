@@ -4,7 +4,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 use crate::frontend::dispatch::layer_shell::cleanup_update_layer;
 use crate::frontend::frontend_state::State;
-use log::debug;
+use log::{debug, error};
 
 #[derive(Debug, Clone)]
 pub enum FrameCallbackData {
@@ -50,12 +50,12 @@ impl Dispatch<wl_callback::WlCallback, FrameCallbackData> for State {
 
 fn setup_update_layer(state: &mut State, qhandle: &QueueHandle<State>) {
     let Some(layer_shell) = &state.layer_shell else {
-        eprintln!("Layer shell not available");
+        error!("Layer shell not available");
         return;
     };
 
     let Some(update_surface) = &state.update_surface else {
-        eprintln!("Update surface not available");
+        error!("Update surface not available");
         return;
     };
 
@@ -97,6 +97,6 @@ fn schedule_next_frame_check(state: &mut State, qhandle: &QueueHandle<State>, fr
         // Commit to trigger the next frame
         update_surface.commit();
     } else {
-        eprintln!("Update surface not available for frame check");
+        error!("Update surface not available for frame check");
     }
 }

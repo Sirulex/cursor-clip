@@ -16,11 +16,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
     let listener = UnixListener::bind(socket_path)?;
     info!("Clipboard backend listening on {socket_path}");
 
-    let state = Arc::new(Mutex::new(BackendState::new()));
-    {
-        let mut s = state.lock().unwrap();
-        s.monitor_only = monitor_only;
-    }
+    let state = Arc::new(Mutex::new(BackendState::new(monitor_only)));
 
     // Start Wayland clipboard monitoring in a separate task
     let wayland_state = state.clone();
