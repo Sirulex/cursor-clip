@@ -100,6 +100,23 @@ cd cursor-clip
 cargo build --release
 ```
 
+## Building with Docker
+
+Build a containerized version that includes all dependencies:
+
+```bash
+# Build the Docker image and install the binary
+docker build -t cursor-clip .
+docker create --name cursor-clip-temp cursor-clip
+sudo docker cp cursor-clip-temp:/output/cursor-clip /usr/local/bin/
+sudo docker cp cursor-clip-temp:/output/libgtk4-layer-shell.so* /usr/local/lib/
+docker rm cursor-clip-temp
+
+# Update library cache and run
+sudo ldconfig
+cursor-clip --daemon
+```
+
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
 2. **Launch Overlay**: Run `cursor-clip` without any arguments (ideally bind it to a hotkey, e.g., Super+V)
