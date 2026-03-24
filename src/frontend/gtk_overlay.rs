@@ -106,6 +106,10 @@ fn request_quit() {
 pub fn init_clipboard_overlay(
     x: f64,
     y: f64,
+    overlay_width: i32,
+    overlay_height: i32,
+    monitor_width: i32,
+    monitor_height: i32,
     prefetched_items: Vec<ClipboardItemPreview>,
 ) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
@@ -120,7 +124,16 @@ pub fn init_clipboard_overlay(
 
     let app_clone = app.clone();
     app.connect_activate(move |_| {
-        let window = create_layer_shell_window(&app_clone, x, y, prefetched_items.clone());
+        let window = create_layer_shell_window(
+            &app_clone,
+            x,
+            y,
+            overlay_width,
+            overlay_height,
+            monitor_width,
+            monitor_height,
+            prefetched_items.clone(),
+        );
 
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
@@ -154,6 +167,10 @@ fn create_layer_shell_window(
     app: &Application,
     x: f64,
     y: f64,
+    overlay_width: i32,
+    overlay_height: i32,
+    monitor_width: i32,
+    monitor_height: i32,
     prefetched_items: Vec<ClipboardItemPreview>,
 ) -> adw::ApplicationWindow {
     // Create the main window using Adwaita ApplicationWindow
@@ -178,6 +195,28 @@ fn create_layer_shell_window(
     window.set_margin(Edge::Top, y as i32);
     window.set_margin(Edge::Left, x as i32);
 
+    // clamp with the real allocated size to avoid off-screen spawn.
+    if monitor_width > 0 && monitor_height > 0 {
+        window.connect_map(move |mapped_window| {
+            let mapped_window = mapped_window.clone();
+            gtk4::glib::idle_add_local_once(move || {
+                let margin = 5.0;
+                let scale = mapped_window.scale_factor().max(1) as f64;
+                let window_width = (mapped_window.allocated_width().max(overlay_width) as f64) * scale;
+                let window_height =
+                    (mapped_window.allocated_height().max(overlay_height) as f64) * scale;
+
+                let max_x = (monitor_width as f64 - window_width - margin).max(margin);
+                let max_y = (monitor_height as f64 - window_height - margin).max(margin);
+                let clamped_x = x.clamp(margin, max_x) as i32;
+                let clamped_y = y.clamp(margin, max_y) as i32;
+
+                mapped_window.set_margin(Edge::Top, clamped_y);
+                mapped_window.set_margin(Edge::Left, clamped_x);
+            });
+        });
+    }
+
     window.set_exclusive_zone(-1);
 
     // Make window keyboard interactive
@@ -187,7 +226,8 @@ fn create_layer_shell_window(
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let (content, list_box, items_state) = generate_overlay_content(prefetched_items);
+    let (content, list_box, items_state) =
+        generate_overlay_content(prefetched_items, overlay_width, overlay_height);
     window.set_content(Some(&content));
 
     // Add key controller (Esc/j/k/Enter navigation & activation)
@@ -209,6 +249,8 @@ fn create_layer_shell_window(
 /// Falls back to a lazy on-demand fetch only if the provided vector is empty.
 fn generate_overlay_content(
     mut prefetched_items: Vec<ClipboardItemPreview>,
+    overlay_width: i32,
+    overlay_height: i32,
 ) -> (
     Overlay,
     gtk4::ListBox,
@@ -282,8 +324,8 @@ fn generate_overlay_content(
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
     scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-    scrolled_window.set_min_content_width(200);
-    scrolled_window.set_min_content_height(400);
+    scrolled_window.set_min_content_width(overlay_width);
+    scrolled_window.set_min_content_height(overlay_height);
 
     // Create list box for clipboard items
     let list_box = gtk4::ListBox::new();

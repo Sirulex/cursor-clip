@@ -32,12 +32,19 @@ fn run_main_event_loop(
         if state.coords_received && !gtk_window_created {
             let x = state.received_x;
             let y = state.received_y;
+
             debug!("Capture layer ready; creating GTK overlay window at ({x}, {y})");
 
             // Create the GTK window using the unified client backend communication
-            if let Err(e) =
-                gtk_overlay::init_clipboard_overlay(x, y, state.clipboard_history.clone())
-            {
+            if let Err(e) = gtk_overlay::init_clipboard_overlay(
+                x,
+                y,
+                state.overlay_width,
+                state.overlay_height,
+                state.monitor_width,
+                state.monitor_height,
+                state.clipboard_history.clone(),
+            ) {
                 error!("Error creating GTK overlay: {e:?}");
             }
 

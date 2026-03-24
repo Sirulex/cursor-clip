@@ -37,6 +37,10 @@ pub struct State {
     pub update_frame_callback: Option<wl_callback::WlCallback>,
     pub capture_viewport: Option<wp_viewport::WpViewport>,
     pub update_viewport: Option<wp_viewport::WpViewport>,
+    pub overlay_width: i32,
+    pub overlay_height: i32,
+    pub monitor_width: i32,
+    pub monitor_height: i32,
     pub clipboard_history: Vec<ClipboardItemPreview>,
 }
 
@@ -72,6 +76,10 @@ impl State {
             update_frame_callback: None,
             capture_viewport: None,
             update_viewport: None,
+            overlay_width: 200,
+            overlay_height: 400,
+            monitor_width: 0,
+            monitor_height: 0,
             clipboard_history: Vec::new(),
         }
     }
