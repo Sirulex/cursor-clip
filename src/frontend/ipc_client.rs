@@ -74,7 +74,7 @@ impl FrontendClient {
     }
 
     /// Enable or disable persistent history in the backend
-    pub fn set_persistence(
+    pub fn set_persistence_enabled(
         &mut self,
         enabled: bool,
     ) -> Result<bool, Box<dyn std::error::Error>> {

@@ -95,7 +95,7 @@ async fn handle_client(
                 let mut state = state.lock().unwrap();
                 match state.set_persistence_enabled(enabled) {
                     Ok(()) => BackendMessage::PersistenceState {
-                        enabled: state.persistent_history,
+                        enabled: state.persistence_enabled,
                     },
                     Err(e) => BackendMessage::Error { message: e },
                 }

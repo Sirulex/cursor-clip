@@ -27,7 +27,8 @@ thread_local! {
 struct UserConfig {
     show_trash: bool,
     show_pin: bool,
-    persistent_history: bool,
+    #[serde(alias = "persistent_history")]
+    persistence_enabled: bool,
 }
 
 impl Default for UserConfig {
@@ -35,7 +36,7 @@ impl Default for UserConfig {
         Self {
             show_trash: true,
             show_pin: true,
-            persistent_history: false,
+            persistence_enabled: false,
         }
     }
 }
@@ -269,10 +270,10 @@ fn generate_overlay_content(
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
     let show_trash_default = config_state.borrow().show_trash;
     let show_pin_default = config_state.borrow().show_pin;
-    let persistence_enabled_default = config_state.borrow().persistent_history;
+    let persistence_enabled_default = config_state.borrow().persistence_enabled;
 
     if let Ok(mut client) = FrontendClient::new()
-        && let Err(e) = client.set_persistence(persistence_enabled_default)
+        && let Err(e) = client.set_persistence_enabled(persistence_enabled_default)
     {
         warn!("Failed to sync persistence setting with backend: {}", e);
     }
@@ -456,7 +457,7 @@ fn generate_overlay_content(
         let state = check.is_active();
         {
             let mut config = config_for_persistence_toggle.borrow_mut();
-            config.persistent_history = state;
+            config.persistence_enabled = state;
             if let Err(e) = save_config(&config) {
                 warn!("Failed to save config: {}", e);
             }
@@ -464,7 +465,7 @@ fn generate_overlay_content(
 
         match FrontendClient::new() {
             Ok(mut client) => {
-                if let Err(e) = client.set_persistence(state) {
+                if let Err(e) = client.set_persistence_enabled(state) {
                     warn!("Failed to update persistence in backend: {}", e);
                 }
             }

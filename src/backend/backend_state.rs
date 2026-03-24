@@ -1,6 +1,6 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
 use crate::backend::persistence::{
-    ClipboardPersistence, load_persistent_history_state_from_config, warn_persistence_sync_error,
+    ClipboardPersistence, load_persistence_enabled_from_config, warn_persistence_sync_error,
 };
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
@@ -151,7 +151,7 @@ pub struct BackendState {
     // If false (default), after reading an external selection we immediately
     // set it ourselves so it persists even if the source app exits.
     pub monitor_only: bool,
-    pub persistent_history: bool,
+    pub persistence_enabled: bool,
     pub persistence: Option<ClipboardPersistence>,
 }
 
@@ -163,7 +163,7 @@ impl Default for BackendState {
 
 impl BackendState {
     pub fn new(monitor_only: bool) -> Self {
-        let persistent_history = load_persistent_history_state_from_config();
+        let persistence_enabled = load_persistence_enabled_from_config();
         let mut state = Self {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
@@ -178,11 +178,11 @@ impl BackendState {
             suppress_next_selection_read: false,
             connection: None,
             monitor_only,
-            persistent_history: false,
+            persistence_enabled: false,
             persistence: None,
         };
 
-        if let Err(e) = state.set_persistence_enabled(persistent_history) {
+        if let Err(e) = state.set_persistence_enabled(persistence_enabled) {
             warn!("Failed to initialize persistence from config: {e}");
         }
 
@@ -423,7 +423,7 @@ impl BackendState {
                 self.persistence = Some(ClipboardPersistence::open_default()?);
             }
 
-            self.persistent_history = true;
+            self.persistence_enabled = true;
             if self.history.is_empty() {
                 let loaded = self
                     .persistence
@@ -443,7 +443,7 @@ impl BackendState {
                 self.persist_history_if_enabled();
             }
         } else {
-            self.persistent_history = false;
+            self.persistence_enabled = false;
             self.persistence = None;
         }
 
@@ -451,7 +451,7 @@ impl BackendState {
     }
 
     fn persist_history_if_enabled(&self) {
-        if !self.persistent_history {
+        if !self.persistence_enabled {
             return;
         }
 

@@ -8,10 +8,11 @@ use stoolap::Database;
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct BackendConfig {
+    #[serde(alias = "persistent_history")]
     persistence_enabled: bool,
 }
 
-pub fn load_persistent_history_state_from_config() -> bool {
+pub fn load_persistence_enabled_from_config() -> bool {
     let path = config_path();
     let Ok(contents) = fs::read_to_string(path) else {
         return false;
