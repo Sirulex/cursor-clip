@@ -260,18 +260,24 @@ fn generate_overlay_content(
     // Header bar
     let header_bar = adw::HeaderBar::new();
     header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
-    // Use standard end title buttons (includes the normal close button with Adwaita styling)
-    header_bar.set_show_end_title_buttons(true);
+    // Layer-shell + undecorated windows can render built-in title buttons unreliably.
+    // Use explicit header actions instead of automatic titlebar controls.
+    header_bar.set_show_end_title_buttons(false);
     header_bar.set_show_start_title_buttons(false);
 
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
     let show_trash_default = config_state.borrow().show_trash;
     let show_pin_default = config_state.borrow().show_pin;
 
-    // Add a three-dot menu button (icon-only) next to the close button on the right
+    // Add right-side header actions (menu + close)
     let three_dot_menu = Button::builder().icon_name("view-more-symbolic").build();
     three_dot_menu.add_css_class("flat");
     three_dot_menu.set_tooltip_text(Some("Options"));
+
+    let close_button = Button::builder().icon_name("window-close-symbolic").build();
+    close_button.add_css_class("flat");
+    close_button.add_css_class("header-close-button");
+    close_button.set_tooltip_text(Some("Close"));
 
     let menu_revealer = Revealer::new();
     menu_revealer.set_reveal_child(false);
@@ -310,7 +316,12 @@ fn generate_overlay_content(
     pin_toggle_row.append(&pin_toggle_check);
     menu_box.append(&pin_toggle_row);
     menu_revealer.set_child(Some(&menu_box));
+    header_bar.pack_end(&close_button);
     header_bar.pack_end(&three_dot_menu);
+
+    close_button.connect_clicked(move |_| {
+        request_quit();
+    });
 
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
@@ -691,6 +702,21 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
 
         .clipboard-pin.pinned {
             color: #ffffff;
+        }
+
+        .header-close-button {
+            min-width: 30px;
+            min-height: 28px;
+            background: alpha(#bfc3c7, 0.18);
+            color: #f2f4f8;
+        }
+
+        .header-close-button:hover {
+            background: alpha(#ffffff, 0.32);
+        }
+
+        .header-close-button:active {
+            background: alpha(#ffffff, 0.24);
         }
 
         .menu-revealer {
