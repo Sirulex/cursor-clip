@@ -201,10 +201,8 @@ fn create_layer_shell_window(
             let mapped_window = mapped_window.clone();
             gtk4::glib::idle_add_local_once(move || {
                 let margin = 5.0;
-                let scale = mapped_window.scale_factor().max(1) as f64;
-                let window_width = (mapped_window.allocated_width().max(overlay_width) as f64) * scale;
-                let window_height =
-                    (mapped_window.allocated_height().max(overlay_height) as f64) * scale;
+                let window_width = mapped_window.allocated_width().max(overlay_width) as f64;
+                let window_height = mapped_window.allocated_height().max(overlay_height) as f64;
 
                 let max_x = (monitor_width as f64 - window_width - margin).max(margin);
                 let max_y = (monitor_height as f64 - window_height - margin).max(margin);
