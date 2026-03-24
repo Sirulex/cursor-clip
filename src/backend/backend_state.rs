@@ -328,6 +328,15 @@ impl BackendState {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+
+        // If we clear history while owning a selection source, drop it and
+        // re-enable selection reads so external copies keep being tracked.
+        if let Some(prev) = self.current_source_object.take() {
+            prev.destroy();
+        }
+        self.current_source_entry_id = None;
+        self.suppress_next_selection_read = false;
+
         self.persist_history_if_enabled();
     }
 
@@ -345,6 +354,9 @@ impl BackendState {
                 prev.destroy();
             }
             self.current_source_entry_id = None;
+            // We explicitly destroyed our own source, so the expected Cancelled
+            // event may no longer arrive to clear this flag.
+            self.suppress_next_selection_read = false;
         }
 
         self.persist_history_if_enabled();
