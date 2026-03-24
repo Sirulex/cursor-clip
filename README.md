@@ -16,6 +16,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Timestamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to the clipboard
 - **Pin or delete items**: Manage your history with ease
+- **Persistent history**: Option to store clipboard history across sessions with automatic encryption
 
 ### 🖱️ **Advanced Wayland Integration**
 - **Layer Shell Protocol**: Proper overlay positioning above all windows
@@ -28,7 +29,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Native widgets**: HeaderBar, ListBox, ScrolledWindow
 
 ### 📂 **Automatic Clipboard Monitoring (Wayland)**
-- Stores the last 100 copied items and removes duplicates.
+- Stores copied items in memory or in a persistent database and removes duplicates.
 - Automatic classification of content types:
   - 📝 Text
   - 🔗 URLs
@@ -133,7 +134,11 @@ cursor-clip --daemon
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
    - **Keyboard navigation**: Use *Arrow keys* or *J/K* to navigate, *Enter* to select, *Delete* to remove, *P* to pin, *Esc* to close
-   - **Three-dot menu** on the window header allows you to toggle **Delete** and **Pin** button visibility (config stored permanently in `~/.config/cursor-clip/config.toml`)
+   - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
+
+## Persistent History Security
+
+If persistent history is enabled, clipboard history is stored in an encrypted local database. The database key is stored in your operating system keyring and reused on restart. This ensures that your clipboard history remains secure and private, even if someone gains access to your filesystem (e.g., sidechannel attacks). The encryption and key management are handled automatically by Cursor Clip, so you can enable persistent history with just a simple toggle.
 
 ## Key Components
 
@@ -154,7 +159,8 @@ cursor-clip --daemon
 │  Clipboard Management                           │
 │  ├── Data Control Manager for privileged access │
 │  ├── IPC communication via UNIX domain sockets  │
-│  └── IndexMap for clipboard history storage     │
+│  ├── IndexMap for clipboard history storage     │
+│  └── Stoolap for persistent history storage     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -171,6 +177,8 @@ cursor-clip --daemon
 - **serde**: Serialization framework
 - **indexmap**: Ordered map for clipboard history
 - **fast_image_resize**: Efficient image resizing for previews
+- **keyring**: Secure storage for encryption keys
+- **stoolap**: Encrypted local database for persistent history
 - **env_logger**: Logging framework
 ---
 
