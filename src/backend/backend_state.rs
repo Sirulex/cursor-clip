@@ -1,4 +1,7 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
+use crate::backend::persistence::{
+    ClipboardPersistence, load_persistent_history_state_from_config, warn_persistence_sync_error,
+};
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
@@ -148,6 +151,8 @@ pub struct BackendState {
     // If false (default), after reading an external selection we immediately
     // set it ourselves so it persists even if the source app exits.
     pub monitor_only: bool,
+    pub persistent_history: bool,
+    pub persistence: Option<ClipboardPersistence>,
 }
 
 impl Default for BackendState {
@@ -158,7 +163,8 @@ impl Default for BackendState {
 
 impl BackendState {
     pub fn new(monitor_only: bool) -> Self {
-        Self {
+        let persistent_history = load_persistent_history_state_from_config();
+        let mut state = Self {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
             id_for_next_entry: 1,
@@ -172,7 +178,15 @@ impl BackendState {
             suppress_next_selection_read: false,
             connection: None,
             monitor_only,
+            persistent_history: false,
+            persistence: None,
+        };
+
+        if let Err(e) = state.set_persistence_enabled(persistent_history) {
+            warn!("Failed to initialize persistence from config: {e}");
         }
+
+        state
     }
 
     pub fn add_clipboard_item_from_mime_map(
@@ -238,8 +252,10 @@ impl BackendState {
         if self.history.len() > 100 {
             self.history.truncate(100);
         }
+
         let new_id = self.id_for_next_entry;
         self.id_for_next_entry += 1;
+        self.persist_history_if_enabled();
         Some(new_id)
     }
 
@@ -312,6 +328,7 @@ impl BackendState {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.persist_history_if_enabled();
     }
 
     pub fn delete_item_by_id(&mut self, entry_id: u64) -> Result<(), String> {
@@ -329,6 +346,8 @@ impl BackendState {
             }
             self.current_source_entry_id = None;
         }
+
+        self.persist_history_if_enabled();
 
         Ok(())
     }
@@ -394,6 +413,52 @@ impl BackendState {
         };
 
         self.history.insert(insert_index, item);
+        self.persist_history_if_enabled();
         Ok(())
+    }
+
+    pub fn set_persistence_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled {
+            if self.persistence.is_none() {
+                self.persistence = Some(ClipboardPersistence::open_default()?);
+            }
+
+            self.persistent_history = true;
+            if self.history.is_empty() {
+                let loaded = self
+                    .persistence
+                    .as_ref()
+                    .ok_or_else(|| "Persistence backend unavailable".to_string())?
+                    .load_history()?;
+                if !loaded.is_empty() {
+                    self.id_for_next_entry = loaded
+                        .iter()
+                        .map(|item| item.item_id)
+                        .max()
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    self.history = loaded;
+                }
+            } else {
+                self.persist_history_if_enabled();
+            }
+        } else {
+            self.persistent_history = false;
+            self.persistence = None;
+        }
+
+        Ok(())
+    }
+
+    fn persist_history_if_enabled(&self) {
+        if !self.persistent_history {
+            return;
+        }
+
+        if let Some(persistence) = &self.persistence
+            && let Err(e) = persistence.save_history(&self.history)
+        {
+            warn_persistence_sync_error("save", &e);
+        }
     }
 }

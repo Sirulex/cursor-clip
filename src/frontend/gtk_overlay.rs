@@ -27,6 +27,7 @@ thread_local! {
 struct UserConfig {
     show_trash: bool,
     show_pin: bool,
+    persistent_history: bool,
 }
 
 impl Default for UserConfig {
@@ -34,6 +35,7 @@ impl Default for UserConfig {
         Self {
             show_trash: true,
             show_pin: true,
+            persistent_history: false,
         }
     }
 }
@@ -267,6 +269,13 @@ fn generate_overlay_content(
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
     let show_trash_default = config_state.borrow().show_trash;
     let show_pin_default = config_state.borrow().show_pin;
+    let persistence_enabled_default = config_state.borrow().persistent_history;
+
+    if let Ok(mut client) = FrontendClient::new()
+        && let Err(e) = client.set_persistence(persistence_enabled_default)
+    {
+        warn!("Failed to sync persistence setting with backend: {}", e);
+    }
 
     // Add a three-dot menu button (icon-only) next to the close button on the right
     let three_dot_menu = Button::builder().icon_name("view-more-symbolic").build();
@@ -309,6 +318,17 @@ fn generate_overlay_content(
     pin_toggle_row.append(&pin_toggle_label);
     pin_toggle_row.append(&pin_toggle_check);
     menu_box.append(&pin_toggle_row);
+
+    let persistence_toggle_row = Box::new(Orientation::Horizontal, 8);
+    let persistence_toggle_label = Label::new(Some("Persistent history"));
+    persistence_toggle_label.set_halign(Align::Start);
+    persistence_toggle_label.set_hexpand(true);
+    let persistence_toggle_check = CheckButton::new();
+    persistence_toggle_check.set_active(persistence_enabled_default);
+    persistence_toggle_row.append(&persistence_toggle_label);
+    persistence_toggle_row.append(&persistence_toggle_check);
+    menu_box.append(&persistence_toggle_row);
+
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&three_dot_menu);
 
@@ -429,6 +449,29 @@ fn generate_overlay_content(
             }
         }
         set_pin_icons_visible(&list_box_for_pin_toggle, state);
+    });
+
+    let config_for_persistence_toggle = config_state.clone();
+    persistence_toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        {
+            let mut config = config_for_persistence_toggle.borrow_mut();
+            config.persistent_history = state;
+            if let Err(e) = save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+        }
+
+        match FrontendClient::new() {
+            Ok(mut client) => {
+                if let Err(e) = client.set_persistence(state) {
+                    warn!("Failed to update persistence in backend: {}", e);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to connect to backend for persistence toggle: {}", e);
+            }
+        }
     });
 
     let menu_revealer_toggle = menu_revealer.clone();

@@ -91,6 +91,15 @@ async fn handle_client(
                 state.clear_history();
                 BackendMessage::HistoryCleared
             }
+            FrontendMessage::SetHistoryPersistence { enabled } => {
+                let mut state = state.lock().unwrap();
+                match state.set_persistence_enabled(enabled) {
+                    Ok(()) => BackendMessage::PersistenceState {
+                        enabled: state.persistent_history,
+                    },
+                    Err(e) => BackendMessage::Error { message: e },
+                }
+            }
             FrontendMessage::DeleteItemById { id } => {
                 let mut state = state.lock().unwrap();
                 match state.delete_item_by_id(id) {

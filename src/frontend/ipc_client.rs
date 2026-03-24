@@ -73,6 +73,19 @@ impl FrontendClient {
         }
     }
 
+    /// Enable or disable persistent history in the backend
+    pub fn set_persistence(
+        &mut self,
+        enabled: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let response = self.send_message(FrontendMessage::SetHistoryPersistence { enabled })?;
+        match response {
+            BackendMessage::PersistenceState { enabled } => Ok(enabled),
+            BackendMessage::Error { message } => Err(message.into()),
+            _ => Err("Unexpected response".into()),
+        }
+    }
+
     /// Delete a single clipboard item by ID
     pub fn delete_item_by_id(&mut self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
         let response = self.send_message(FrontendMessage::DeleteItemById { id })?;

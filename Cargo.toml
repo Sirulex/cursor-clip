@@ -29,3 +29,4 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 glib = "0.21.5"
 image = "0.25.9"
 fast_image_resize = "6"
+stoolap = "0.3.7"
