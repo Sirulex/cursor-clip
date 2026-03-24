@@ -29,3 +29,9 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 glib = "0.21.5"
 image = "0.25.9"
 fast_image_resize = "6"
+stoolap = "0.3.7"
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+aes-gcm = "0.10.3"
+base64 = "0.22.1"
+sha2 = "0.10.9"
+rand = "0.9.2"

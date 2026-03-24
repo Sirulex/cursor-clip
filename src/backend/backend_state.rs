@@ -1,4 +1,9 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
+use crate::backend::persistence::{
+    ClipboardPersistence, db_has_persisted_items, generate_and_store_db_password,
+    load_persistence_enabled_from_config, read_db_password_from_keyring_once,
+    warn_persistence_sync_error,
+};
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
@@ -148,6 +153,9 @@ pub struct BackendState {
     // If false (default), after reading an external selection we immediately
     // set it ourselves so it persists even if the source app exits.
     pub monitor_only: bool,
+    pub persistence_enabled: bool,
+    pub persistence: Option<ClipboardPersistence>,
+    pub db_password: Option<String>,
 }
 
 impl Default for BackendState {
@@ -158,7 +166,16 @@ impl Default for BackendState {
 
 impl BackendState {
     pub fn new(monitor_only: bool) -> Self {
-        Self {
+        let persistence_enabled = load_persistence_enabled_from_config();
+        let db_password = match read_db_password_from_keyring_once() {
+            Ok(password) => password,
+            Err(e) => {
+                warn!("Failed to read DB password from keyring at startup: {e}");
+                None
+            }
+        };
+
+        let mut state = Self {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
             id_for_next_entry: 1,
@@ -172,7 +189,16 @@ impl BackendState {
             suppress_next_selection_read: false,
             connection: None,
             monitor_only,
+            persistence_enabled: false,
+            persistence: None,
+            db_password,
+        };
+
+        if let Err(e) = state.set_persistence_enabled(persistence_enabled) {
+            warn!("Failed to initialize persistence from config: {e}");
         }
+
+        state
     }
 
     pub fn add_clipboard_item_from_mime_map(
@@ -238,8 +264,10 @@ impl BackendState {
         if self.history.len() > 100 {
             self.history.truncate(100);
         }
+
         let new_id = self.id_for_next_entry;
         self.id_for_next_entry += 1;
+        self.persist_history_if_enabled();
         Some(new_id)
     }
 
@@ -312,6 +340,16 @@ impl BackendState {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+
+        // If we clear history while owning a selection source, drop it and
+        // re-enable selection reads so external copies keep being tracked.
+        if let Some(prev) = self.current_source_object.take() {
+            prev.destroy();
+        }
+        self.current_source_entry_id = None;
+        self.suppress_next_selection_read = false;
+
+        self.persist_history_if_enabled();
     }
 
     pub fn delete_item_by_id(&mut self, entry_id: u64) -> Result<(), String> {
@@ -328,7 +366,12 @@ impl BackendState {
                 prev.destroy();
             }
             self.current_source_entry_id = None;
+            // We explicitly destroyed our own source, so the expected Cancelled
+            // event may no longer arrive to clear this flag.
+            self.suppress_next_selection_read = false;
         }
+
+        self.persist_history_if_enabled();
 
         Ok(())
     }
@@ -394,6 +437,67 @@ impl BackendState {
         };
 
         self.history.insert(insert_index, item);
+        self.persist_history_if_enabled();
         Ok(())
+    }
+
+    pub fn set_persistence_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled {
+            if self.persistence.is_none() {
+                if self.db_password.is_none() {
+                    if db_has_persisted_items()? {
+                        return Err(
+                            "Persistent DB already contains data but no password was found in keyring. \
+                             Refusing to generate a new password because it would make existing encrypted history unreadable."
+                                .to_string(),
+                        );
+                    }
+                    self.db_password = Some(generate_and_store_db_password()?);
+                }
+
+                let password = self
+                    .db_password
+                    .as_deref()
+                    .ok_or_else(|| "Database password unavailable".to_string())?;
+                self.persistence = Some(ClipboardPersistence::open_default(password)?);
+            }
+
+            self.persistence_enabled = true;
+            if self.history.is_empty() {
+                let loaded = self
+                    .persistence
+                    .as_ref()
+                    .ok_or_else(|| "Persistence backend unavailable".to_string())?
+                    .load_history()?;
+                if !loaded.is_empty() {
+                    self.id_for_next_entry = loaded
+                        .iter()
+                        .map(|item| item.item_id)
+                        .max()
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    self.history = loaded;
+                }
+            } else {
+                self.persist_history_if_enabled();
+            }
+        } else {
+            self.persistence_enabled = false;
+            self.persistence = None;
+        }
+
+        Ok(())
+    }
+
+    fn persist_history_if_enabled(&self) {
+        if !self.persistence_enabled {
+            return;
+        }
+
+        if let Some(persistence) = &self.persistence
+            && let Err(e) = persistence.save_history(&self.history)
+        {
+            warn_persistence_sync_error("save", &e);
+        }
     }
 }

@@ -61,6 +61,8 @@ pub enum FrontendMessage {
     DeleteItemById { id: u64 },
     /// Clear all clipboard history
     ClearHistory,
+    /// Enable or disable persistent history storage
+    SetHistoryPersistence { enabled: bool },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,6 +79,8 @@ pub enum BackendMessage {
     ItemPinned { id: u64, pinned: bool },
     /// History cleared
     HistoryCleared,
+    /// Persistence state was updated
+    PersistenceState { enabled: bool },
     /// Error occurred
     Error { message: String },
 }
