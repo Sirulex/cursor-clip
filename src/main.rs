@@ -27,19 +27,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Do not take ownership of a newly received external selection; just record it. This does not automatically ensure clipboard persistence if the original application is closed. You can still paste the selection by choosing it in the GUI. If unsure, you probably want to keep the default behaviour and don't use this flag.")
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("persist")
+                .long("persist")
+                .help("Save clipboard history to disk so it survives daemon restarts. History is stored in $XDG_DATA_HOME/cursor-clip/history.json (defaults to ~/.local/share/cursor-clip/history.json).")
+                .action(clap::ArgAction::SetTrue),
+        )
         .get_matches();
 
     let monitor_only = matches.get_flag("monitor-only");
     let run_daemon = matches.get_flag("daemon");
+    let persist = matches.get_flag("persist");
 
     if monitor_only && !run_daemon {
         error!("--monitor-only can only be used together with --daemon");
         std::process::exit(1);
     }
 
+    if persist && !run_daemon {
+        error!("--persist can only be used together with --daemon");
+        std::process::exit(1);
+    }
+
     if run_daemon {
         info!("Starting clipboard backend daemon...");
-        backend::run_backend(monitor_only).await?;
+        backend::run_backend(monitor_only, persist).await?;
     } else {
         info!("Starting clipboard frontend...");
         frontend::run_frontend().await?;

@@ -37,6 +37,11 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
   - 📁 File paths
   - 🖼️ Images
 
+### 💾 **Optional Persistent History**
+- Pass `--persist` to the daemon to save clipboard history to disk.
+- History survives daemon restarts and is restored automatically on next launch.
+- Stored in `$XDG_DATA_HOME/cursor-clip/history.json` (defaults to `~/.local/share/cursor-clip/history.json`).
+
 </div>
 
 ### 🎥 **Video Showcase**
@@ -119,6 +124,8 @@ cursor-clip --daemon
 
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
+   - Add `--persist` to save history across restarts: `cursor-clip --daemon --persist`
+   - Add `--monitor-only` to avoid taking clipboard ownership: `cursor-clip --daemon --monitor-only`
 2. **Launch Overlay**: Run `cursor-clip` without any arguments (ideally bind it to a hotkey, e.g., Super+V)
 3. **Trigger**: Your mouse position is automatically captured
 4. **View History**: The clipboard history window will appear at your cursor position, showing:

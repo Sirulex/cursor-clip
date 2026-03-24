@@ -2,8 +2,10 @@ use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle typ
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use wayland_client::Proxy;
 use wayland_client::backend::ObjectId;
@@ -116,6 +118,13 @@ impl DataControlSource {
     }
 }
 
+/// Serialization wrapper used when writing/reading history to/from disk.
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedHistory {
+    id_for_next_entry: u64,
+    history: Vec<ClipboardItem>,
+}
+
 #[derive(Debug)]
 pub struct BackendState {
     // Clipboard history and management
@@ -148,16 +157,39 @@ pub struct BackendState {
     // If false (default), after reading an external selection we immediately
     // set it ourselves so it persists even if the source app exits.
     pub monitor_only: bool,
+    // If Some, history is persisted to disk at this path after every mutation.
+    pub history_path: Option<PathBuf>,
 }
 
 impl Default for BackendState {
     fn default() -> Self {
-        Self::new(false)
+        Self::new(false, false)
     }
 }
 
 impl BackendState {
-    pub fn new(monitor_only: bool) -> Self {
+    /// Returns the default path for the history file:
+    /// `$XDG_DATA_HOME/cursor-clip/history.json` (falls back to
+    /// `~/.local/share/cursor-clip/history.json`).
+    pub fn default_history_path() -> PathBuf {
+        let base = std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| {
+                    warn!("HOME environment variable not set; using /tmp for history storage");
+                    "/tmp".to_string()
+                });
+                PathBuf::from(home).join(".local").join("share")
+            });
+        base.join("cursor-clip").join("history.json")
+    }
+
+    pub fn new(monitor_only: bool, persist: bool) -> Self {
+        let history_path = if persist {
+            Some(Self::default_history_path())
+        } else {
+            None
+        };
         Self {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
@@ -172,6 +204,66 @@ impl BackendState {
             suppress_next_selection_read: false,
             connection: None,
             monitor_only,
+            history_path,
+        }
+    }
+
+    /// Persist the current history to disk (no-op when persistence is disabled).
+    pub fn save_to_disk(&self) {
+        let Some(path) = &self.history_path else {
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!("Failed to create history directory {}: {e}", parent.display());
+                return;
+            }
+        }
+
+        let data = PersistedHistory {
+            id_for_next_entry: self.id_for_next_entry,
+            history: self.history.clone(),
+        };
+
+        match serde_json::to_string(&data) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    warn!("Failed to write history to {}: {e}", path.display());
+                } else {
+                    debug!("History saved to {}", path.display());
+                }
+            }
+            Err(e) => warn!("Failed to serialize history: {e}"),
+        }
+    }
+
+    /// Load history from disk into this state (no-op when persistence is disabled
+    /// or the file does not exist yet).
+    pub fn load_from_disk(&mut self) {
+        let Some(path) = &self.history_path else {
+            return;
+        };
+        let path_display = path.display().to_string();
+        // Read the file while `path` is still in scope, then drop the borrow
+        // before mutating `self.history` and `self.id_for_next_entry`.
+        let read_result = std::fs::read_to_string(path);
+        match read_result {
+            Ok(json) => match serde_json::from_str::<PersistedHistory>(&json) {
+                Ok(data) => {
+                    self.history = data.history;
+                    self.id_for_next_entry = data.id_for_next_entry;
+                    info!(
+                        "Loaded {} history item(s) from {path_display}",
+                        self.history.len(),
+                    );
+                }
+                Err(e) => warn!("Failed to deserialize history from {path_display}: {e}"),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                debug!("No existing history file found at {path_display}");
+            }
+            Err(e) => warn!("Failed to read history from {path_display}: {e}"),
         }
     }
 
@@ -240,6 +332,7 @@ impl BackendState {
         }
         let new_id = self.id_for_next_entry;
         self.id_for_next_entry += 1;
+        self.save_to_disk();
         Some(new_id)
     }
 
@@ -312,6 +405,7 @@ impl BackendState {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.save_to_disk();
     }
 
     pub fn delete_item_by_id(&mut self, entry_id: u64) -> Result<(), String> {
@@ -330,6 +424,7 @@ impl BackendState {
             self.current_source_entry_id = None;
         }
 
+        self.save_to_disk();
         Ok(())
     }
 
@@ -394,6 +489,7 @@ impl BackendState {
         };
 
         self.history.insert(insert_index, item);
+        self.save_to_disk();
         Ok(())
     }
 }
