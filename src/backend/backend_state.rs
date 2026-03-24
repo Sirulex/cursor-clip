@@ -1,6 +1,8 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
 use crate::backend::persistence::{
-    ClipboardPersistence, load_persistence_enabled_from_config, warn_persistence_sync_error,
+    ClipboardPersistence, db_has_persisted_items, generate_and_store_db_password,
+    load_persistence_enabled_from_config, read_db_password_from_keyring_once,
+    warn_persistence_sync_error,
 };
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
@@ -153,6 +155,7 @@ pub struct BackendState {
     pub monitor_only: bool,
     pub persistence_enabled: bool,
     pub persistence: Option<ClipboardPersistence>,
+    pub db_password: Option<String>,
 }
 
 impl Default for BackendState {
@@ -164,6 +167,14 @@ impl Default for BackendState {
 impl BackendState {
     pub fn new(monitor_only: bool) -> Self {
         let persistence_enabled = load_persistence_enabled_from_config();
+        let db_password = match read_db_password_from_keyring_once() {
+            Ok(password) => password,
+            Err(e) => {
+                warn!("Failed to read DB password from keyring at startup: {e}");
+                None
+            }
+        };
+
         let mut state = Self {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
@@ -180,6 +191,7 @@ impl BackendState {
             monitor_only,
             persistence_enabled: false,
             persistence: None,
+            db_password,
         };
 
         if let Err(e) = state.set_persistence_enabled(persistence_enabled) {
@@ -432,7 +444,22 @@ impl BackendState {
     pub fn set_persistence_enabled(&mut self, enabled: bool) -> Result<(), String> {
         if enabled {
             if self.persistence.is_none() {
-                self.persistence = Some(ClipboardPersistence::open_default()?);
+                if self.db_password.is_none() {
+                    if db_has_persisted_items()? {
+                        return Err(
+                            "Persistent DB already contains data but no password was found in keyring. \
+                             Refusing to generate a new password because it would make existing encrypted history unreadable."
+                                .to_string(),
+                        );
+                    }
+                    self.db_password = Some(generate_and_store_db_password()?);
+                }
+
+                let password = self
+                    .db_password
+                    .as_deref()
+                    .ok_or_else(|| "Database password unavailable".to_string())?;
+                self.persistence = Some(ClipboardPersistence::open_default(password)?);
             }
 
             self.persistence_enabled = true;
