@@ -23,6 +23,15 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 layer_surface.ack_configure(serial);
                 debug!("Layer surface configured: {}x{}", width, height);
 
+                if width > 0 && height > 0 {
+                    state.monitor_width = width as i32;
+                    state.monitor_height = height as i32;
+                    debug!(
+                        "Updated monitor dimensions: {}x{}",
+                        state.monitor_width, state.monitor_height
+                    );
+                }
+
                 // Check if this is the capture layer surface
                 if Some(layer_surface) == state.capture_layer_surface.as_ref() {
                     let Some(capture_surface) = &state.capture_surface else {
