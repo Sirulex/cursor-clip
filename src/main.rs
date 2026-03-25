@@ -5,15 +5,17 @@ mod backend;
 mod frontend;
 mod shared;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+const VERSION: &str = "0.1.0";
+
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging (RUST_LOG overrides, default to info)
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_secs()
-        .try_init();
+        .try_init()?;
 
     let matches = Command::new("cursor-clip")
-        .version("0.1.0")
+        .version(VERSION)
         .about("Clipboard manager with GUI overlay")
         .arg(
             Arg::new("daemon")
@@ -44,6 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting clipboard frontend...");
         frontend::run_frontend().await?;
     }
+
+    info!("Starting clipboard backend daemon...");
+    backend::run_backend(monitor_only).await?;
 
     Ok(())
 }
