@@ -34,15 +34,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let monitor_only = matches.get_flag("monitor-only");
     let run_daemon = matches.get_flag("daemon");
 
-    if !run_daemon {
-        if monitor_only {
-            error!("--monitor-only can only be used together with --daemon");
-            std::process::exit(1);
-        }
+    if monitor_only && !run_daemon {
+        error!("--monitor-only can only be used together with --daemon");
+        std::process::exit(1);
+    }
+
+    if run_daemon {
+        info!("Starting clipboard backend daemon...");
+        backend::run_backend(monitor_only).await?;
+    } else {
         info!("Starting clipboard frontend...");
         frontend::run_frontend().await?;
-
-        return Ok(());
     }
 
     info!("Starting clipboard backend daemon...");
