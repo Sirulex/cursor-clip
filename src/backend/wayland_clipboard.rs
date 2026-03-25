@@ -71,8 +71,7 @@ impl WaylandClipboardMonitor {
         if let Ok(manager) = globals.bind::<ExtDataControlManagerV1, _, _>(&qh, 1..=1, ()) {
             self.bind_data_device(DataControlManager::Ext(manager), &qh);
             info!("Using ext_data_control_manager_v1 clipboard protocol");
-        } else if let Ok(manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ())
-        {
+        } else if let Ok(manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
             self.bind_data_device(DataControlManager::Wlr(manager), &qh);
             info!("Using zwlr_data_control_manager_v1 clipboard protocol");
         } else {
@@ -130,7 +129,11 @@ fn handle_data_offer(state: &mut BackendState, offer_id: wayland_client::backend
 }
 
 /// Register an offered MIME type for the given offer object, filtering out video types.
-fn handle_offer_mime(state: &mut BackendState, offer_id: wayland_client::backend::ObjectId, mime_type: String) {
+fn handle_offer_mime(
+    state: &mut BackendState,
+    offer_id: wayland_client::backend::ObjectId,
+    mime_type: String,
+) {
     debug!("Offer event: MIME type offered: {mime_type}");
     if let Some(mime_list) = state.mime_type_offers.get_mut(&offer_id)
         && !mime_type.starts_with("video")
@@ -156,18 +159,27 @@ fn handle_selection_event<F>(
             .as_ref()
             .is_some_and(|o| o == &offer_id);
         let mime_list = state.mime_type_offers.get(&offer_id).cloned();
-        (mime_list, already_current, state.suppress_next_selection_read)
+        (
+            mime_list,
+            already_current,
+            state.suppress_next_selection_read,
+        )
     };
 
     let Some(mime_list) = mime_list else {
         return;
     };
 
-    debug!("New clipboard content available with {} MIME types", mime_list.len());
+    debug!(
+        "New clipboard content available with {} MIME types",
+        mime_list.len()
+    );
 
     if suppress_read {
         wrapper.backend_state.lock().unwrap().current_data_offer = Some(offer_id);
-        debug!("Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads");
+        debug!(
+            "Suppressed reading our own just-set selection; waiting for Cancelled to re-enable reads"
+        );
         destroy_offer();
         return;
     }
@@ -217,7 +229,10 @@ fn handle_source_send(state: &BackendState, mime_type: String, fd: std::os::fd::
         if let Err(e) = file.write_all(bytes.as_ref()) {
             error!("Failed writing selection data (id {item_id}, mime {mime_type}): {e}");
         } else {
-            debug!("Wrote {} bytes for id {item_id} (mime {mime_type})", bytes.len());
+            debug!(
+                "Wrote {} bytes for id {item_id} (mime {mime_type})",
+                bytes.len()
+            );
         }
     } else {
         warn!("No data stored for MIME {mime_type} (id {item_id}), nothing written");
@@ -225,18 +240,10 @@ fn handle_source_send(state: &BackendState, mime_type: String, fd: std::os::fd::
 }
 
 /// Handle a Source Cancelled event. Re-enables selection reading if this is the active source.
-fn handle_source_cancelled(
-    state: &mut BackendState,
-    source_id: wayland_client::backend::ObjectId,
-) {
+fn handle_source_cancelled(state: &mut BackendState, source_id: wayland_client::backend::ObjectId) {
     debug!("Data source cancelled (object id {source_id:?})");
     // If the cancelled source is still the active one, an external client took ownership — re-enable reads.
-    if state
-        .current_source_object
-        .as_ref()
-        .map(|s| s.id())
-        == Some(source_id)
-    {
+    if state.current_source_object.as_ref().map(|s| s.id()) == Some(source_id) {
         state.suppress_next_selection_read = false;
         state.current_source_object = None;
         debug!("Re-enabled selection reading (external client took over)");
@@ -300,7 +307,11 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for MutexBackendState {
         _: &QueueHandle<Self>,
     ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-            handle_offer_mime(&mut wrapper.backend_state.lock().unwrap(), offer.id(), mime_type);
+            handle_offer_mime(
+                &mut wrapper.backend_state.lock().unwrap(),
+                offer.id(),
+                mime_type,
+            );
         }
     }
 }
@@ -383,7 +394,11 @@ impl Dispatch<ExtDataControlOfferV1, ()> for MutexBackendState {
         _: &QueueHandle<Self>,
     ) {
         if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
-            handle_offer_mime(&mut wrapper.backend_state.lock().unwrap(), offer.id(), mime_type);
+            handle_offer_mime(
+                &mut wrapper.backend_state.lock().unwrap(),
+                offer.id(),
+                mime_type,
+            );
         }
     }
 }

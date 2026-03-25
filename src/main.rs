@@ -5,15 +5,17 @@ mod backend;
 mod frontend;
 mod shared;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+const VERSION: &str = "0.1.0";
+
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging (RUST_LOG overrides, default to info)
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_secs()
-        .try_init();
+        .try_init()?;
 
     let matches = Command::new("cursor-clip")
-        .version("0.1.0")
+        .version(VERSION)
         .about("Clipboard manager with GUI overlay")
         .arg(
             Arg::new("daemon")
@@ -32,18 +34,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let monitor_only = matches.get_flag("monitor-only");
     let run_daemon = matches.get_flag("daemon");
 
-    if monitor_only && !run_daemon {
-        error!("--monitor-only can only be used together with --daemon");
-        std::process::exit(1);
-    }
-
-    if run_daemon {
-        info!("Starting clipboard backend daemon...");
-        backend::run_backend(monitor_only).await?;
-    } else {
+    if !run_daemon {
+        if monitor_only {
+            error!("--monitor-only can only be used together with --daemon");
+            std::process::exit(1);
+        }
         info!("Starting clipboard frontend...");
         frontend::run_frontend().await?;
+
+        return Ok(());
     }
+
+    info!("Starting clipboard backend daemon...");
+    backend::run_backend(monitor_only).await?;
 
     Ok(())
 }
