@@ -8,12 +8,16 @@ use crate::shared::{BackendMessage, FrontendMessage};
 use log::{error, info};
 
 pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")?;
+    let socket_dir = format!("{xdg_runtime_dir}/cursor-clip");
+    std::fs::create_dir_all(&socket_dir)?;
+
     // Remove existing socket if it exists
-    let socket_path = "/tmp/cursor-clip.sock";
-    let _ = std::fs::remove_file(socket_path);
+    let socket_path = format!("{socket_dir}/cursor-clip.sock");
+    let _ = std::fs::remove_file(&socket_path);
 
     // Create Unix socket for IPC
-    let listener = UnixListener::bind(socket_path)?;
+    let listener = UnixListener::bind(&socket_path)?;
     info!("Clipboard backend listening on {socket_path}");
 
     let state = Arc::new(Mutex::new(BackendState::new(monitor_only)));

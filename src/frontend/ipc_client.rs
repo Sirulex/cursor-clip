@@ -2,8 +2,6 @@ use crate::shared::{BackendMessage, ClipboardItemPreview, FrontendMessage};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-const SOCKET_PATH: &str = "/tmp/cursor-clip.sock";
-
 /// Frontend client for communicating with the backend
 pub struct FrontendClient {
     stream: UnixStream,
@@ -12,7 +10,9 @@ pub struct FrontendClient {
 impl FrontendClient {
     /// Create a new client
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let stream = UnixStream::connect(SOCKET_PATH)?;
+        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")?;
+        let socket_path = format!("{xdg_runtime_dir}/cursor-clip/cursor-clip.sock");
+        let stream = UnixStream::connect(socket_path)?;
         Ok(Self { stream })
     }
 
