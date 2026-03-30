@@ -12,6 +12,7 @@ path = "src/main.rs"
 wayland-client = "0.31.13"
 wayland-protocols = { version = "0.32.11", features = ["client","staging"] }
 wayland-protocols-wlr = { version = "0.3.11", features = ["client"] }
+wayland-protocols-misc = { version = "0.3.11", features = ["client"] }
 gtk4 = { version = "0.10", features = ["v4_6"] }
 gtk4-layer-shell = "0.6.3"
 libadwaita = "0.8"

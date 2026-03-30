@@ -29,6 +29,7 @@ struct UserConfig {
     show_pin: bool,
     #[serde(alias = "persistent_history")]
     persistence_enabled: bool,
+    instant_paste: bool,
 }
 
 impl Default for UserConfig {
@@ -37,6 +38,7 @@ impl Default for UserConfig {
             show_trash: true,
             show_pin: true,
             persistence_enabled: false,
+            instant_paste: true,
         }
     }
 }
@@ -271,6 +273,7 @@ fn generate_overlay_content(
     let show_trash_default = config_state.borrow().show_trash;
     let show_pin_default = config_state.borrow().show_pin;
     let persistence_enabled_default = config_state.borrow().persistence_enabled;
+    let instant_paste_default = config_state.borrow().instant_paste;
 
     if let Ok(mut client) = FrontendClient::new()
         && let Err(e) = client.set_persistence_enabled(persistence_enabled_default)
@@ -329,6 +332,16 @@ fn generate_overlay_content(
     persistence_toggle_row.append(&persistence_toggle_label);
     persistence_toggle_row.append(&persistence_toggle_check);
     menu_box.append(&persistence_toggle_row);
+
+    let instant_paste_toggle_row = Box::new(Orientation::Horizontal, 8);
+    let instant_paste_toggle_label = Label::new(Some("Instant paste"));
+    instant_paste_toggle_label.set_halign(Align::Start);
+    instant_paste_toggle_label.set_hexpand(true);
+    let instant_paste_toggle_check = CheckButton::new();
+    instant_paste_toggle_check.set_active(instant_paste_default);
+    instant_paste_toggle_row.append(&instant_paste_toggle_label);
+    instant_paste_toggle_row.append(&instant_paste_toggle_check);
+    menu_box.append(&instant_paste_toggle_row);
 
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&three_dot_menu);
@@ -392,11 +405,13 @@ fn generate_overlay_content(
 
     // Handle item activation (Enter/Space/double-click) instead of mere selection
     let items_for_activation = items_state.clone();
+    let config_for_activation = config_state.clone();
     list_box.connect_row_activated(move |_, row| {
         let index = row.index() as usize;
         let items = items_for_activation.borrow();
         if index < items.len() {
             let item = &items[index];
+            let instant_paste = config_for_activation.borrow().instant_paste;
             debug!(
                 "Activated clipboard item ID {}: {}",
                 item.item_id, item.content_preview
@@ -404,7 +419,7 @@ fn generate_overlay_content(
 
             match FrontendClient::new() {
                 Ok(mut client) => {
-                    if let Err(e) = client.set_clipboard_by_id(item.item_id) {
+                    if let Err(e) = client.set_clipboard_by_id(item.item_id, instant_paste) {
                         error!("Error setting clipboard by ID: {}", e);
                     } else {
                         info!("Clipboard set by ID: {}", item.item_id);
@@ -472,6 +487,16 @@ fn generate_overlay_content(
             Err(e) => {
                 warn!("Failed to connect to backend for persistence toggle: {}", e);
             }
+        }
+    });
+
+    let config_for_instant_paste_toggle = config_state.clone();
+    instant_paste_toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        let mut config = config_for_instant_paste_toggle.borrow_mut();
+        config.instant_paste = state;
+        if let Err(e) = save_config(&config) {
+            warn!("Failed to save config: {}", e);
         }
     });
 

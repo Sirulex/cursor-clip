@@ -1,4 +1,5 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
+use crate::backend::virtual_keyboard::type_text_via_virtual_keyboard;
 use crate::backend::persistence::{
     ClipboardPersistence, db_has_persisted_items, generate_and_store_db_password,
     load_persistence_enabled_from_config, read_db_password_from_keyring_once,
@@ -165,6 +166,17 @@ impl Default for BackendState {
 }
 
 impl BackendState {
+    fn extract_utf8_text_for_typing(item: &ClipboardItem) -> Option<String> {
+        for mime in ["text/plain;charset=utf-8", "text/plain"] {
+            if let Some(bytes) = item.mime_data.get(mime)
+                && let Ok(text) = std::str::from_utf8(bytes.as_ref())
+            {
+                return Some(text.to_string());
+            }
+        }
+        None
+    }
+
     pub fn new(monitor_only: bool) -> Self {
         let persistence_enabled = load_persistence_enabled_from_config();
         let db_password = match read_db_password_from_keyring_once() {
@@ -376,14 +388,22 @@ impl BackendState {
         Ok(())
     }
 
-    pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
+    pub fn set_clipboard_by_id(&mut self, entry_id: u64, instant_paste: bool) -> Result<(), String> {
         let item = self
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
-        info!(
-            "Setting clipboard content by ID {entry_id}"
-        );
+        if instant_paste {
+            if let Some(text) = Self::extract_utf8_text_for_typing(&item) {
+                info!("Instant paste via virtual keyboard for ID {entry_id}");
+                return type_text_via_virtual_keyboard(&text);
+            }
+            warn!(
+                "Instant paste requested for ID {entry_id}, but item has no UTF-8 text MIME; falling back to clipboard selection"
+            );
+        }
+
+        info!("Setting clipboard content by ID {entry_id}");
 
         let (Some(manager), Some(device), Some(qh)) = (
             &self.data_control_manager,

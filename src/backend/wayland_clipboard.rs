@@ -202,7 +202,7 @@ fn handle_selection_event<F>(
             && !state.monitor_only
             && !state.suppress_next_selection_read
         {
-            if let Err(e) = state.set_clipboard_by_id(new_id) {
+            if let Err(e) = state.set_clipboard_by_id(new_id, false) {
                 warn!("Failed to take ownership of selection id {new_id}: {e}");
             } else {
                 debug!("Took ownership of external selection (id {new_id})");

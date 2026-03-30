@@ -44,8 +44,12 @@ impl FrontendClient {
     }
 
     /// Set clipboard by ID
-    pub fn set_clipboard_by_id(&mut self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::SetClipboardById { id })?;
+    pub fn set_clipboard_by_id(
+        &mut self,
+        id: u64,
+        instant_paste: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let response = self.send_message(FrontendMessage::SetClipboardById { id, instant_paste })?;
         match response {
             BackendMessage::ClipboardSet => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),
