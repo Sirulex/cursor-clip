@@ -1,4 +1,5 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
+use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
 use crate::backend::persistence::{
     ClipboardPersistence, db_has_persisted_items, generate_and_store_db_password,
     load_persistence_enabled_from_config, read_db_password_from_keyring_once,
@@ -376,14 +377,12 @@ impl BackendState {
         Ok(())
     }
 
-    pub fn set_clipboard_by_id(&mut self, entry_id: u64) -> Result<(), String> {
+    pub fn set_clipboard_by_id(&mut self, entry_id: u64, instant_paste: bool) -> Result<(), String> {
         let item = self
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
-        info!(
-            "Setting clipboard content by ID {entry_id}"
-        );
+        info!("Setting clipboard content by ID {entry_id}");
 
         let (Some(manager), Some(device), Some(qh)) = (
             &self.data_control_manager,
@@ -399,7 +398,7 @@ impl BackendState {
         }
 
         let source = manager.create_data_source(qh);
-        for (mime, _data) in &item.mime_data {
+        for mime in item.mime_data.keys() {
             source.offer(mime.clone());
         }
         device.set_selection(Some(&source));
@@ -414,6 +413,18 @@ impl BackendState {
             warn!("Failed to flush Wayland connection after setting selection: {e}");
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
+
+        if instant_paste {
+            info!("Instant paste via virtual keyboard shortcut for ID {entry_id}");
+            std::thread::spawn(move || {
+                // Give the overlay a brief moment to close so shortcut targets the previous app.
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                if let Err(e) = paste_via_virtual_keyboard_shortcut() {
+                    warn!("Instant paste failed: {e}");
+                }
+            });
+        }
+
         Ok(())
     }
 

@@ -54,7 +54,11 @@ pub enum FrontendMessage {
     /// Request clipboard history
     GetHistory,
     /// Set clipboard content by ID
-    SetClipboardById { id: u64 },
+    SetClipboardById {
+        id: u64,
+        #[serde(default)]
+        instant_paste: bool,
+    },
     /// Set pinned state by ID
     SetPinned { id: u64, pinned: bool },
     /// Delete a single clipboard item by ID
