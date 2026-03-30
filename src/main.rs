@@ -47,8 +47,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         frontend::run_frontend().await?;
     }
 
-    info!("Starting clipboard backend daemon...");
-    backend::run_backend(monitor_only).await?;
-
     Ok(())
 }
