@@ -16,6 +16,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Timestamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to the clipboard
 - **Pin or delete items**: Manage your history with ease
+- **Instant paste**: Option to immediately paste the selected item into the active application
 - **Persistent history**: Option to store clipboard history across sessions with automatic encryption
 
 ### 🖱️ **Advanced Wayland Integration**
@@ -118,6 +119,18 @@ sudo ldconfig
 cursor-clip --daemon
 ```
 
+## Building with Nix Flake
+
+```bash
+# Build and install using Nix Flakes (default package)
+nix build .
+# or: nix build .#default
+sudo cp result/bin/cursor-clip /usr/local/bin/
+
+# Optional: enter the development shell
+nix develop
+```
+
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
 2. **Launch Overlay**: Run `cursor-clip` without any arguments (ideally bind it to a hotkey, e.g., Super+V)
@@ -134,13 +147,14 @@ cursor-clip --daemon
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
    - **Keyboard navigation**: Use *Arrow keys* or *J/K* to navigate, *Enter* to select, *Delete* to remove, *P* to pin, *Esc* to close
-   - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
+   - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
 
 ## Persistent History Security
 
 If persistent history is enabled, clipboard history is stored in an encrypted local database. The database key is stored in your operating system keyring and reused on restart. This ensures that your clipboard history remains secure and private, even if someone gains access to your filesystem (e.g., sidechannel attacks). The encryption and key management are handled automatically by Cursor Clip, so you can enable persistent history with just a simple toggle.
 
-## Key Components
+## Instant paste note:
+On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
 
 ```
 ┌─────────────────────────────────────────────────┐
