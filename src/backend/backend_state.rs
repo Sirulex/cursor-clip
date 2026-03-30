@@ -398,7 +398,7 @@ impl BackendState {
         }
 
         let source = manager.create_data_source(qh);
-        for (mime, _data) in &item.mime_data {
+        for mime in item.mime_data.keys() {
             source.offer(mime.clone());
         }
         device.set_selection(Some(&source));
@@ -418,7 +418,7 @@ impl BackendState {
             info!("Instant paste via virtual keyboard shortcut for ID {entry_id}");
             std::thread::spawn(move || {
                 // Give the overlay a brief moment to close so shortcut targets the previous app.
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(20));
                 if let Err(e) = paste_via_virtual_keyboard_shortcut() {
                     warn!("Instant paste failed: {e}");
                 }

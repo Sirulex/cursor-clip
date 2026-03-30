@@ -14,6 +14,21 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
 };
 
+const PASTE_KEYMAP: &[u8] = b"xkb_keymap {\n\
+xkb_keycodes \"(unnamed)\" {\n\
+minimum = 8;\n\
+maximum = 11;\n\
+<K1> = 9;\n\
+<K2> = 10;\n\
+};\n\
+xkb_types \"(unnamed)\" { include \"complete\" };\n\
+xkb_compatibility \"(unnamed)\" { include \"complete\" };\n\
+xkb_symbols \"(unnamed)\" {\n\
+key <K1> {[Control_L]};\n\
+key <K2> {[v, V]};\n\
+};\n\
+};\n\0";
+
 struct VirtualKeyboardState;
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for VirtualKeyboardState {
@@ -31,29 +46,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for VirtualKeyboardSt
 delegate_noop!(VirtualKeyboardState: ignore ZwpVirtualKeyboardManagerV1);
 delegate_noop!(VirtualKeyboardState: ignore ZwpVirtualKeyboardV1);
 delegate_noop!(VirtualKeyboardState: ignore WlSeat);
-
-fn build_paste_shortcut_keymap() -> Vec<u8> {
-    // Two keys are enough for Ctrl+V: Control_L on K1 and v on K2.
-    let mut keymap = String::new();
-    keymap.push_str("xkb_keymap {\n");
-    keymap.push_str("xkb_keycodes \"(unnamed)\" {\n");
-    keymap.push_str("minimum = 8;\n");
-    keymap.push_str("maximum = 11;\n");
-    keymap.push_str("<K1> = 9;\n");
-    keymap.push_str("<K2> = 10;\n");
-    keymap.push_str("};\n");
-    keymap.push_str("xkb_types \"(unnamed)\" { include \"complete\" };\n");
-    keymap.push_str("xkb_compatibility \"(unnamed)\" { include \"complete\" };\n");
-    keymap.push_str("xkb_symbols \"(unnamed)\" {\n");
-    keymap.push_str("key <K1> {[Control_L]};\n");
-    keymap.push_str("key <K2> {[v, V]};\n");
-    keymap.push_str("};\n");
-    keymap.push_str("};\n");
-
-    let mut bytes = keymap.into_bytes();
-    bytes.push(0);
-    bytes
-}
 
 pub fn paste_via_virtual_keyboard_shortcut() -> Result<(), String> {
     let connection =
@@ -73,7 +65,6 @@ pub fn paste_via_virtual_keyboard_shortcut() -> Result<(), String> {
         })?;
 
     let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
-    let keymap_bytes = build_paste_shortcut_keymap();
 
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -93,13 +84,13 @@ pub fn paste_via_virtual_keyboard_shortcut() -> Result<(), String> {
         .map_err(|e| format!("Failed to create temporary keymap file: {e}"))?;
 
     keymap_file
-        .write_all(&keymap_bytes)
+        .write_all(PASTE_KEYMAP)
         .map_err(|e| format!("Failed to write keymap: {e}"))?;
     keymap_file
         .flush()
         .map_err(|e| format!("Failed to flush keymap: {e}"))?;
 
-    keyboard.keymap(1, keymap_file.as_fd(), keymap_bytes.len() as u32);
+    keyboard.keymap(1, keymap_file.as_fd(), PASTE_KEYMAP.len() as u32);
 
     let mut vk_state = VirtualKeyboardState;
     event_queue
