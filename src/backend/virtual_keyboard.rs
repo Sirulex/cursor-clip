@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::fd::AsFd;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread::sleep;
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry;
@@ -31,64 +32,30 @@ delegate_noop!(VirtualKeyboardState: ignore ZwpVirtualKeyboardManagerV1);
 delegate_noop!(VirtualKeyboardState: ignore ZwpVirtualKeyboardV1);
 delegate_noop!(VirtualKeyboardState: ignore WlSeat);
 
-fn keysym_name_for_char(ch: char) -> String {
-    match ch {
-        '\n' => "Return".to_string(),
-        '\t' => "Tab".to_string(),
-        '\x1b' => "Escape".to_string(),
-        _ => format!("U{:04X}", ch as u32),
-    }
-}
-
-fn build_keymap_and_sequence(text: &str) -> (Vec<u8>, Vec<u32>) {
-    let mut char_to_key: BTreeMap<char, u32> = BTreeMap::new();
-    let mut ordered_chars: Vec<char> = Vec::new();
-
-    for ch in text.chars() {
-        if !char_to_key.contains_key(&ch) {
-            let key_code = (ordered_chars.len() as u32) + 1;
-            char_to_key.insert(ch, key_code);
-            ordered_chars.push(ch);
-        }
-    }
-
-    let sequence = text
-        .chars()
-        .filter_map(|ch| char_to_key.get(&ch).copied())
-        .collect::<Vec<_>>();
-
+fn build_paste_shortcut_keymap() -> Vec<u8> {
+    // Two keys are enough for Ctrl+V: Control_L on K1 and v on K2.
     let mut keymap = String::new();
     keymap.push_str("xkb_keymap {\n");
     keymap.push_str("xkb_keycodes \"(unnamed)\" {\n");
     keymap.push_str("minimum = 8;\n");
-    keymap.push_str(&format!("maximum = {};\n", ordered_chars.len() + 9));
-    for i in 0..ordered_chars.len() {
-        keymap.push_str(&format!("<K{}> = {};\n", i + 1, i + 9));
-    }
+    keymap.push_str("maximum = 11;\n");
+    keymap.push_str("<K1> = 9;\n");
+    keymap.push_str("<K2> = 10;\n");
     keymap.push_str("};\n");
     keymap.push_str("xkb_types \"(unnamed)\" { include \"complete\" };\n");
     keymap.push_str("xkb_compatibility \"(unnamed)\" { include \"complete\" };\n");
     keymap.push_str("xkb_symbols \"(unnamed)\" {\n");
-    for (idx, ch) in ordered_chars.iter().enumerate() {
-        keymap.push_str(&format!(
-            "key <K{}> {{[{}]}};\n",
-            idx + 1,
-            keysym_name_for_char(*ch)
-        ));
-    }
+    keymap.push_str("key <K1> {[Control_L]};\n");
+    keymap.push_str("key <K2> {[v, V]};\n");
     keymap.push_str("};\n");
     keymap.push_str("};\n");
 
     let mut bytes = keymap.into_bytes();
     bytes.push(0);
-    (bytes, sequence)
+    bytes
 }
 
-pub fn type_text_via_virtual_keyboard(text: &str) -> Result<(), String> {
-    if text.is_empty() {
-        return Ok(());
-    }
-
+pub fn paste_via_virtual_keyboard_shortcut() -> Result<(), String> {
     let connection =
         Connection::connect_to_env().map_err(|e| format!("Wayland connection failed: {e}"))?;
     let (globals, mut event_queue) =
@@ -106,7 +73,7 @@ pub fn type_text_via_virtual_keyboard(text: &str) -> Result<(), String> {
         })?;
 
     let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
-    let (keymap_bytes, key_sequence) = build_keymap_and_sequence(text);
+    let keymap_bytes = build_paste_shortcut_keymap();
 
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -139,19 +106,32 @@ pub fn type_text_via_virtual_keyboard(text: &str) -> Result<(), String> {
         .roundtrip(&mut vk_state)
         .map_err(|e| format!("Wayland roundtrip failed: {e}"))?;
 
-    for key_code in key_sequence {
-        keyboard.key(0, key_code, 1);
-        connection
-            .flush()
-            .map_err(|e| format!("Failed to flush key press: {e}"))?;
-        std::thread::sleep(Duration::from_millis(2));
+    // Press Ctrl, declare modifiers, tap V, then clear modifiers and release Ctrl.
+    // Some clients only honor Ctrl combinations when modifier state is sent explicitly.
+    keyboard.key(0, 1, 1);
+    keyboard.modifiers(4, 0, 0, 0);
+    connection
+        .flush()
+        .map_err(|e| format!("Failed to flush Ctrl down: {e}"))?;
+    sleep(Duration::from_millis(10));
 
-        keyboard.key(0, key_code, 0);
-        connection
-            .flush()
-            .map_err(|e| format!("Failed to flush key release: {e}"))?;
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    keyboard.key(0, 2, 1);
+    connection
+        .flush()
+        .map_err(|e| format!("Failed to flush V down: {e}"))?;
+    sleep(Duration::from_millis(6));
+
+    keyboard.key(0, 2, 0);
+    connection
+        .flush()
+        .map_err(|e| format!("Failed to flush V up: {e}"))?;
+    sleep(Duration::from_millis(6));
+
+    keyboard.modifiers(0, 0, 0, 0);
+    keyboard.key(0, 1, 0);
+    connection
+        .flush()
+        .map_err(|e| format!("Failed to flush virtual keyboard shortcut: {e}"))?;
 
     keyboard.destroy();
     let _ = std::fs::remove_file(path);

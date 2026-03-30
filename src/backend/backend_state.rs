@@ -1,5 +1,5 @@
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
-use crate::backend::virtual_keyboard::type_text_via_virtual_keyboard;
+use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
 use crate::backend::persistence::{
     ClipboardPersistence, db_has_persisted_items, generate_and_store_db_password,
     load_persistence_enabled_from_config, read_db_password_from_keyring_once,
@@ -166,17 +166,6 @@ impl Default for BackendState {
 }
 
 impl BackendState {
-    fn extract_utf8_text_for_typing(item: &ClipboardItem) -> Option<String> {
-        for mime in ["text/plain;charset=utf-8", "text/plain"] {
-            if let Some(bytes) = item.mime_data.get(mime)
-                && let Ok(text) = std::str::from_utf8(bytes.as_ref())
-            {
-                return Some(text.to_string());
-            }
-        }
-        None
-    }
-
     pub fn new(monitor_only: bool) -> Self {
         let persistence_enabled = load_persistence_enabled_from_config();
         let db_password = match read_db_password_from_keyring_once() {
@@ -393,20 +382,6 @@ impl BackendState {
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
-        let instant_text = if instant_paste {
-            match Self::extract_utf8_text_for_typing(&item) {
-                Some(text) => Some(text),
-                None => {
-                    warn!(
-                        "Instant paste requested for ID {entry_id}, but item has no UTF-8 text MIME; using clipboard selection only"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         info!("Setting clipboard content by ID {entry_id}");
 
         let (Some(manager), Some(device), Some(qh)) = (
@@ -439,12 +414,12 @@ impl BackendState {
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
 
-        if let Some(text) = instant_text {
-            info!("Instant paste via virtual keyboard for ID {entry_id}");
+        if instant_paste {
+            info!("Instant paste via virtual keyboard shortcut for ID {entry_id}");
             std::thread::spawn(move || {
-                // Give the overlay a short moment to close so key events target the previously focused app.
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                if let Err(e) = type_text_via_virtual_keyboard(&text) {
+                // Give the overlay a brief moment to close so shortcut targets the previous app.
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if let Err(e) = paste_via_virtual_keyboard_shortcut() {
                     warn!("Instant paste failed: {e}");
                 }
             });
