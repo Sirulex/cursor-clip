@@ -393,15 +393,19 @@ impl BackendState {
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
-        if instant_paste {
-            if let Some(text) = Self::extract_utf8_text_for_typing(&item) {
-                info!("Instant paste via virtual keyboard for ID {entry_id}");
-                return type_text_via_virtual_keyboard(&text);
+        let instant_text = if instant_paste {
+            match Self::extract_utf8_text_for_typing(&item) {
+                Some(text) => Some(text),
+                None => {
+                    warn!(
+                        "Instant paste requested for ID {entry_id}, but item has no UTF-8 text MIME; using clipboard selection only"
+                    );
+                    None
+                }
             }
-            warn!(
-                "Instant paste requested for ID {entry_id}, but item has no UTF-8 text MIME; falling back to clipboard selection"
-            );
-        }
+        } else {
+            None
+        };
 
         info!("Setting clipboard content by ID {entry_id}");
 
@@ -434,6 +438,18 @@ impl BackendState {
             warn!("Failed to flush Wayland connection after setting selection: {e}");
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
+
+        if let Some(text) = instant_text {
+            info!("Instant paste via virtual keyboard for ID {entry_id}");
+            std::thread::spawn(move || {
+                // Give the overlay a short moment to close so key events target the previously focused app.
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                if let Err(e) = type_text_via_virtual_keyboard(&text) {
+                    warn!("Instant paste failed: {e}");
+                }
+            });
+        }
+
         Ok(())
     }
 
