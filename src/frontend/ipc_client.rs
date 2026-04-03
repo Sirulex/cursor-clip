@@ -1,4 +1,5 @@
 use crate::shared::{BackendMessage, ClipboardItemPreview, FrontendMessage};
+use log::warn;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
@@ -10,10 +11,18 @@ pub struct FrontendClient {
 impl FrontendClient {
     /// Create a new client
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")?;
-        let socket_path = format!("{xdg_runtime_dir}/cursor-clip/cursor-clip.sock");
-        let stream = UnixStream::connect(socket_path)?;
-        Ok(Self { stream })
+        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR");
+
+        if let Ok(val) = xdg_runtime_dir {
+            let socket_path = format!("{val}/cursor-clip/cursor-clip.sock");
+            let stream = UnixStream::connect(socket_path)?;
+
+            return Ok(Self { stream });
+        } else {
+            warn!("XDG_RUNTIME_DIR not set.");
+
+            todo!();
+        }
     }
 
     /// Send a message and get response
@@ -49,7 +58,8 @@ impl FrontendClient {
         id: u64,
         instant_paste: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::SetClipboardById { id, instant_paste })?;
+        let response =
+            self.send_message(FrontendMessage::SetClipboardById { id, instant_paste })?;
         match response {
             BackendMessage::ClipboardSet => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),
