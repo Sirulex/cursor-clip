@@ -1,10 +1,10 @@
-use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
-use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
 use crate::backend::persistence::{
     ClipboardPersistence, db_has_persisted_items, generate_and_store_db_password,
     load_persistence_enabled_from_config, read_db_password_from_keyring_once,
     warn_persistence_sync_error,
 };
+use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
+use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
@@ -377,7 +377,11 @@ impl BackendState {
         Ok(())
     }
 
-    pub fn set_clipboard_by_id(&mut self, entry_id: u64, instant_paste: bool) -> Result<(), String> {
+    pub fn set_clipboard_by_id(
+        &mut self,
+        entry_id: u64,
+        instant_paste: bool,
+    ) -> Result<(), String> {
         let item = self
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;

@@ -1,18 +1,21 @@
 use clap::{Arg, Command};
-use log::{error, info};
+use env_logger::TimestampPrecision;
+use log::{LevelFilter, error, info};
 
 mod backend;
 mod frontend;
 mod shared;
 
 const VERSION: &str = "0.1.0";
+const LOG_LEVEL: LevelFilter = LevelFilter::Info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging (RUST_LOG overrides, default to info)
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_secs()
-        .try_init()?;
+    env_logger::builder()
+        .filter_level(LOG_LEVEL)
+        .format_timestamp(Some(TimestampPrecision::Seconds))
+        .init();
 
     let matches = Command::new("cursor-clip")
         .version(VERSION)
