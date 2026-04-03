@@ -60,9 +60,7 @@ pub fn paste_via_virtual_keyboard_shortcut() -> Result<(), String> {
 
     let manager = globals
         .bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ())
-        .map_err(|_| {
-            "Compositor does not support zwp_virtual_keyboard_manager_v1".to_string()
-        })?;
+        .map_err(|_| "Compositor does not support zwp_virtual_keyboard_manager_v1".to_string())?;
 
     let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
 

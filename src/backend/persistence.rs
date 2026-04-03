@@ -79,8 +79,12 @@ pub fn db_has_persisted_items() -> Result<bool, String> {
     }
 
     let dsn = format!("file://{}", db_path.display());
-    let db = Database::open(&dsn)
-        .map_err(|e| format!("Failed to open Stoolap database at {}: {e}", db_path.display()))?;
+    let db = Database::open(&dsn).map_err(|e| {
+        format!(
+            "Failed to open Stoolap database at {}: {e}",
+            db_path.display()
+        )
+    })?;
 
     db.execute(
         "CREATE TABLE IF NOT EXISTS clipboard_history (
@@ -107,7 +111,8 @@ pub struct ClipboardPersistence {
 
 impl std::fmt::Debug for ClipboardPersistence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClipboardPersistence").finish_non_exhaustive()
+        f.debug_struct("ClipboardPersistence")
+            .finish_non_exhaustive()
     }
 }
 
@@ -120,8 +125,12 @@ impl ClipboardPersistence {
         }
 
         let dsn = format!("file://{}", db_path.display());
-        let db = Database::open(&dsn)
-            .map_err(|e| format!("Failed to open Stoolap database at {}: {e}", db_path.display()))?;
+        let db = Database::open(&dsn).map_err(|e| {
+            format!(
+                "Failed to open Stoolap database at {}: {e}",
+                db_path.display()
+            )
+        })?;
 
         db.execute(
             "CREATE TABLE IF NOT EXISTS clipboard_history (
