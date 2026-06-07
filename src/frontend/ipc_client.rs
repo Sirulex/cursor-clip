@@ -49,7 +49,8 @@ impl FrontendClient {
         id: u64,
         instant_paste: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::SetClipboardById { id, instant_paste })?;
+        let response =
+            self.send_message(FrontendMessage::SetClipboardById { id, instant_paste })?;
         match response {
             BackendMessage::ClipboardSet => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),

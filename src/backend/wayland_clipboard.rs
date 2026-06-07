@@ -461,16 +461,14 @@ fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dy
 }
 
 /// Select the MIME types to actually read from the available list.
-/// For images, pick the best format. Otherwise pass all types through.
+/// When image types are present, keep only PNG image data and all non-image variants.
 fn select_target_mimes(available_mimes: &[String]) -> Vec<String> {
-    let best_image_mime = available_mimes
-        .iter()
-        .find(|m| *m == "image/png")
-        .or_else(|| available_mimes.iter().find(|m| *m == "image/jpeg"))
-        .or_else(|| available_mimes.iter().find(|m| *m == "image/bmp"));
-
-    if let Some(img) = best_image_mime {
-        return vec![img.clone()];
+    if available_mimes.iter().any(|m| m.starts_with("image/")) {
+        return available_mimes
+            .iter()
+            .filter(|m| m.as_str() == "image/png" || !m.starts_with("image/"))
+            .cloned()
+            .collect();
     }
 
     available_mimes.to_vec()
