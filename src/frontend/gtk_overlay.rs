@@ -120,6 +120,7 @@ pub fn init_clipboard_overlay(
     INIT.call_once(|| {
         adw::init().expect("Failed to initialize libadwaita");
     });
+    configure_color_scheme();
 
     // Create the application (was returned from init_application())
     let app: Application = adw::Application::builder()
@@ -165,6 +166,20 @@ pub fn init_clipboard_overlay(
         *a.borrow_mut() = None;
     });
     Ok(())
+}
+
+fn configure_color_scheme() {
+    let style_manager = adw::StyleManager::default();
+
+    if let Some(settings) = gtk4::Settings::default() {
+        if settings.is_gtk_application_prefer_dark_theme() {
+            style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
+        } else {
+            style_manager.set_color_scheme(adw::ColorScheme::Default);
+        }
+
+        settings.set_gtk_application_prefer_dark_theme(false);
+    }
 }
 
 /// Create and configure the sync layer shell window
@@ -715,7 +730,27 @@ fn generate_key_controller(
 /// Apply custom CSS styling for modern GNOME-style rounded window
 fn apply_custom_styling(window: &adw::ApplicationWindow) {
     let css_provider = gtk4::CssProvider::new();
-    css_provider.load_from_data(
+    let display = gtk4::prelude::WidgetExt::display(window);
+    let style_manager = adw::StyleManager::for_display(&display);
+
+    load_overlay_css(&css_provider, style_manager.is_dark());
+
+    {
+        let css_provider = css_provider.clone();
+        style_manager.connect_dark_notify(move |style_manager| {
+            load_overlay_css(&css_provider, style_manager.is_dark());
+        });
+    }
+
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &css_provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
+    css_provider.load_from_data(if is_dark {
         "
         window {
             border-radius: 12px;
@@ -832,14 +867,127 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
             border-radius: 8px;
             padding: 6px 8px;
         }
-        ",
-    );
+        "
+    } else {
+        "
+        window {
+            border-radius: 12px;
+            background: #f6f7f9;
+        }
 
-    gtk4::style_context_add_provider_for_display(
-        &gtk4::prelude::WidgetExt::display(window),
-        &css_provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+        headerbar {
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .clipboard-list {
+            background: transparent;
+        }
+
+        .clipboard-item {
+            background: #ffffff;
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 4px 4px;
+            margin: 6px 12px;
+            transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+        }
+
+        .clipboard-item:hover {
+            border-color: #1c71d8;
+            background: shade(#ffffff, 0.96);
+        }
+
+        .clipboard-item:selected {
+            border-color: #1c71d8;
+            background: alpha(#1c71d8, 0.12);
+        }
+
+        .clipboard-preview {
+            opacity: 0.9;
+        }
+
+        .clipboard-preview.monospace {
+            font-family: monospace;
+        }
+
+        .clipboard-time {
+            font-size: 0.8em;
+            opacity: 0.6;
+        }
+
+        .clipboard-delete {
+            color: #5e6268;
+            padding: 2px 4px;
+        }
+
+        .clipboard-pin {
+            color: #5e6268;
+            padding: 2px 4px;
+        }
+
+        .clipboard-item:hover .clipboard-delete,
+        .clipboard-delete:hover {
+            color: #1f2328;
+        }
+
+        .clipboard-item:hover .clipboard-pin {
+            color: #1f2328;
+        }
+
+        .clipboard-pin:hover {
+            color: #1f2328;
+        }
+
+        .clipboard-pin.pinned {
+            color: #1f2328;
+        }
+
+        .manual-close-button {
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .manual-close-button:hover,
+        .manual-close-button:active {
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .manual-close-icon {
+            min-width: 28px;
+            min-height: 28px;
+            border-radius: 999px;
+            background: #ffffff;
+        }
+
+        .manual-close-icon image {
+            color: #1f2328;
+        }
+
+        .manual-close-button:hover .manual-close-icon {
+            background: shade(#ffffff, 0.92);
+        }
+
+        .manual-close-button:hover .manual-close-icon image {
+            color: #111318;
+        }
+
+        .manual-close-button:active .manual-close-icon {
+            background: shade(#ffffff, 0.86);
+        }
+
+        .menu-revealer {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 6px 8px;
+            box-shadow: 0 2px 8px alpha(#000000, 0.10);
+        }
+        "
+    });
 }
 
 /// Create a clipboard history item row from backend data
