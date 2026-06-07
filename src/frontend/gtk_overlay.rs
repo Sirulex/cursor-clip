@@ -265,8 +265,9 @@ fn generate_overlay_content(
     // Header bar
     let header_bar = adw::HeaderBar::new();
     header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
-    // Use standard end title buttons (includes the normal close button with Adwaita styling)
-    header_bar.set_show_end_title_buttons(true);
+    // Layer-shell + undecorated windows can render built-in title buttons unreliably.
+    // Use an explicit close button styled like a normal Adwaita title button instead.
+    header_bar.set_show_end_title_buttons(false);
     header_bar.set_show_start_title_buttons(false);
 
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
@@ -281,10 +282,15 @@ fn generate_overlay_content(
         warn!("Failed to sync persistence setting with backend: {}", e);
     }
 
-    // Add a three-dot menu button (icon-only) next to the close button on the right
+    // Add right-side header actions (menu + close)
     let three_dot_menu = Button::builder().icon_name("view-more-symbolic").build();
     three_dot_menu.add_css_class("flat");
     three_dot_menu.set_tooltip_text(Some("Options"));
+
+    let close_button = Button::builder().icon_name("window-close-symbolic").build();
+    close_button.add_css_class("titlebutton");
+    close_button.add_css_class("close");
+    close_button.set_tooltip_text(Some("Close"));
 
     let menu_revealer = Revealer::new();
     menu_revealer.set_reveal_child(false);
@@ -344,7 +350,12 @@ fn generate_overlay_content(
     menu_box.append(&instant_paste_toggle_row);
 
     menu_revealer.set_child(Some(&menu_box));
+    header_bar.pack_end(&close_button);
     header_bar.pack_end(&three_dot_menu);
+
+    close_button.connect_clicked(move |_| {
+        request_quit();
+    });
 
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
