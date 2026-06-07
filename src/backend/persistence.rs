@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use keyring::Entry;
 use log::warn;
-use rand::RngCore;
+use rand::Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs;
