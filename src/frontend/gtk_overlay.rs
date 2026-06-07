@@ -265,8 +265,9 @@ fn generate_overlay_content(
     // Header bar
     let header_bar = adw::HeaderBar::new();
     header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
-    // Use standard end title buttons (includes the normal close button with Adwaita styling)
-    header_bar.set_show_end_title_buttons(true);
+    // Layer-shell + undecorated windows can render built-in title buttons unreliably.
+    // Use an explicit close button styled like a normal Adwaita title button instead.
+    header_bar.set_show_end_title_buttons(false);
     header_bar.set_show_start_title_buttons(false);
 
     let config_state = Rc::new(RefCell::new(load_or_create_config()));
@@ -281,10 +282,32 @@ fn generate_overlay_content(
         warn!("Failed to sync persistence setting with backend: {}", e);
     }
 
-    // Add a three-dot menu button (icon-only) next to the close button on the right
+    // Add right-side header actions (menu + close)
     let three_dot_menu = Button::builder().icon_name("view-more-symbolic").build();
     three_dot_menu.add_css_class("flat");
     three_dot_menu.set_tooltip_text(Some("Options"));
+
+    let close_icon = gtk4::Image::from_icon_name("window-close-symbolic");
+    close_icon.set_pixel_size(16);
+    close_icon.set_size_request(16, 16);
+    close_icon.set_halign(Align::Center);
+    close_icon.set_valign(Align::Center);
+    close_icon.set_hexpand(true);
+    close_icon.set_vexpand(true);
+
+    let close_icon_box = Box::new(Orientation::Horizontal, 0);
+    close_icon_box.add_css_class("manual-close-icon");
+    close_icon_box.set_size_request(28, 28);
+    close_icon_box.set_halign(Align::Center);
+    close_icon_box.set_valign(Align::Center);
+    close_icon_box.append(&close_icon);
+
+    let close_button = Button::new();
+    close_button.set_child(Some(&close_icon_box));
+    close_button.add_css_class("flat");
+    close_button.add_css_class("manual-close-button");
+    close_button.set_size_request(28, 28);
+    close_button.set_tooltip_text(Some("Close"));
 
     let menu_revealer = Revealer::new();
     menu_revealer.set_reveal_child(false);
@@ -344,7 +367,12 @@ fn generate_overlay_content(
     menu_box.append(&instant_paste_toggle_row);
 
     menu_revealer.set_child(Some(&menu_box));
+    header_bar.pack_end(&close_button);
     header_bar.pack_end(&three_dot_menu);
+
+    close_button.connect_clicked(move |_| {
+        request_quit();
+    });
 
     // Add clear all button to header
     let clear_button = Button::with_label("Clear All");
@@ -760,6 +788,43 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
 
         .clipboard-pin.pinned {
             color: #ffffff;
+        }
+
+        .manual-close-button {
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .manual-close-button:hover,
+        .manual-close-button:active {
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .manual-close-icon {
+            min-width: 28px;
+            min-height: 28px;
+            border-radius: 999px;
+            background: #343437;
+        }
+
+        .manual-close-icon image {
+            color: #f4f5f6;
+        }
+
+        .manual-close-button:hover .manual-close-icon {
+            background: shade(#343437, 1.12);
+        }
+
+        .manual-close-button:hover .manual-close-icon image {
+            color: #ffffff;
+        }
+
+        .manual-close-button:active .manual-close-icon {
+            background: shade(#343437, 0.92);
         }
 
         .menu-revealer {
