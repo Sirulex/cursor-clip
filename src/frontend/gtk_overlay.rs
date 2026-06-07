@@ -287,9 +287,26 @@ fn generate_overlay_content(
     three_dot_menu.add_css_class("flat");
     three_dot_menu.set_tooltip_text(Some("Options"));
 
-    let close_button = Button::builder().icon_name("window-close-symbolic").build();
-    close_button.add_css_class("titlebutton");
-    close_button.add_css_class("close");
+    let close_icon = gtk4::Image::from_icon_name("window-close-symbolic");
+    close_icon.set_pixel_size(16);
+    close_icon.set_size_request(16, 16);
+    close_icon.set_halign(Align::Center);
+    close_icon.set_valign(Align::Center);
+    close_icon.set_hexpand(true);
+    close_icon.set_vexpand(true);
+
+    let close_icon_box = Box::new(Orientation::Horizontal, 0);
+    close_icon_box.add_css_class("manual-close-icon");
+    close_icon_box.set_size_request(28, 28);
+    close_icon_box.set_halign(Align::Center);
+    close_icon_box.set_valign(Align::Center);
+    close_icon_box.append(&close_icon);
+
+    let close_button = Button::new();
+    close_button.set_child(Some(&close_icon_box));
+    close_button.add_css_class("flat");
+    close_button.add_css_class("manual-close-button");
+    close_button.set_size_request(28, 28);
     close_button.set_tooltip_text(Some("Close"));
 
     let menu_revealer = Revealer::new();
@@ -771,6 +788,43 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
 
         .clipboard-pin.pinned {
             color: #ffffff;
+        }
+
+        .manual-close-button {
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .manual-close-button:hover,
+        .manual-close-button:active {
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .manual-close-icon {
+            min-width: 28px;
+            min-height: 28px;
+            border-radius: 999px;
+            background: #343437;
+        }
+
+        .manual-close-icon image {
+            color: #f4f5f6;
+        }
+
+        .manual-close-button:hover .manual-close-icon {
+            background: shade(#343437, 1.12);
+        }
+
+        .manual-close-button:hover .manual-close-icon image {
+            color: #ffffff;
+        }
+
+        .manual-close-button:active .manual-close-icon {
+            background: shade(#343437, 0.92);
         }
 
         .menu-revealer {
