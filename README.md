@@ -82,7 +82,7 @@ sudo pacman -S gtk4 libadwaita gtk4-layer-shell
 #### Ubuntu/Debian:
 ```bash
 sudo apt update
-sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev gtk4-layer-shell
+sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
 ```
 
 #### Fedora:
