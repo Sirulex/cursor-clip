@@ -73,6 +73,9 @@ fn choose_placement(request: &OpenRequest) -> PickerPlacement {
         if hints.pointer_x.is_some() && hints.pointer_y.is_some() {
             return PickerPlacement::from_hints(hints);
         }
+        if hints.output.is_some() {
+            return PickerPlacement::from_hints(hints);
+        }
         match d2b_clip_picker::placement::PointerCapture::capture_picker_timeout(
             Duration::from_millis(500),
         ) {
@@ -177,5 +180,43 @@ mod tests {
         apply_hint_output_if_missing(&mut placement, Some("DP-3".to_owned()));
 
         assert_eq!(placement.output.as_deref(), Some("HDMI-A-1"));
+    }
+
+    #[test]
+    fn choose_placement_prefers_destination_output_hint_without_pointer() {
+        let request = OpenRequest {
+            selected_protocol_version: 1,
+            clipd_version: "test".to_owned(),
+            picker_version: "test".to_owned(),
+            request_id: "req".to_owned(),
+            destination: d2b_clip_picker::protocol::DestinationMetadata {
+                realm: "personal-dev".to_owned(),
+                realm_kind: d2b_clip_picker::protocol::RealmKind::Vm,
+                application: Some("Firefox".to_owned()),
+                app_id: Some("d2b.personal-dev.firefox".to_owned()),
+                title: None,
+                workspace: None,
+                output: Some("DP-3".to_owned()),
+                attribution: Some(d2b_clip_picker::protocol::AttributionQuality::ExactClient),
+            },
+            requested_mime_type: "text/plain".to_owned(),
+            expires_at_unix_ms: Some(1),
+            placement_hints: Some(d2b_clip_picker::protocol::PlacementHints {
+                pointer_x: None,
+                pointer_y: None,
+                output_width: None,
+                output_height: None,
+                overlay_width: Some(420),
+                overlay_height: Some(520),
+                output: Some("DP-3".to_owned()),
+            }),
+            candidates: Vec::new(),
+        };
+
+        let placement = choose_placement(&request);
+
+        assert_eq!(placement.output.as_deref(), Some("DP-3"));
+        assert_eq!(placement.geometry.x, 24.0);
+        assert_eq!(placement.geometry.y, 24.0);
     }
 }
