@@ -1,208 +1,117 @@
-# Cursor Clip - GTK4 Clipboard Manager with Dynamic Positioning
+# d2b-clip-picker
 
-A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell** that makes clipboard handling more reliable.
-Features a Windows 11–style clipboard history interface with native GNOME design, which is always positioned at the current mouse pointer location.
+`d2b-clip-picker` is the GPL-3.0-only GTK4, Libadwaita, and Layer Shell picker
+UI for [d2b](https://github.com/vicondoa/d2b) clipboard flows. It is launched by
+`d2b-clipd` with an inherited anonymous Unix socket (`--ipc-fd=<fd>`) and acts
+only as a presentation client for one paste request.
 
-## Features
+It is **not** a standalone clipboard manager. It does not own any clipboard,
+read compositor clipboard state, evaluate policy, persist history, or receive
+Wayland transfer file descriptors.
 
-<img src="https://github.com/user-attachments/assets/604896e7-b48e-4851-a9f4-1f06f32ab9c2" width="400" alt="Overlay Preview" align="right" />
+## Origin and acknowledgement
 
-<div style="margin-right: 400px;">
+This repository is forked from
+[`Sirulex/cursor-clip`](https://github.com/Sirulex/cursor-clip), originally by
+Sirulex, at upstream commit `7e12054e55b7b2c34eff8638b88488403686e8dd`.
 
-### 📋 **Windows 11-Style Clipboard History**
-- **Clean list interface**: Similar to Windows 11 clipboard history
-- **Content type indicators**: Icons for text, URLs, code, files, etc.
-- **Rich previews**: Formatted content display for text, images, and file paths
-- **Timestamps**: When each item was copied
-- **Quick selection**: Click any item to copy it back to the clipboard
-- **Pin or delete items**: Manage your history with ease
-- **Instant paste**: Option to immediately paste the selected item into the active application
-- **Persistent history**: Option to store clipboard history across sessions with automatic encryption
+The fork keeps the useful compact overlay interaction model and adapts it for
+d2b's split architecture: all trusted clipboard state stays in
+[`d2b`](https://github.com/vicondoa/d2b), while this repository remains a UI-only
+client.
 
-### 🖱️ **Advanced Wayland Integration**
-- **Layer Shell Protocol**: Proper overlay positioning above all windows
-- **Precise Cursor Tracking**: Real-time mouse position detection
-- **Multi-output Support**: Works across multiple monitors
-- **Multi-input Support**: Fully controllable with mouse and keyboard
+## Trust boundary
 
-### 🎨 **Native GNOME Design**
-- **Libadwaita styling**: Follows GNOME Human Interface Guidelines
-- **Native widgets**: HeaderBar, ListBox, ScrolledWindow
+The picker owns only presentation:
 
-### 📂 **Automatic Clipboard Monitoring (Wayland)**
-- Stores copied items in memory or in a persistent database and removes duplicates.
-- Automatic classification of content types:
-  - 📝 Text
-  - 🔗 URLs
-  - 💻 Code
-  - 🔒 Passwords
-  - 📁 File paths
-  - 🖼️ Images
+- destination and source metadata supplied by `d2b-clipd`;
+- search/filtering;
+- safe text preview rendering;
+- host thumbnails supplied by `d2b-clipd`;
+- keyboard and mouse navigation;
+- Escape, close, and cancel behavior;
+- `Select` / `Cancel` messages over the inherited socketpair.
 
-</div>
+The picker must never:
 
-### 🎥 **Video Showcase**
-   <video src="https://github.com/user-attachments/assets/387c6441-fa6f-4d63-bea8-96d0eece85ee" >
-      Your browser does not support the video tag. You can watch it here:
-      <a href="https://github.com/user-attachments/assets/387c6441-fa6f-4d63-bea8-96d0eece85ee">Video link</a>.
-   </video>
+- use `ext-data-control-v1`, `zwlr-data-control-manager-v1`, primary selection,
+  `wl-copy`, `wl-paste`, virtual-keyboard injection, or `ydotool`;
+- receive or write clipboard transfer file descriptors;
+- connect to `$NIRI_SOCKET` or other compositor IPC for labels or authority;
+- persist clipboard history or payloads;
+- evaluate d2b policy or make transfer decisions;
+- depend on d2b internal Rust crates.
 
-## Compositor Support
-   - The backend uses `zwlr_data_control_manager_v1` to automatically monitor and set clipboard content.
-   - The frontend uses `zwlr_layer_shell_v1` to retrieve pointer coordinates and show the overlay.
-   - Supported compositors (must support both protocols):
-     - KDE Plasma (Wayland session)
-     - Hyprland
-     - Sway
-     - niri
-     - Labwc
-     - Other wlroots-based compositors
+## Protocol
 
-   - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and `zwlr_data_control_manager_v1`) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension. 
+The picker speaks a small, versioned newline-delimited JSON protocol over the
+inherited socketpair.
 
-### System Requirements
-- **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
+1. Picker sends `client_hello` with only `protocol_version_range` and
+   `picker_version`.
+2. `d2b-clipd` sends one `open_request` containing request id, destination
+   metadata, placement hints, requested MIME type, expiry, and candidate
+   metadata.
+3. The picker returns either `select { request_id, entry_id }` or
+   `cancel { request_id }`.
+4. EOF, malformed input, or `close` / `error` frames terminate the UI.
 
-## Installation on Arch Linux based distributions via AUR
-You can install Cursor Clip from the AUR using an AUR helper like `yay`:
-```bash
-yay -S cursor-clip-git
-```
+Selecting an item never writes to the clipboard. It only tells `d2b-clipd` which
+entry the user chose.
 
+## Install
 
-## Manual Building
-
-### Install Dependencies
-
-#### Arch Linux:
-```bash
-sudo pacman -S gtk4 libadwaita gtk4-layer-shell
-```
-
-#### Ubuntu/Debian:
-```bash
-sudo apt update
-sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
-```
-
-#### Fedora:
-```bash
-sudo dnf install gtk4-devel libadwaita-devel gtk4-layer-shell
-```
-
-
-### Download and Compile
+`d2b-clip-picker` is a Nix flake:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Sirulex/cursor-clip
-cd cursor-clip
-
-# Build in release mode
-cargo build --release
+nix build github:vicondoa/d2b-clip-picker#d2b-clip-picker
 ```
 
-## Building with Docker
+In a d2b host configuration, add this flake as an input and point
+`d2b.site.clipboard.picker.package` at:
 
-Build a containerized version that includes all dependencies:
+```nix
+inputs.d2b-clip-picker.packages.${pkgs.system}.default
+```
+
+See the d2b how-to:
+[`docs/how-to/configure-clipboard-picker.md`](https://github.com/vicondoa/d2b/blob/main/docs/how-to/configure-clipboard-picker.md).
+
+## Flake outputs
+
+- `packages.${system}.default` / `packages.${system}.d2b-clip-picker` — source-built binary package.
+- `packages.${system}.binary` — alias for the binary package.
+- `packages.${system}.source` — deterministic source tarball.
+- `apps.${system}.default` — `d2b-clip-picker` app.
+- `devShells.${system}.default` — Rust + GTK/Layer Shell development shell.
+
+## Development
+
+Use the Nix dev shell so GTK and Layer Shell dependencies match CI:
 
 ```bash
-# Build the Docker image and install the binary
-docker build -t cursor-clip .
-docker create --name cursor-clip-temp cursor-clip
-sudo docker cp cursor-clip-temp:/output/cursor-clip /usr/local/bin/
-sudo docker cp cursor-clip-temp:/output/libgtk4-layer-shell.so* /usr/local/lib/
-docker rm cursor-clip-temp
-
-# Update library cache and run
-sudo ldconfig
-cursor-clip --daemon
+nix develop --command cargo fmt --all -- --check
+nix develop --command cargo clippy --all-targets -- -D warnings
+nix develop --command cargo test
+nix flake check --no-build --all-systems
 ```
 
-## Building with Nix Flake
+The tests use fake `d2b-clipd` socketpairs and policy scans to verify that the
+picker remains UI-only.
 
-```bash
-# Build and install using Nix Flakes (default package)
-nix build .
-# or: nix build .#default
-sudo cp result/bin/cursor-clip /usr/local/bin/
+Run the binary only under a supervising fake or real `d2b-clipd` process that
+provides `--ipc-fd`.
 
-# Optional: enter the development shell
-nix develop
-```
+## CI and releases
 
-## Usage
-1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Launch Overlay**: Run `cursor-clip` without any arguments (ideally bind it to a hotkey, e.g., Super+V)
-3. **Trigger**: Your mouse position is automatically captured
-4. **View History**: The clipboard history window will appear at your cursor position, showing:
-   - **Recent clipboard items** with content previews
-   - **Content type icons** (text, URL, code, password, file)
-   - **Timestamps** showing when items were copied
-   - **Quick actions**: Clear All, Delete, Pin and Close
-5. **Interact**: 
-   - **Click any item** to copy it back to the clipboard
-   - **Scroll** through your clipboard history
-   - **Clear All** to remove all history items
-   - **Delete** to remove a single item from history
-   - **Pin** to keep an item permanently at the top of the list
-   - **Keyboard navigation**: Use *Arrow keys* or *J/K* to navigate, *Enter* to select, *Delete* to remove, *P* to pin, *Esc* to close
-   - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
+Pull requests run formatting, clippy, tests, flake evaluation, and source/binary
+flake builds. Main-branch CI repeats those gates and uploads the deterministic
+source tarball artifact.
 
-## Persistent History Security
-
-If persistent history is enabled, clipboard history is stored in an encrypted local database. The database key is stored in your operating system keyring and reused on restart. This ensures that your clipboard history remains secure and private, even if someone gains access to your filesystem (e.g., sidechannel attacks). The encryption and key management are handled automatically by Cursor Clip, so you can enable persistent history with just a simple toggle.
-
-## Instant paste note:
-On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
-
-```
-┌─────────────────────────────────────────────────┐
-│                 Cursor Clip                     │
-├─────────────────────────────────────────────────┤
-│  GTK4 + Libadwaita UI Layer                     │
-│  ├── Modern styling with CSS                    │
-│  ├── Responsive layouts                         │
-│  └── Accessibility features                     │
-├─────────────────────────────────────────────────┤
-│  Wayland Layer Shell Integration                │
-│  ├── zwlr_layer_shell_v1 protocol               │
-│  ├── Positioning and anchoring                  │
-│  └── Overlay layer management                   │
-├─────────────────────────────────────────────────┤
-│  Clipboard Management                           │
-│  ├── Data Control Manager for privileged access │
-│  ├── IPC communication via UNIX domain sockets  │
-│  ├── IndexMap for clipboard history storage     │
-│  └── Stoolap for persistent history storage     │
-└─────────────────────────────────────────────────┘
-```
-
-## Dependencies
-
-### Core Libraries
-- **GTK4**: Modern UI toolkit
-- **Libadwaita**: GNOME's design system
-- **gtk4-layer-shell**: Wayland layer shell integration
-- **wayland-client**: Wayland protocol bindings
-- **wayland-protocols**: Extended Wayland protocols
-- **wayland-protocols-wlr**: wlroots-specific Wayland protocols
-- **Tokio runtime**: Asynchronous runtime
-- **serde**: Serialization framework
-- **indexmap**: Ordered map for clipboard history
-- **fast_image_resize**: Efficient image resizing for previews
-- **keyring**: Secure storage for encryption keys
-- **stoolap**: Encrypted local database for persistent history
-- **env_logger**: Logging framework
----
-
-**Built with ❤️ using Rust, GTK4, Libadwaita, and Wayland Layer Shell**
-
-## Support
-If you find this project useful and would like to support its development, consider sponsoring me on GitHub or Ko-fi. Your support helps me dedicate more time to improving and maintaining Cursor Clip.
-- GitHub Sponsors: https://github.com/sponsors/Sirulex
-- Ko-fi: https://ko-fi.com/sirulex
+The version in `Cargo.toml` is the flake package version. Changes are recorded
+under `CHANGELOG.md` using Keep a Changelog; release notes should be
+user-facing and omit internal process markers.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 (GPL-3.0). See `LICENSE` for the full text.
+[GPL-3.0-only](./LICENSE), inherited from Cursor Clip.

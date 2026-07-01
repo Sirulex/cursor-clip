@@ -1,38 +1,31 @@
 [package]
-name = "cursor-clip"
+name = "d2b-clip-picker"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
+description = "UI-only d2b clipboard picker protocol client"
+
+[lib]
+name = "d2b_clip_picker"
+path = "src/lib.rs"
 
 [[bin]]
-name = "cursor-clip"
+name = "d2b-clip-picker"
 path = "src/main.rs"
 
 [dependencies]
-wayland-client = "0.31.13"
-wayland-protocols = { version = "0.32.11", features = ["client","staging"] }
-wayland-protocols-wlr = { version = "0.3.11", features = ["client"] }
-wayland-protocols-misc = { version = "0.3.11", features = ["client"] }
+base64 = "0.22.1"
+clap = { version = "4.6", features = ["derive"] }
+env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
+glib = "0.21.5"
 gtk4 = { version = "0.10", features = ["v4_6"] }
 gtk4-layer-shell = "0.6.3"
 libadwaita = "0.8"
-clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"
+log = "0.4"
+rustix = { version = "1.0", features = ["event"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
-tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "net", "io-util"] }
-libc = "0.2"
-indexmap = { version = "2.13", features = ["serde"] }
-bytes = { version = "1", features = ["serde"] }
-memmap2 = "0.9"
-log = "0.4"
-env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
-glib = "0.21.5"
-image = "0.25.10"
-fast_image_resize = "6"
-stoolap = "0.3.7"
-keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
-aes-gcm = "0.10.3"
-base64 = "0.22.1"
-sha2 = "0.10.9"
-rand = "0.10.1"
+wayland-client = "0.31.13"
+wayland-protocols = { version = "0.32.11", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3.11", features = ["client"] }

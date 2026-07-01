@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+
+jobs:
+  ci:
+    name: Main branch gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Format check
+        run: nix develop --command cargo fmt --all -- --check
+      - name: Nix format check
+        run: nix fmt -- --check .
+      - name: Clippy (deny warnings)
+        run: nix develop --command cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: nix develop --command cargo test
+      - name: Flake check
+        run: nix flake check --no-build --all-systems
+      - name: Build binary package
+        run: nix build .#d2b-clip-picker --out-link result-binary
+      - name: Build source tarball
+        run: nix build .#source --out-link result-source
+      - name: Upload source tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: d2b-clip-picker-source
+          path: result-source/*.tar.gz
