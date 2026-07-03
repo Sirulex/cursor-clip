@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added `--theme-json <path>` so hosts can provide a generic, Stylix-agnostic
+  GTK palette for picker shell colors without giving the picker clipboard or
+  compositor authority.
 - The picker now uses Layer Shell top-layer overlay presentation with output
   placement hints from `d2b-clipd`, activates rows on single click, and keeps
   Select/Cancel as its only runtime protocol actions.

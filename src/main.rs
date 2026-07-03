@@ -7,6 +7,7 @@ use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use std::env;
 use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Parser)]
@@ -22,6 +23,10 @@ struct Args {
     /// Test harness only: activate the first rendered row after the UI maps.
     #[arg(long = "test-select-first", hide = true)]
     test_select_first: bool,
+
+    /// Optional generic JSON palette for UI shell colors.
+    #[arg(long = "theme-json", value_name = "PATH")]
+    theme_json: Option<PathBuf>,
 }
 
 fn main() {
@@ -64,7 +69,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let placement = choose_placement(&request);
     debug!("starting picker UI");
-    ui::run_picker(request, peer, placement, args.test_select_first)?;
+    let theme = match args.theme_json.as_deref() {
+        Some(path) => ui::ThemePalette::from_json_file(path)?,
+        None => ui::ThemePalette::default(),
+    };
+
+    ui::run_picker(request, peer, placement, args.test_select_first, theme)?;
     Ok(())
 }
 

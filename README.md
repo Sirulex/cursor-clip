@@ -77,6 +77,31 @@ inputs.d2b-clip-picker.packages.${pkgs.system}.default
 See the d2b how-to:
 [`docs/how-to/configure-clipboard-picker.md`](https://github.com/vicondoa/d2b/blob/main/docs/how-to/configure-clipboard-picker.md).
 
+## Theme palette
+
+The picker is theming-system agnostic. Operators can pass a generic JSON palette
+with `--theme-json <path>`; d2b hosts that use Stylix can render Stylix colors
+into this file from their NixOS config, while non-Stylix hosts can write the same
+shape by hand or with another theme system.
+
+```json
+{
+  "background": "#1e1e2e",
+  "foreground": "#f8f8f2",
+  "border": "#89b4fa",
+  "accent": "#3584e4",
+  "selected_background": "alpha(#3584e4, 0.14)",
+  "realm_background": "alpha(#3584e4, 0.14)",
+  "search_background": "alpha(currentColor, 0.07)",
+  "warning_background": "alpha(#f5c211, 0.22)"
+}
+```
+
+Fields accept normalized lowercase `#rrggbb` colors or GTK
+`alpha(#rrggbb, opacity)` / `alpha(currentColor, opacity)` expressions. The
+palette controls only picker shell presentation; it never grants clipboard
+authority or access to payload bytes.
+
 ## Flake outputs
 
 - `packages.${system}.default` / `packages.${system}.d2b-clip-picker` — source-built binary package.

@@ -10,16 +10,123 @@ use gtk4::{Align, Orientation, gdk};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use log::{info, warn};
+use serde::Deserialize;
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemePalette {
+    pub background: String,
+    pub foreground: String,
+    pub border: String,
+    pub accent: String,
+    pub selected_background: String,
+    pub realm_background: String,
+    pub search_background: String,
+    pub warning_background: String,
+}
+
+impl Default for ThemePalette {
+    fn default() -> Self {
+        Self {
+            background: "#1e1e2e".to_owned(),
+            foreground: "#f8f8f2".to_owned(),
+            border: "#89b4fa".to_owned(),
+            accent: "#3584e4".to_owned(),
+            selected_background: "alpha(#3584e4, 0.14)".to_owned(),
+            realm_background: "alpha(#3584e4, 0.14)".to_owned(),
+            search_background: "alpha(currentColor, 0.07)".to_owned(),
+            warning_background: "alpha(#f5c211, 0.22)".to_owned(),
+        }
+    }
+}
+
+impl ThemePalette {
+    pub fn from_json_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let text = std::fs::read_to_string(path)?;
+        let palette: Self = serde_json::from_str(&text)?;
+        palette.validate()?;
+        Ok(palette)
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        for (name, value) in [
+            ("background", &self.background),
+            ("foreground", &self.foreground),
+            ("border", &self.border),
+            ("accent", &self.accent),
+            ("selected_background", &self.selected_background),
+            ("realm_background", &self.realm_background),
+            ("search_background", &self.search_background),
+            ("warning_background", &self.warning_background),
+        ] {
+            if !is_safe_css_color(value) {
+                return Err(format!(
+                    "theme field {name} must be a #rrggbb color or alpha(#rrggbb|currentColor, opacity)"
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn css(&self) -> String {
+        format!(
+            "
+        window.d2b-clip-picker {{
+            background-color: {background};
+            color: {foreground};
+            border: 2px solid {border};
+            border-radius: 12px;
+        }}
+        .d2b-clip-picker-root {{
+            background-color: {background};
+            color: {foreground};
+            border: 2px solid {border};
+            border-radius: 12px;
+        }}
+        headerbar {{ background: transparent; box-shadow: none; }}
+        .clipboard-list {{ background: transparent; }}
+        .clipboard-item {{
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 4px;
+            margin: 6px 12px;
+            transition: border-color 150ms ease, background 150ms ease;
+        }}
+        .clipboard-item:hover {{ border-color: {accent}; }}
+        .clipboard-item:selected {{ border-color: {accent}; background: {selected_background}; }}
+        .clipboard-preview {{ opacity: 0.94; }}
+        .realm-pill, .search-pill, .warning-pill {{
+            border-radius: 999px;
+            padding: 4px 8px;
+        }}
+        .realm-pill {{ background: {realm_background}; }}
+        .search-pill {{ background: {search_background}; }}
+        .warning-pill {{ background: {warning_background}; }}
+        ",
+            background = self.background,
+            foreground = self.foreground,
+            border = self.border,
+            accent = self.accent,
+            selected_background = self.selected_background,
+            realm_background = self.realm_background,
+            search_background = self.search_background,
+            warning_background = self.warning_background,
+        )
+    }
+}
 
 pub fn run_picker(
     request: OpenRequest,
     peer: IpcPeer,
     placement: PickerPlacement,
     test_select_first: bool,
+    theme: ThemePalette,
 ) -> Result<(), Box<dyn std::error::Error>> {
     adw::init()?;
     let tx = peer.tx_for_request(&request);
@@ -45,6 +152,7 @@ pub fn run_picker(
 
     let request_for_activate = request.clone();
     let placement_for_activate = placement.clone();
+    let theme_for_activate = theme.clone();
     app.connect_activate(move |app| {
         let window = create_window(
             app,
@@ -52,6 +160,7 @@ pub fn run_picker(
             tx.clone(),
             placement_for_activate.clone(),
             test_select_first,
+            theme_for_activate.clone(),
         );
         window.present();
     });
@@ -76,6 +185,7 @@ fn create_window(
     tx: PickerTx,
     mut placement: PickerPlacement,
     test_select_first: bool,
+    theme: ThemePalette,
 ) -> adw::ApplicationWindow {
     configure_color_scheme();
     let window = adw::ApplicationWindow::builder()
@@ -137,7 +247,7 @@ fn create_window(
         });
     }
 
-    apply_css(&window);
+    apply_css(&window, &theme);
     let sent_terminal = Rc::new(Cell::new(false));
     let confirm_entry = Rc::new(RefCell::new(None::<String>));
     let search = Rc::new(RefCell::new(String::new()));
@@ -679,46 +789,83 @@ fn configure_color_scheme() {
     }
 }
 
-fn apply_css(window: &adw::ApplicationWindow) {
+fn apply_css(window: &adw::ApplicationWindow, theme: &ThemePalette) {
     let provider = gtk4::CssProvider::new();
-    provider.load_from_data(
-        "
-        window.d2b-clip-picker {
-            background-color: #1e1e2e;
-            color: #f8f8f2;
-            border: 2px solid #89b4fa;
-            border-radius: 12px;
-        }
-        .d2b-clip-picker-root {
-            background-color: #1e1e2e;
-            color: #f8f8f2;
-            border: 2px solid #89b4fa;
-            border-radius: 12px;
-        }
-        headerbar { background: transparent; box-shadow: none; }
-        .clipboard-list { background: transparent; }
-        .clipboard-item {
-            border: 2px solid transparent;
-            border-radius: 10px;
-            padding: 4px;
-            margin: 6px 12px;
-            transition: border-color 150ms ease, background 150ms ease;
-        }
-        .clipboard-item:hover { border-color: #3584e4; }
-        .clipboard-item:selected { border-color: #3584e4; background: alpha(#3584e4, 0.14); }
-        .clipboard-preview { opacity: 0.94; }
-        .realm-pill, .search-pill, .warning-pill {
-            border-radius: 999px;
-            padding: 4px 8px;
-        }
-        .realm-pill { background: alpha(#3584e4, 0.14); }
-        .search-pill { background: alpha(currentColor, 0.07); }
-        .warning-pill { background: alpha(#f5c211, 0.22); }
-        ",
-    );
+    provider.load_from_data(&theme.css());
     gtk4::style_context_add_provider_for_display(
         &gtk4::prelude::WidgetExt::display(window),
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+}
+
+fn is_safe_css_color(value: &str) -> bool {
+    is_hex_color(value) || is_alpha_color(value)
+}
+
+fn is_hex_color(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 7
+        && bytes[0] == b'#'
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+fn is_alpha_color(value: &str) -> bool {
+    let Some(inner) = value
+        .strip_prefix("alpha(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    else {
+        return false;
+    };
+    let Some((color, opacity)) = inner.split_once(',') else {
+        return false;
+    };
+    let color = color.trim();
+    let opacity = opacity.trim();
+    (color == "currentColor" || is_hex_color(color))
+        && opacity
+            .parse::<f32>()
+            .is_ok_and(|parsed| (0.0..=1.0).contains(&parsed))
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    #[test]
+    fn default_palette_matches_existing_visual_contract() {
+        let css = ThemePalette::default().css();
+        assert!(css.contains("background-color: #1e1e2e;"));
+        assert!(css.contains("border: 2px solid #89b4fa;"));
+        assert!(css.contains("background: alpha(#3584e4, 0.14);"));
+    }
+
+    #[test]
+    fn theme_palette_accepts_safe_colors() {
+        let palette = ThemePalette {
+            background: "#010203".to_owned(),
+            foreground: "#111213".to_owned(),
+            border: "#212223".to_owned(),
+            accent: "#313233".to_owned(),
+            selected_background: "alpha(#313233, 0.14)".to_owned(),
+            realm_background: "alpha(#313233, 0.14)".to_owned(),
+            search_background: "alpha(currentColor, 0.07)".to_owned(),
+            warning_background: "alpha(#414243, 1)".to_owned(),
+        };
+        palette.validate().expect("palette should validate");
+    }
+
+    #[test]
+    fn theme_palette_rejects_uppercase_hex_and_arbitrary_css() {
+        let mut palette = ThemePalette {
+            background: "#ABCDEF".to_owned(),
+            ..ThemePalette::default()
+        };
+        assert!(palette.validate().is_err());
+
+        palette.background = "url(file:///tmp/x)".to_owned();
+        assert!(palette.validate().is_err());
+    }
 }
