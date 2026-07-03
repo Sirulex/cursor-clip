@@ -147,7 +147,7 @@ nix develop
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
    - **Search**: Press `/` to focus the search field and filter clipboard items live by preview text or content type
-   - **Search actions**: Press *Enter* to paste the currently selected filtered result; press *Esc* to leave the search field and continue navigating the filtered list
+   - **Search actions**: Press *Enter* to paste the currently selected filtered result; press *Esc* to leave the search field and continue navigating the filtered list; press *Up*/*Down* to move into the filtered results; press *Ctrl+U* to delete everything before the cursor in the search field
    - **Keyboard navigation**: Use *Arrow keys* or *J/K* to navigate, *Enter* to select, *Delete* to remove, *P* to pin, *Esc* to close the overlay when the search field is not focused
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
 

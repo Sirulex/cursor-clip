@@ -620,10 +620,20 @@ fn generate_overlay_content(
 
     let search_key_controller = gtk4::EventControllerKey::new();
     let list_box_for_search_keys = list_box.clone();
-    search_key_controller.connect_key_pressed(move |_, key, _, _| {
-        use gtk4::gdk::Key;
+    let search_entry_for_search_keys = search_entry.clone();
+    search_key_controller.connect_key_pressed(move |_, key, _, state| {
+        use gtk4::gdk::{Key, ModifierType};
 
         match key {
+            Key::u | Key::U
+                if state.contains(ModifierType::CONTROL_MASK)
+                    && search_entry_for_search_keys.position() > 0 =>
+            {
+                let cursor = search_entry_for_search_keys.position();
+                search_entry_for_search_keys.delete_text(0, cursor);
+                search_entry_for_search_keys.set_position(0);
+                gtk4::glib::Propagation::Stop
+            }
             Key::Down => {
                 if let Some(current) = list_box_for_search_keys.selected_row() {
                     let next_index = current.index() + 1;
