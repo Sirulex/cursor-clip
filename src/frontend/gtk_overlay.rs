@@ -170,16 +170,7 @@ pub fn init_clipboard_overlay(
 
 fn configure_color_scheme() {
     let style_manager = adw::StyleManager::default();
-
-    if let Some(settings) = gtk4::Settings::default() {
-        if settings.is_gtk_application_prefer_dark_theme() {
-            style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
-        } else {
-            style_manager.set_color_scheme(adw::ColorScheme::Default);
-        }
-
-        settings.set_gtk_application_prefer_dark_theme(false);
-    }
+    style_manager.set_color_scheme(adw::ColorScheme::Default);
 }
 
 /// Create and configure the sync layer shell window
