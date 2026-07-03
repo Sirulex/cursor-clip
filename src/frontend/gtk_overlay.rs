@@ -1,7 +1,10 @@
 use crate::frontend::ipc_client::FrontendClient;
 use crate::shared::{ClipboardContentType, ClipboardItemPreview};
 use gtk4::prelude::*;
-use gtk4::{Align, Application, Box, Button, CheckButton, Label, Orientation, Overlay, Revealer};
+use gtk4::{
+    Align, Application, Box, Button, CheckButton, Label, Orientation, Overlay, Revealer,
+    SearchEntry,
+};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use log::{debug, error, info, warn};
@@ -244,12 +247,30 @@ fn create_layer_shell_window(
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let (content, list_box, items_state) =
-        generate_overlay_content(prefetched_items, overlay_width, overlay_height);
+    let (
+        content,
+        list_box,
+        items_state,
+        all_items_state,
+        search_entry,
+        search_revealer,
+        search_query,
+        show_trash_state,
+        show_pin_state,
+    ) = generate_overlay_content(prefetched_items, overlay_width, overlay_height);
     window.set_content(Some(&content));
 
     // Add key controller (Esc/j/k/Enter navigation & activation)
-    let key_controller = generate_key_controller(&list_box, &items_state);
+    let key_controller = generate_key_controller(
+        &list_box,
+        &items_state,
+        &all_items_state,
+        &search_entry,
+        &search_revealer,
+        &search_query,
+        &show_trash_state,
+        &show_pin_state,
+    );
     window.add_controller(key_controller);
 
     // Add close request handler to ensure any window close goes through our logic
@@ -273,6 +294,12 @@ fn generate_overlay_content(
     Overlay,
     gtk4::ListBox,
     Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    SearchEntry,
+    Revealer,
+    Rc<RefCell<String>>,
+    Rc<RefCell<bool>>,
+    Rc<RefCell<bool>>,
 ) {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
@@ -290,6 +317,8 @@ fn generate_overlay_content(
     let show_pin_default = config_state.borrow().show_pin;
     let persistence_enabled_default = config_state.borrow().persistence_enabled;
     let instant_paste_default = config_state.borrow().instant_paste;
+    let show_trash_state = Rc::new(RefCell::new(show_trash_default));
+    let show_pin_state = Rc::new(RefCell::new(show_pin_default));
 
     if let Ok(mut client) = FrontendClient::new()
         && let Err(e) = client.set_persistence_enabled(persistence_enabled_default)
@@ -396,6 +425,21 @@ fn generate_overlay_content(
 
     main_box.append(&header_bar);
 
+    let search_revealer = Revealer::new();
+    search_revealer.set_reveal_child(false);
+    search_revealer.set_visible(false);
+    search_revealer.set_transition_duration(120);
+    search_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
+
+    let search_entry = SearchEntry::new();
+    search_entry.set_placeholder_text(Some("Search clipboard history"));
+    search_entry.set_margin_start(12);
+    search_entry.set_margin_end(12);
+    search_entry.set_margin_bottom(6);
+    search_entry.add_css_class("clipboard-search");
+    search_revealer.set_child(Some(&search_entry));
+    main_box.append(&search_revealer);
+
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
     scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
@@ -424,27 +468,19 @@ fn generate_overlay_content(
         }
     }
 
-    let items_state = Rc::new(RefCell::new(prefetched_items));
+    let all_items_state = Rc::new(RefCell::new(prefetched_items));
+    let items_state = Rc::new(RefCell::new(Vec::new()));
+    let search_query = Rc::new(RefCell::new(String::new()));
 
-    // Populate the list with clipboard items
-    {
-        let items = items_state.borrow();
-        for item in items.iter() {
-            let row = generate_listboxrow_from_preview(
-                item,
-                &list_box,
-                &items_state,
-                show_trash_default,
-                show_pin_default,
-            );
-            list_box.append(&row);
-        }
-    }
-
-    // If no items, show a placeholder
-    if items_state.borrow().is_empty() {
-        list_box.append(&make_placeholder_row());
-    }
+    rebuild_list(
+        &list_box,
+        &items_state,
+        &all_items_state,
+        &search_query,
+        &show_trash_state,
+        &show_pin_state,
+    );
+    select_first_row(&list_box);
 
     // Handle item activation (Enter/Space/double-click) instead of mere selection
     let items_for_activation = items_state.clone();
@@ -484,6 +520,7 @@ fn generate_overlay_content(
 
     let list_box_for_toggle = list_box.clone();
     let config_for_toggle = config_state.clone();
+    let show_trash_state_for_toggle = show_trash_state.clone();
     toggle_check.connect_toggled(move |check| {
         let state = check.is_active();
         {
@@ -493,11 +530,13 @@ fn generate_overlay_content(
                 warn!("Failed to save config: {}", e);
             }
         }
+        *show_trash_state_for_toggle.borrow_mut() = state;
         set_delete_buttons_visible(&list_box_for_toggle, state);
     });
 
     let list_box_for_pin_toggle = list_box.clone();
     let config_for_pin_toggle = config_state.clone();
+    let show_pin_state_for_pin_toggle = show_pin_state.clone();
     pin_toggle_check.connect_toggled(move |check| {
         let state = check.is_active();
         {
@@ -507,6 +546,7 @@ fn generate_overlay_content(
                 warn!("Failed to save config: {}", e);
             }
         }
+        *show_pin_state_for_pin_toggle.borrow_mut() = state;
         set_pin_icons_visible(&list_box_for_pin_toggle, state);
     });
 
@@ -543,6 +583,94 @@ fn generate_overlay_content(
         }
     });
 
+    let list_box_for_search = list_box.clone();
+    let items_state_for_search = items_state.clone();
+    let all_items_state_for_search = all_items_state.clone();
+    let search_query_for_search = search_query.clone();
+    let show_trash_state_for_search = show_trash_state.clone();
+    let show_pin_state_for_search = show_pin_state.clone();
+    search_entry.connect_search_changed(move |entry| {
+        *search_query_for_search.borrow_mut() = entry.text().to_string();
+        rebuild_list(
+            &list_box_for_search,
+            &items_state_for_search,
+            &all_items_state_for_search,
+            &search_query_for_search,
+            &show_trash_state_for_search,
+            &show_pin_state_for_search,
+        );
+        select_first_row_without_focus(&list_box_for_search);
+    });
+
+    let list_box_for_search_activate = list_box.clone();
+    search_entry.connect_activate(move |_| {
+        if let Some(row) = list_box_for_search_activate.selected_row() {
+            row.emit_by_name::<()>("activate", &[]);
+        }
+    });
+
+    let list_box_for_stop_search = list_box.clone();
+    search_entry.connect_stop_search(move |_| {
+        if list_box_for_stop_search.selected_row().is_none() {
+            select_first_row(&list_box_for_stop_search);
+        } else {
+            list_box_for_stop_search.grab_focus();
+        }
+    });
+
+    let search_key_controller = gtk4::EventControllerKey::new();
+    let list_box_for_search_keys = list_box.clone();
+    search_key_controller.connect_key_pressed(move |_, key, _, _| {
+        use gtk4::gdk::Key;
+
+        match key {
+            Key::Down => {
+                if let Some(current) = list_box_for_search_keys.selected_row() {
+                    let next_index = current.index() + 1;
+                    if let Some(next_row) = list_box_for_search_keys.row_at_index(next_index) {
+                        list_box_for_search_keys.select_row(Some(&next_row));
+                        next_row.grab_focus();
+                        return gtk4::glib::Propagation::Stop;
+                    }
+                }
+
+                if let Some(first_row) = list_box_for_search_keys.row_at_index(0)
+                    && first_row.is_selectable()
+                {
+                    list_box_for_search_keys.select_row(Some(&first_row));
+                    first_row.grab_focus();
+                    return gtk4::glib::Propagation::Stop;
+                }
+
+                gtk4::glib::Propagation::Proceed
+            }
+            Key::Up => {
+                if let Some(current) = list_box_for_search_keys.selected_row()
+                    && current.index() > 0
+                {
+                    let prev_index = current.index() - 1;
+                    if let Some(prev_row) = list_box_for_search_keys.row_at_index(prev_index) {
+                        list_box_for_search_keys.select_row(Some(&prev_row));
+                        prev_row.grab_focus();
+                        return gtk4::glib::Propagation::Stop;
+                    }
+                }
+
+                if let Some(first_row) = list_box_for_search_keys.row_at_index(0)
+                    && first_row.is_selectable()
+                {
+                    list_box_for_search_keys.select_row(Some(&first_row));
+                    first_row.grab_focus();
+                    return gtk4::glib::Propagation::Stop;
+                }
+
+                gtk4::glib::Propagation::Proceed
+            }
+            _ => gtk4::glib::Propagation::Proceed,
+        }
+    });
+    search_entry.add_controller(search_key_controller);
+
     let menu_revealer_toggle = menu_revealer.clone();
     three_dot_menu.connect_clicked(move |_| {
         let next_state = !menu_revealer_toggle.is_child_revealed();
@@ -572,25 +700,70 @@ fn generate_overlay_content(
     overlay.set_child(Some(&main_box));
     overlay.add_overlay(&menu_revealer);
 
-    (overlay, list_box, items_state)
+    (
+        overlay,
+        list_box,
+        items_state,
+        all_items_state,
+        search_entry,
+        search_revealer,
+        search_query,
+        show_trash_state,
+        show_pin_state,
+    )
 }
 
 /// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
 fn generate_key_controller(
     list_box: &gtk4::ListBox,
     items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    all_items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    search_entry: &SearchEntry,
+    search_revealer: &Revealer,
+    search_query: &Rc<RefCell<String>>,
+    show_trash_state: &Rc<RefCell<bool>>,
+    show_pin_state: &Rc<RefCell<bool>>,
 ) -> gtk4::EventControllerKey {
     let controller = gtk4::EventControllerKey::new();
     let list_box_for_keys = list_box.clone();
     let items_state_for_keys = items_state.clone();
+    let all_items_state_for_keys = all_items_state.clone();
+    let search_entry_for_keys = search_entry.clone();
+    let search_revealer_for_keys = search_revealer.clone();
+    let search_query_for_keys = search_query.clone();
+    let show_trash_state_for_keys = show_trash_state.clone();
+    let show_pin_state_for_keys = show_pin_state.clone();
     controller.connect_key_pressed(move |_, key, _, _| {
         use gtk4::gdk::Key;
         match key {
             Key::Escape => {
+                if search_revealer_for_keys.is_child_revealed() && search_entry_for_keys.has_focus() {
+                    if list_box_for_keys.selected_row().is_none() {
+                        select_first_row(&list_box_for_keys);
+                    } else {
+                        list_box_for_keys.grab_focus();
+                    }
+                    return gtk4::glib::Propagation::Stop;
+                }
                 request_quit();
                 gtk4::glib::Propagation::Stop
             }
+            Key::slash => {
+                if search_entry_for_keys.has_focus() {
+                    return gtk4::glib::Propagation::Proceed;
+                }
+                search_revealer_for_keys.set_visible(true);
+                search_revealer_for_keys.set_reveal_child(true);
+                search_entry_for_keys.grab_focus();
+                gtk4::glib::Propagation::Stop
+            }
             Key::j | Key::J | Key::Down => {
+                if matches!(key, Key::j | Key::J) && search_entry_for_keys.has_focus() {
+                    return gtk4::glib::Propagation::Proceed;
+                }
+                if key == Key::Down && search_entry_for_keys.has_focus() {
+                    list_box_for_keys.grab_focus();
+                }
                 if let Some(current) = list_box_for_keys.selected_row() {
                     let next_index = current.index() + 1;
                     if let Some(next_row) = list_box_for_keys.row_at_index(next_index) {
@@ -604,6 +777,12 @@ fn generate_key_controller(
                 gtk4::glib::Propagation::Stop
             }
             Key::k | Key::K | Key::Up => {
+                if matches!(key, Key::k | Key::K) && search_entry_for_keys.has_focus() {
+                    return gtk4::glib::Propagation::Proceed;
+                }
+                if key == Key::Up && search_entry_for_keys.has_focus() {
+                    list_box_for_keys.grab_focus();
+                }
                 if let Some(current) = list_box_for_keys.selected_row() {
                     if current.index() > 0 {
                         let prev_index = current.index() - 1;
@@ -626,6 +805,9 @@ fn generate_key_controller(
                 gtk4::glib::Propagation::Proceed
             }
             Key::Delete => {
+                if search_entry_for_keys.has_focus() {
+                    return gtk4::glib::Propagation::Proceed;
+                }
                 if let Some(row) = list_box_for_keys.selected_row() {
                     let index = row.index() as usize;
                     let item_id = {
@@ -650,29 +832,45 @@ fn generate_key_controller(
                     }
 
                     {
-                        let mut items = items_state_for_keys.borrow_mut();
-                        if index < items.len() {
+                        let mut items = all_items_state_for_keys.borrow_mut();
+                        if let Some(index) = items.iter().position(|item| item.item_id == item_id) {
                             items.remove(index);
                         }
                     }
 
-                    list_box_for_keys.remove(&row);
-
-                    if items_state_for_keys.borrow().is_empty() {
-                        list_box_for_keys.append(&make_placeholder_row());
-                    }
+                    rebuild_list(
+                        &list_box_for_keys,
+                        &items_state_for_keys,
+                        &all_items_state_for_keys,
+                        &search_query_for_keys,
+                        &show_trash_state_for_keys,
+                        &show_pin_state_for_keys,
+                    );
+                    select_first_row(&list_box_for_keys);
                     return gtk4::glib::Propagation::Stop;
                 }
                 gtk4::glib::Propagation::Proceed
             }
             Key::p | Key::P => {
+                if search_entry_for_keys.has_focus() {
+                    return gtk4::glib::Propagation::Proceed;
+                }
                 if let Some(row) = list_box_for_keys.selected_row() {
                     let index = row.index() as usize;
-                    let (item_id, pinned, target_index) = {
-                        let mut items = items_state_for_keys.borrow_mut();
+                    let item_id = {
+                        let items = items_state_for_keys.borrow();
                         if index >= items.len() {
                             return gtk4::glib::Propagation::Stop;
                         }
+                        items[index].item_id
+                    };
+
+                    let pinned = {
+                        let mut items = all_items_state_for_keys.borrow_mut();
+                        let Some(index) = items.iter().position(|item| item.item_id == item_id)
+                        else {
+                            return gtk4::glib::Propagation::Stop;
+                        };
                         let mut item = items.remove(index);
                         let new_pinned = !item.pinned;
                         item.pinned = new_pinned;
@@ -684,9 +882,8 @@ fn generate_key_controller(
                                 .position(|existing| !existing.pinned)
                                 .unwrap_or(items.len())
                         };
-                        let item_id = item.item_id;
                         items.insert(insert_index, item);
-                        (item_id, new_pinned, insert_index)
+                        new_pinned
                     };
 
                     match FrontendClient::new() {
@@ -702,20 +899,15 @@ fn generate_key_controller(
                         }
                     }
 
-                    list_box_for_keys.remove(&row);
-                    list_box_for_keys.insert(&row, target_index as i32);
-                    list_box_for_keys.select_row(Some(&row));
-                    row.grab_focus();
-
-                    if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
-                        if pinned {
-                            pin_button.add_css_class("pinned");
-                            pin_button.set_tooltip_text(Some("Unpin"));
-                        } else {
-                            pin_button.remove_css_class("pinned");
-                            pin_button.set_tooltip_text(Some("Pin"));
-                        }
-                    }
+                    rebuild_list(
+                        &list_box_for_keys,
+                        &items_state_for_keys,
+                        &all_items_state_for_keys,
+                        &search_query_for_keys,
+                        &show_trash_state_for_keys,
+                        &show_pin_state_for_keys,
+                    );
+                    select_row_by_item_id(&list_box_for_keys, &items_state_for_keys, item_id);
                     debug!("Updated pinned state for clipboard item ID {}", item_id);
                     return gtk4::glib::Propagation::Stop;
                 }
@@ -995,6 +1187,10 @@ fn generate_listboxrow_from_preview(
     item: &ClipboardItemPreview,
     list_box: &gtk4::ListBox,
     items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    all_items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    search_query: &Rc<RefCell<String>>,
+    show_trash_state: &Rc<RefCell<bool>>,
+    show_pin_state: &Rc<RefCell<bool>>,
     show_trash: bool,
     show_pin: bool,
 ) -> gtk4::ListBoxRow {
@@ -1091,6 +1287,10 @@ fn generate_listboxrow_from_preview(
     let item_id = item.item_id;
     let list_box_for_delete = list_box.clone();
     let items_state_for_delete = items_state.clone();
+    let all_items_state_for_delete = all_items_state.clone();
+    let search_query_for_delete = search_query.clone();
+    let show_trash_state_for_delete = show_trash_state.clone();
+    let show_pin_state_for_delete = show_pin_state.clone();
     let row_weak_for_delete = row_weak.clone();
     delete_button.connect_clicked(move |_| {
         match FrontendClient::new() {
@@ -1107,7 +1307,7 @@ fn generate_listboxrow_from_preview(
         }
 
         {
-            let mut items = items_state_for_delete.borrow_mut();
+            let mut items = all_items_state_for_delete.borrow_mut();
             if let Some(index) = items.iter().position(|entry| entry.item_id == item_id) {
                 items.remove(index);
             }
@@ -1117,24 +1317,28 @@ fn generate_listboxrow_from_preview(
             list_box_for_delete.remove(&row);
         }
 
-        if items_state_for_delete.borrow().is_empty() {
-            list_box_for_delete.append(&make_placeholder_row());
-        }
+        rebuild_list(
+            &list_box_for_delete,
+            &items_state_for_delete,
+            &all_items_state_for_delete,
+            &search_query_for_delete,
+            &show_trash_state_for_delete,
+            &show_pin_state_for_delete,
+        );
+        select_first_row(&list_box_for_delete);
     });
     let list_box_for_pin = list_box.clone();
     let items_state_for_pin = items_state.clone();
-    let row_weak_for_pin = row_weak.clone();
+    let all_items_state_for_pin = all_items_state.clone();
+    let search_query_for_pin = search_query.clone();
+    let show_trash_state_for_pin = show_trash_state.clone();
+    let show_pin_state_for_pin = show_pin_state.clone();
     pin_button.connect_clicked(move |_| {
-        let row = match row_weak_for_pin.upgrade() {
-            Some(row) => row,
-            None => return,
-        };
-        let index = row.index() as usize;
-        let (item_id, pinned, target_index) = {
-            let mut items = items_state_for_pin.borrow_mut();
-            if index >= items.len() {
+        let pinned = {
+            let mut items = all_items_state_for_pin.borrow_mut();
+            let Some(index) = items.iter().position(|entry| entry.item_id == item_id) else {
                 return;
-            }
+            };
             let mut item = items.remove(index);
             let new_pinned = !item.pinned;
             item.pinned = new_pinned;
@@ -1146,9 +1350,8 @@ fn generate_listboxrow_from_preview(
                     .position(|existing| !existing.pinned)
                     .unwrap_or(items.len())
             };
-            let item_id = item.item_id;
             items.insert(insert_index, item);
-            (item_id, new_pinned, insert_index)
+            new_pinned
         };
 
         match FrontendClient::new() {
@@ -1164,27 +1367,115 @@ fn generate_listboxrow_from_preview(
             }
         }
 
-        list_box_for_pin.remove(&row);
-        list_box_for_pin.insert(&row, target_index as i32);
-        list_box_for_pin.select_row(Some(&row));
-        row.grab_focus();
-        if let Some(pin_button) = find_button_in_row(&row, "clipboard-pin") {
-            if pinned {
-                pin_button.add_css_class("pinned");
-                pin_button.set_tooltip_text(Some("Unpin"));
-            } else {
-                pin_button.remove_css_class("pinned");
-                pin_button.set_tooltip_text(Some("Pin"));
-            }
-        }
+        rebuild_list(
+            &list_box_for_pin,
+            &items_state_for_pin,
+            &all_items_state_for_pin,
+            &search_query_for_pin,
+            &show_trash_state_for_pin,
+            &show_pin_state_for_pin,
+        );
+        select_row_by_item_id(&list_box_for_pin, &items_state_for_pin, item_id);
         debug!("Updated pinned state for clipboard item ID {}", item_id);
     });
     row
 }
 
-fn make_placeholder_row() -> gtk4::ListBoxRow {
+fn rebuild_list(
+    list_box: &gtk4::ListBox,
+    items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    all_items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    search_query: &Rc<RefCell<String>>,
+    show_trash_state: &Rc<RefCell<bool>>,
+    show_pin_state: &Rc<RefCell<bool>>,
+) {
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+
+    let query = search_query.borrow().trim().to_lowercase();
+    let filtered_items: Vec<ClipboardItemPreview> = all_items_state
+        .borrow()
+        .iter()
+        .filter(|item| item_matches_query(item, &query))
+        .cloned()
+        .collect();
+
+    *items_state.borrow_mut() = filtered_items.clone();
+
+    for item in &filtered_items {
+        let row = generate_listboxrow_from_preview(
+            item,
+            list_box,
+            items_state,
+            all_items_state,
+            search_query,
+            show_trash_state,
+            show_pin_state,
+            *show_trash_state.borrow(),
+            *show_pin_state.borrow(),
+        );
+        list_box.append(&row);
+    }
+
+    if filtered_items.is_empty() {
+        list_box.append(&make_placeholder_row_with_message(if query.is_empty() {
+            "No clipboard history yet"
+        } else {
+            "No matches found"
+        }));
+    }
+}
+
+fn item_matches_query(item: &ClipboardItemPreview, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    item.content_preview.to_lowercase().contains(query)
+        || item.content_type.as_str().to_lowercase().contains(query)
+}
+
+fn select_first_row(list_box: &gtk4::ListBox) {
+    if let Some(row) = list_box.row_at_index(0)
+        && row.is_selectable()
+    {
+        list_box.select_row(Some(&row));
+        row.grab_focus();
+    }
+}
+
+fn select_first_row_without_focus(list_box: &gtk4::ListBox) {
+    if let Some(row) = list_box.row_at_index(0)
+        && row.is_selectable()
+    {
+        list_box.select_row(Some(&row));
+    }
+}
+
+fn select_row_by_item_id(
+    list_box: &gtk4::ListBox,
+    items_state: &Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    item_id: u64,
+) {
+    let Some(index) = items_state
+        .borrow()
+        .iter()
+        .position(|item| item.item_id == item_id)
+    else {
+        select_first_row(list_box);
+        return;
+    };
+
+    if let Some(row) = list_box.row_at_index(index as i32) {
+        list_box.select_row(Some(&row));
+        row.grab_focus();
+    }
+}
+
+fn make_placeholder_row_with_message(message: &str) -> gtk4::ListBoxRow {
     let placeholder_row = gtk4::ListBoxRow::new();
-    let placeholder_label = Label::new(Some("No clipboard history yet"));
+    let placeholder_label = Label::new(Some(message));
     placeholder_label.add_css_class("dim-label");
     placeholder_label.set_margin_top(20);
     placeholder_label.set_margin_bottom(20);
