@@ -326,10 +326,21 @@ fn generate_overlay_content(
         warn!("Failed to sync persistence setting with backend: {}", e);
     }
 
-    // Add right-side header actions (menu + close)
+    // Add right-side header actions (search + menu + close)
+    let search_button = Button::builder().icon_name("edit-find-symbolic").build();
+    search_button.add_css_class("flat");
+    search_button.add_css_class("compact-header-action");
+    search_button.set_tooltip_text(Some("Search"));
+
     let three_dot_menu = Button::builder().icon_name("view-more-symbolic").build();
     three_dot_menu.add_css_class("flat");
+    three_dot_menu.add_css_class("compact-header-action");
     three_dot_menu.set_tooltip_text(Some("Options"));
+
+    let header_action_group = Box::new(Orientation::Horizontal, 0);
+    header_action_group.add_css_class("header-action-group");
+    header_action_group.append(&search_button);
+    header_action_group.append(&three_dot_menu);
 
     let close_icon = gtk4::Image::from_icon_name("window-close-symbolic");
     close_icon.set_pixel_size(16);
@@ -412,7 +423,7 @@ fn generate_overlay_content(
 
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&close_button);
-    header_bar.pack_end(&three_dot_menu);
+    header_bar.pack_end(&header_action_group);
 
     close_button.connect_clicked(move |_| {
         request_quit();
@@ -439,6 +450,19 @@ fn generate_overlay_content(
     search_entry.add_css_class("clipboard-search");
     search_revealer.set_child(Some(&search_entry));
     main_box.append(&search_revealer);
+
+    let search_revealer_for_button = search_revealer.clone();
+    let search_entry_for_button = search_entry.clone();
+    search_button.connect_clicked(move |_| {
+        let next_state = !search_revealer_for_button.is_child_revealed();
+        search_revealer_for_button.set_visible(next_state);
+        search_revealer_for_button.set_reveal_child(next_state);
+
+        if next_state {
+            search_entry_for_button.grab_focus();
+            search_entry_for_button.select_region(0, -1);
+        }
+    });
 
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
@@ -747,7 +771,8 @@ fn generate_key_controller(
         use gtk4::gdk::Key;
         match key {
             Key::Escape => {
-                if search_revealer_for_keys.is_child_revealed() && search_entry_for_keys.has_focus() {
+                if search_revealer_for_keys.is_child_revealed() && search_entry_for_keys.has_focus()
+                {
                     if list_box_for_keys.selected_row().is_none() {
                         select_first_row(&list_box_for_keys);
                     } else {
@@ -1064,6 +1089,13 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
             background: shade(#343437, 0.92);
         }
 
+        .compact-header-action {
+            min-width: 28px;
+            min-height: 28px;
+            padding-left: 0;
+            padding-right: 0;
+        }
+
         .menu-revealer {
             background: #2b2b2f;
             border-radius: 8px;
@@ -1180,6 +1212,13 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .manual-close-button:active .manual-close-icon {
             background: shade(#ffffff, 0.86);
+        }
+
+        .compact-header-action {
+            min-width: 28px;
+            min-height: 28px;
+            padding-left: 0;
+            padding-right: 0;
         }
 
         .menu-revealer {
