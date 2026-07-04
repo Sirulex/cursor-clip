@@ -190,16 +190,7 @@ pub fn init_clipboard_overlay(
 
 fn configure_color_scheme() {
     let style_manager = adw::StyleManager::default();
-
-    if let Some(settings) = gtk4::Settings::default() {
-        if settings.is_gtk_application_prefer_dark_theme() {
-            style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
-        } else {
-            style_manager.set_color_scheme(adw::ColorScheme::Default);
-        }
-
-        settings.set_gtk_application_prefer_dark_theme(false);
-    }
+    style_manager.set_color_scheme(adw::ColorScheme::Default);
 }
 
 /// Create and configure the sync layer shell window
@@ -871,6 +862,11 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         window {
             border-radius: 12px;
             background: #222226;
+            background: @window_bg_color;
+            color: @window_fg_color;
+            border: 1px solid alpha(#ffffff, 0.10);
+            border: 1px solid alpha(@window_fg_color, 0.10);
+            box-shadow: 0 10px 30px alpha(#000000, 0.22);
         }
 
         headerbar {
@@ -884,6 +880,7 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .clipboard-item {
             background: #343437;
+            background: @card_bg_color;
             border: 2px solid transparent;
             border-radius: 10px;
             padding: 4px 4px;
@@ -893,16 +890,21 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .clipboard-item:hover {
             border-color: #3584E4;
+            border-color: @accent_bg_color;
             background: shade(#343437, 1.05);
+            background: mix(@card_bg_color, @window_fg_color, 0.08);
         }
 
         .clipboard-item:selected {
             border-color: #3584E4;
+            border-color: @accent_bg_color;
             background: alpha(#3584E4, 0.18);
+            background: alpha(@accent_bg_color, 0.18);
         }
 
         .clipboard-preview {
             opacity: 0.9;
+            color: @window_fg_color;
         }
 
         .clipboard-preview.monospace {
@@ -912,33 +914,40 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         .clipboard-time {
             font-size: 0.8em;
             opacity: 0.6;
+            color: @window_fg_color;
         }
 
         .clipboard-delete {
             color: #bfc3c7;
+            color: alpha(@window_fg_color, 0.75);
             padding: 2px 4px;
         }
 
         .clipboard-pin {
             color: #bfc3c7;
+            color: alpha(@window_fg_color, 0.75);
             padding: 2px 4px;
         }
 
         .clipboard-item:hover .clipboard-delete,
         .clipboard-delete:hover {
             color: #ffffff;
+            color: @window_fg_color;
         }
 
         .clipboard-item:hover .clipboard-pin {
             color: #ffffff;
+            color: @window_fg_color;
         }
 
         .clipboard-pin:hover {
             color: #ffffff;
+            color: @window_fg_color;
         }
 
         .clipboard-pin.pinned {
             color: #ffffff;
+            color: @accent_color;
         }
 
         .manual-close-button {
@@ -960,22 +969,27 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
             min-height: 28px;
             border-radius: 999px;
             background: #343437;
+            background: @card_bg_color;
         }
 
         .manual-close-icon image {
             color: #f4f5f6;
+            color: @window_fg_color;
         }
 
         .manual-close-button:hover .manual-close-icon {
             background: shade(#343437, 1.12);
+            background: mix(@card_bg_color, @window_fg_color, 0.12);
         }
 
         .manual-close-button:hover .manual-close-icon image {
             color: #ffffff;
+            color: @window_fg_color;
         }
 
         .manual-close-button:active .manual-close-icon {
             background: shade(#343437, 0.92);
+            background: mix(@card_bg_color, @window_fg_color, 0.04);
         }
 
         .compact-header-action {
@@ -987,8 +1001,12 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .menu-revealer {
             background: #2b2b2f;
+            background: @popover_bg_color;
+            border: 1px solid alpha(#ffffff, 0.10);
+            border: 1px solid alpha(@popover_fg_color, 0.10);
             border-radius: 8px;
             padding: 6px 8px;
+            color: @popover_fg_color;
         }
         "
     } else {
@@ -996,6 +1014,11 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         window {
             border-radius: 12px;
             background: #f6f7f9;
+            background: @window_bg_color;
+            color: @window_fg_color;
+            border: 1px solid alpha(#000000, 0.10);
+            border: 1px solid alpha(@window_fg_color, 0.10);
+            box-shadow: 0 10px 30px alpha(#000000, 0.12);
         }
 
         headerbar {
@@ -1009,6 +1032,7 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .clipboard-item {
             background: #ffffff;
+            background: @card_bg_color;
             border: 2px solid transparent;
             border-radius: 10px;
             padding: 4px 4px;
@@ -1018,16 +1042,21 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .clipboard-item:hover {
             border-color: #1c71d8;
+            border-color: @accent_bg_color;
             background: shade(#ffffff, 0.96);
+            background: mix(@card_bg_color, @window_fg_color, 0.04);
         }
 
         .clipboard-item:selected {
             border-color: #1c71d8;
+            border-color: @accent_bg_color;
             background: alpha(#1c71d8, 0.12);
+            background: alpha(@accent_bg_color, 0.12);
         }
 
         .clipboard-preview {
             opacity: 0.9;
+            color: @window_fg_color;
         }
 
         .clipboard-preview.monospace {
@@ -1037,33 +1066,40 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         .clipboard-time {
             font-size: 0.8em;
             opacity: 0.6;
+            color: @window_fg_color;
         }
 
         .clipboard-delete {
             color: #5e6268;
+            color: alpha(@window_fg_color, 0.7);
             padding: 2px 4px;
         }
 
         .clipboard-pin {
             color: #5e6268;
+            color: alpha(@window_fg_color, 0.7);
             padding: 2px 4px;
         }
 
         .clipboard-item:hover .clipboard-delete,
         .clipboard-delete:hover {
             color: #1f2328;
+            color: @window_fg_color;
         }
 
         .clipboard-item:hover .clipboard-pin {
             color: #1f2328;
+            color: @window_fg_color;
         }
 
         .clipboard-pin:hover {
             color: #1f2328;
+            color: @window_fg_color;
         }
 
         .clipboard-pin.pinned {
             color: #1f2328;
+            color: @accent_color;
         }
 
         .manual-close-button {
@@ -1085,22 +1121,27 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
             min-height: 28px;
             border-radius: 999px;
             background: #ffffff;
+            background: @card_bg_color;
         }
 
         .manual-close-icon image {
             color: #1f2328;
+            color: @window_fg_color;
         }
 
         .manual-close-button:hover .manual-close-icon {
             background: shade(#ffffff, 0.92);
+            background: mix(@card_bg_color, @window_fg_color, 0.08);
         }
 
         .manual-close-button:hover .manual-close-icon image {
             color: #111318;
+            color: @window_fg_color;
         }
 
         .manual-close-button:active .manual-close-icon {
             background: shade(#ffffff, 0.86);
+            background: mix(@card_bg_color, @window_fg_color, 0.12);
         }
 
         .compact-header-action {
@@ -1112,9 +1153,13 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
 
         .menu-revealer {
             background: #ffffff;
+            background: @popover_bg_color;
+            border: 1px solid alpha(#000000, 0.10);
+            border: 1px solid alpha(@popover_fg_color, 0.10);
             border-radius: 8px;
             padding: 6px 8px;
             box-shadow: 0 2px 8px alpha(#000000, 0.10);
+            color: @popover_fg_color;
         }
         "
     });
