@@ -15,6 +15,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Rich previews**: Formatted content display for text, images, and file paths
 - **Timestamps**: When each item was copied
 - **Quick selection**: Click any item to copy it back to the clipboard
+- **Search and filter**: Live search through clipboard history
 - **Pin or delete items**: Manage your history with ease
 - **Instant paste**: Option to immediately paste the selected item into the active application
 - **Persistent history**: Option to store clipboard history across sessions with automatic encryption
@@ -28,6 +29,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 ### 🎨 **Native GNOME Design**
 - **Libadwaita styling**: Follows GNOME Human Interface Guidelines
 - **Native widgets**: HeaderBar, ListBox, ScrolledWindow
+- **Dynamic theming**: Adapts to light/dark mode and system accent colors
 
 ### 📂 **Automatic Clipboard Monitoring (Wayland)**
 - Stores copied items in memory or in a persistent database and removes duplicates.
@@ -58,7 +60,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
      - Labwc
      - Other wlroots-based compositors
 
-   - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and `zwlr_data_control_manager_v1`) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension. 
+   - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and `zwlr_data_control_manager_v1`) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension.
 
 ### System Requirements
 - **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
@@ -140,15 +142,15 @@ nix develop
    - **Content type icons** (text, URL, code, password, file)
    - **Timestamps** showing when items were copied
    - **Quick actions**: Clear All, Delete, Pin and Close
-5. **Interact**: 
+5. **Interact**:
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
    - **Clear All** to remove all history items
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
-   - **Search**: Press `/` to focus the search field and filter clipboard items live by preview text or content type
-   - **Search actions**: Press *Enter* to paste the currently selected filtered result; press *Esc* to leave the search field and continue navigating the filtered list; press *Up*/*Down* to move into the filtered results; press *Ctrl+U* to delete everything before the cursor in the search field
-   - **Keyboard navigation**: Use *Arrow keys* or *J/K* to navigate, *Enter* to select, *Delete* to remove, *P* to pin, *Esc* to close the overlay when the search field is not focused
+   - **Search**: Press the search icon or `/` on your keyboard to focus the search field and filter clipboard items live by preview text or content type
+   - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to leave the search field and continue navigating the filtered list; press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
+   - **Keyboard navigation**: Use `Arrow keys` or `J/K` to navigate, `Enter` to select, `Delete` to remove, `P` to pin, `Esc` to close the overlay when the search field is not focused
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
 
 ## Persistent History Security
