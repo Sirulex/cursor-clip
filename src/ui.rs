@@ -100,6 +100,18 @@ impl ThemePalette {
         }}
         .clipboard-item:hover {{ border-color: {accent}; }}
         .clipboard-item:selected {{ border-color: {accent}; background: {selected_background}; }}
+        .realm-border-0 {{ border-color: #7fc8ff; }}
+        .realm-border-1 {{ border-color: #90d090; }}
+        .realm-border-2 {{ border-color: #ffb347; }}
+        .realm-border-3 {{ border-color: #c8a0e0; }}
+        .realm-border-4 {{ border-color: #ff8080; }}
+        .realm-border-5 {{ border-color: #40e0d0; }}
+        .realm-border-6 {{ border-color: #ffd700; }}
+        .realm-border-7 {{ border-color: #ff69b4; }}
+        .realm-border-8 {{ border-color: #a0c8a0; }}
+        .realm-border-9 {{ border-color: #d4a0ff; }}
+        .realm-border-10 {{ border-color: #ffa07a; }}
+        .realm-border-11 {{ border-color: #87ceeb; }}
         .clipboard-preview {{ opacity: 0.94; }}
         .realm-pill, .search-pill, .warning-pill {{
             border-radius: 999px;
@@ -591,6 +603,7 @@ fn candidate_matches(candidate: &Candidate, query: &str) -> bool {
 fn candidate_row(candidate: &Candidate) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
+    row.add_css_class(&realm_border_class(&candidate.source_realm));
     let main = gtk4::Box::new(Orientation::Vertical, 6);
     main.set_margin_top(10);
     main.set_margin_bottom(10);
@@ -652,6 +665,15 @@ fn candidate_row(candidate: &Candidate) -> gtk4::ListBoxRow {
 
     row.set_child(Some(&main));
     row
+}
+
+fn realm_border_class(realm: &str) -> String {
+    const PALETTE_LEN: u64 = 12;
+    let mut hash = 0_u64;
+    for byte in format!("d2b-env-accent-{realm}").bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u64);
+    }
+    format!("realm-border-{}", hash % PALETTE_LEN)
 }
 
 fn destination_label(request: &OpenRequest) -> String {
@@ -840,6 +862,20 @@ mod theme_tests {
         assert!(css.contains("background-color: #1e1e2e;"));
         assert!(css.contains("border: 2px solid #89b4fa;"));
         assert!(css.contains("background: alpha(#3584e4, 0.14);"));
+        assert!(css.contains(".realm-border-0"));
+        assert!(css.contains(".realm-border-11"));
+    }
+
+    #[test]
+    fn realm_border_class_is_deterministic_and_bounded() {
+        assert_eq!(realm_border_class("work"), realm_border_class("work"));
+        assert!(realm_border_class("work").starts_with("realm-border-"));
+        let suffix = realm_border_class("work")
+            .strip_prefix("realm-border-")
+            .expect("class prefix")
+            .parse::<u8>()
+            .expect("class suffix");
+        assert!(suffix < 12);
     }
 
     #[test]
