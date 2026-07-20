@@ -66,7 +66,11 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
 
 ## Installation on Arch Linux based distributions via AUR
-You can install Cursor Clip from the AUR using an AUR helper like `yay`:
+You can install the prebuilt Cursor Clip binary from the AUR using an AUR helper like `yay`:
+```bash
+yay -S cursor-clip-bin
+```
+or use the `cursor-clip-git` package to build from source:
 ```bash
 yay -S cursor-clip-git
 ```
