@@ -1,0 +1,186 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (for example v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  BINARY_NAME: cursor-clip
+
+jobs:
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-26.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Determine release version
+        id: version
+        shell: bash
+        env:
+          VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must have the form vMAJOR.MINOR.PATCH, got: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.version.outputs.version }}
+          fetch-depth: 0
+
+      - name: Verify tag and Cargo version
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git rev-parse --verify "refs/tags/$VERSION^{commit}" >/dev/null
+
+          cargo_version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r --arg name "$BINARY_NAME" '.packages[] | select(.name == $name) | .version'
+          )"
+
+          if [[ "$cargo_version" != "${VERSION#v}" ]]; then
+            echo "Tag $VERSION does not match Cargo.toml version $cargo_version" >&2
+            exit 1
+          fi
+
+      - name: Create draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$VERSION" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "Release $VERSION already exists and is not a draft" >&2
+              exit 1
+            fi
+            echo "Reusing existing draft release $VERSION"
+          else
+            gh release create "$VERSION" \
+              --draft \
+              --verify-tag \
+              --title "$VERSION" \
+              --generate-notes
+          fi
+
+  build-release:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.create-release.outputs.version }}
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libadwaita-1-dev \
+            libdbus-1-dev \
+            libgtk-4-dev \
+            libgtk4-layer-shell-dev \
+            libwayland-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Verify binary version
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          actual="$("target/$TARGET/release/$BINARY_NAME" --version)"
+          expected="$BINARY_NAME ${VERSION#v}"
+
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Binary reports '$actual', expected '$expected'" >&2
+            exit 1
+          fi
+
+      - name: Package release archive
+        id: package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          archive="$BINARY_NAME-$VERSION-$TARGET"
+          staging="dist/$archive"
+
+          install -Dm755 "target/$TARGET/release/$BINARY_NAME" "$staging/$BINARY_NAME"
+          install -Dm644 LICENSE "$staging/LICENSE"
+          install -Dm644 README.md "$staging/README.md"
+
+          tar -C dist -czf "dist/$archive.tar.gz" "$archive"
+          (
+            cd dist
+            sha256sum "$archive.tar.gz" > "$archive.tar.gz.sha256"
+          )
+
+          echo "archive=dist/$archive.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "checksum=dist/$archive.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+        run: gh release upload "$VERSION" "$ARCHIVE" "$CHECKSUM" --clobber
+
+  publish-release:
+    name: Publish release
+    needs:
+      - create-release
+      - build-release
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: gh release edit "$VERSION" --draft=false
