@@ -60,7 +60,7 @@ modules:
     sources:
       - type: archive
         url: https://github.com/Sirulex/cursor-clip/archive/refs/tags/v1.0.1.tar.gz
-        sha256: a315ec9e25a853ae37b0a35a98510195d52e04ad423fc5f59c35e2e7773d9b0d
+        sha256: 3818fdcf20556b1cfdca2f24b6206631520aabe75f92b60605a92b8a3a9f1ed2
         x-checker-data:
           type: json
           url: https://api.github.com/repos/Sirulex/cursor-clip/releases/latest
