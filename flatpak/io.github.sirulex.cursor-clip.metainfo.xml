@@ -46,8 +46,8 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="1.0.0" date="2026-07-20">
-      <url type="details">https://github.com/Sirulex/cursor-clip/releases/tag/v1.0.0</url>
+    <release version="1.0.1" date="2026-07-20">
+      <url type="details">https://github.com/Sirulex/cursor-clip/releases/tag/v1.0.1</url>
       <description>
         <p>
           The first stable release adds encrypted persistent history, image
