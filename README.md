@@ -75,6 +75,30 @@ or use the `cursor-clip-git` package to build from source:
 yay -S cursor-clip-git
 ```
 
+## Building and Installing the Flatpak
+
+The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from
+source:
+
+```bash
+flatpak install flathub org.gnome.Sdk//50 \
+  org.freedesktop.Sdk.Extension.rust-stable//25.08
+flatpak-builder --user --install --force-clean build-flatpak \
+  io.github.sirulex.cursor-clip.yml
+```
+
+Run the clipboard monitor and overlay with:
+
+```bash
+flatpak run io.github.sirulex.cursor-clip --daemon
+flatpak run io.github.sirulex.cursor-clip
+```
+
+The default launcher starts the monitor automatically if it is not already
+running. For a complete workflow, add the daemon command to your compositor's
+autostart configuration and bind the second command to a shortcut such as
+Super+V.
+
 
 ## Manual Building
 

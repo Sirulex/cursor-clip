@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/cursor-clip"
+socket_path="${runtime_dir}/cursor-clip.sock"
+lock_path="${runtime_dir}/daemon.lock"
+mkdir -p "${runtime_dir}"
+
+exec 9>"${lock_path}"
+
+if [ "${1:-}" = "--daemon" ]; then
+    if flock -n 9; then
+        exec cursor-clip "$@"
+    fi
+    exit 0
+fi
+
+if flock -n 9; then
+    cursor-clip --daemon &
+    exec 9>&-
+fi
+
+# A second launcher can arrive while the first daemon is still initializing.
+attempt=0
+while [ ! -S "${socket_path}" ] && [ "${attempt}" -lt 100 ]; do
+    sleep 0.05
+    attempt=$((attempt + 1))
+done
+
+exec cursor-clip "$@"

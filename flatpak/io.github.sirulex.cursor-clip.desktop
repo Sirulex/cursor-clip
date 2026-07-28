@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Cursor Clip
+Comment=Access your clipboard history at the pointer
+Exec=cursor-clip-launch
+Icon=io.github.sirulex.cursor-clip
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=Clipboard;History;Paste;Wayland;
+StartupNotify=false

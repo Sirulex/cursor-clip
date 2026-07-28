@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Sirulex -->
+<component type="desktop-application">
+  <id>io.github.sirulex.cursor-clip</id>
+  <name>Cursor Clip</name>
+  <summary>Clipboard history at your pointer</summary>
+  <developer id="io.github.sirulex">
+    <name>Sirulex</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>
+      Cursor Clip keeps a searchable clipboard history and opens it next to the
+      current pointer position. Select an entry to restore it to the clipboard,
+      pin important entries, remove individual entries, or clear the history.
+    </p>
+    <p>
+      It is designed for Wayland compositors that implement the layer-shell and
+      data-control protocols, including KDE Plasma, Hyprland, Sway, niri, labwc,
+      and other wlroots-based compositors. GNOME Shell is not supported because
+      it does not provide the required protocols.
+    </p>
+    <p>
+      Launching Cursor Clip starts its clipboard monitor for the current
+      session. For clipboard monitoring immediately after login, configure
+      <code>flatpak run io.github.sirulex.cursor-clip --daemon</code> in your
+      compositor's autostart settings. Bind
+      <code>flatpak run io.github.sirulex.cursor-clip</code> to a shortcut such
+      as Super+V to open the history overlay.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.sirulex.cursor-clip.desktop</launchable>
+  <url type="homepage">https://github.com/Sirulex/cursor-clip</url>
+  <url type="vcs-browser">https://github.com/Sirulex/cursor-clip</url>
+  <url type="bugtracker">https://github.com/Sirulex/cursor-clip/issues</url>
+  <url type="donation">https://github.com/sponsors/Sirulex</url>
+  <branding>
+    <color type="primary" scheme_preference="light">#1c71d8</color>
+    <color type="primary" scheme_preference="dark">#62a0ea</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://github.com/user-attachments/assets/604896e7-b48e-4851-a9f4-1f06f32ab9c2</image>
+      <caption>Clipboard history with content previews and quick actions</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="1.0.0" date="2026-07-20">
+      <url type="details">https://github.com/Sirulex/cursor-clip/releases/tag/v1.0.0</url>
+      <description>
+        <p>
+          The first stable release adds encrypted persistent history, image
+          previews, pinning, search, theme support, and instant paste.
+        </p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+</component>

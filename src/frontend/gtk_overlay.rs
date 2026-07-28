@@ -144,7 +144,7 @@ pub fn init_clipboard_overlay(
 
     // Create the application (was returned from init_application())
     let app: Application = adw::Application::builder()
-        .application_id("com.cursor-clip")
+        .application_id("io.github.sirulex.cursor-clip")
         .build()
         .upcast();
 

@@ -1,0 +1,87 @@
+id: io.github.sirulex.cursor-clip
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: cursor-clip-launch
+
+finish-args:
+  - --socket=wayland
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/doc
+  - /share/gir-1.0
+  - /share/gtk-doc
+  - /share/man
+  - /share/pkgconfig
+  - /share/vala
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: gtk4-layer-shell
+    buildsystem: meson
+    config-opts:
+      - -Dexamples=false
+      - -Ddocs=false
+      - -Dtests=false
+      - -Dsmoke-tests=false
+      - -Dintrospection=false
+      - -Dvapi=false
+    sources:
+      - type: archive
+        url: https://github.com/wmww/gtk4-layer-shell/archive/refs/tags/v1.3.0.tar.gz
+        sha256: 1ebb01ab14e98afd1727f68f64981c37bd23305b1f131f5667c02b94cf593192
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/wmww/gtk4-layer-shell/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: .tarball_url
+
+  - name: cursor-clip
+    buildsystem: simple
+    build-commands:
+      - cargo --offline --frozen build --release
+      - install -Dm755 target/release/cursor-clip /app/bin/cursor-clip
+      - install -Dm644 LICENSE /app/share/licenses/io.github.sirulex.cursor-clip/LICENSE
+    sources:
+      - type: archive
+        url: https://github.com/Sirulex/cursor-clip/archive/refs/tags/v1.0.0.tar.gz
+        sha256: a315ec9e25a853ae37b0a35a98510195d52e04ad423fc5f59c35e2e7773d9b0d
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/Sirulex/cursor-clip/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: .tarball_url
+      - flatpak/cargo-sources.json
+      - type: patch
+        path: flatpak/use-flatpak-app-id.patch
+      - type: shell
+        commands:
+          - mkdir -p .cargo
+          - cp cargo/config .cargo/config.toml
+
+  - name: cursor-clip-desktop-integration
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 cursor-clip-launch /app/bin/cursor-clip-launch
+      - install -Dm644 io.github.sirulex.cursor-clip.desktop /app/share/applications/io.github.sirulex.cursor-clip.desktop
+      - install -Dm644 io.github.sirulex.cursor-clip.metainfo.xml /app/share/metainfo/io.github.sirulex.cursor-clip.metainfo.xml
+      - install -Dm644 io.github.sirulex.cursor-clip.svg /app/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg
+    sources:
+      - type: file
+        path: flatpak/cursor-clip-launch
+      - type: file
+        path: flatpak/io.github.sirulex.cursor-clip.desktop
+      - type: file
+        path: flatpak/io.github.sirulex.cursor-clip.metainfo.xml
+      - type: file
+        path: flatpak/io.github.sirulex.cursor-clip.svg
