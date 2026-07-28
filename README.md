@@ -82,12 +82,12 @@ yay -S cursor-clip-git
 
 ## Building and Installing the Flatpak
 Flathub release is in the works, but you can build and install the Flatpak locally from the manifest file.
-The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from source (requires flatpak-builder)flat:
+The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from source (requires flatpak-builder):
 
 ```bash
-flatpak install flathub org.gnome.Sdk//50 \
-  org.freedesktop.Sdk.Extension.rust-stable//25.08
-flatpak-builder --user --install --force-clean build-flatpak \
+flatpak run --command=flathub-build \
+  org.flatpak.Builder \
+  --install -y \
   io.github.sirulex.cursor-clip.yml
 ```
 
