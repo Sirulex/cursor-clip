@@ -7,7 +7,12 @@ sdk-extensions:
 command: cursor-clip-launch
 
 finish-args:
-  - --socket=wayland
+  # Hyprland and KDE hide clipboard data-control and layer-shell globals from
+  # connections tagged through wp_security_context_manager_v1. The compositor socket
+  # is required directly instead of using Flatpak's mediated Wayland socket.
+  # This Wayland-only clipboard manager needs raw access to those privileged globals.
+  - --filesystem=xdg-run/wayland-0:ro
+  - --filesystem=xdg-run/wayland-1:ro
   - --device=dri
   - --talk-name=org.freedesktop.secrets
 

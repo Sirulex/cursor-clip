@@ -1,6 +1,27 @@
 #!/bin/sh
 set -eu
 
+# Without --socket=wayland Flatpak removes WAYLAND_DISPLAY. The manifest
+# exposes the host compositor sockets directly, so select the available one
+# again from inside the sandbox.
+if [ -z "${WAYLAND_SOCKET:-}" ]; then
+    selected_wayland_display=""
+
+    for candidate in wayland-0 wayland-1; do
+        if [ -S "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/${candidate}" ]; then
+            selected_wayland_display="${candidate}"
+            break
+        fi
+    done
+
+    if [ -z "${selected_wayland_display}" ]; then
+        echo "cursor-clip: no exposed Wayland compositor socket found" >&2
+        exit 1
+    fi
+
+    export WAYLAND_DISPLAY="${selected_wayland_display}"
+fi
+
 runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/cursor-clip"
 socket_path="${runtime_dir}/cursor-clip.sock"
 lock_path="${runtime_dir}/daemon.lock"
