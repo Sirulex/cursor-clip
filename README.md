@@ -81,9 +81,8 @@ yay -S cursor-clip-git
 ```
 
 ## Building and Installing the Flatpak
-
-The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from
-source (Flathub release is pending):
+Flathub release is in the works, but you can build and install the Flatpak locally from the manifest file.
+The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from source (requires flatpak-builder)flat:
 
 ```bash
 flatpak install flathub org.gnome.Sdk//50 \
