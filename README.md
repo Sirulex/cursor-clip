@@ -1,4 +1,9 @@
 # Cursor Clip - GTK4 Clipboard Manager with Dynamic Positioning
+<div align="center">
+  <a href="https://github.com/Sirulex/cursor-clip">
+    <img src="flatpak/cursor-clip-banner.png" alt="Cursor-Clip-Banner" width="640">
+  </a>
+</div>
 
 A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell** that makes clipboard handling more reliable.
 Features a Windows 11–style clipboard history interface with native GNOME design, which is always positioned at the current mouse pointer location.
@@ -78,7 +83,7 @@ yay -S cursor-clip-git
 ## Building and Installing the Flatpak
 
 The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from
-source:
+source (Flathub release is pending):
 
 ```bash
 flatpak install flathub org.gnome.Sdk//50 \
