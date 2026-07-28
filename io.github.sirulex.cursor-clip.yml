@@ -67,8 +67,6 @@ modules:
           version-query: .tag_name | sub("^v"; "")
           url-query: .tarball_url
       - flatpak/cargo-sources.json
-      - type: patch
-        path: flatpak/use-flatpak-app-id.patch
       - type: shell
         commands:
           - mkdir -p .cargo
