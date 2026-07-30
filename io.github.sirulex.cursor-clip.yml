@@ -56,6 +56,10 @@ modules:
     build-commands:
       - cargo --offline --frozen build --release
       - install -Dm755 target/release/cursor-clip /app/bin/cursor-clip
+      - install -Dm755 flatpak/cursor-clip-launch /app/bin/cursor-clip-launch
+      - install -Dm644 flatpak/io.github.sirulex.cursor-clip.desktop /app/share/applications/io.github.sirulex.cursor-clip.desktop
+      - install -Dm644 flatpak/io.github.sirulex.cursor-clip.metainfo.xml /app/share/metainfo/io.github.sirulex.cursor-clip.metainfo.xml
+      - install -Dm644 flatpak/io.github.sirulex.cursor-clip.svg /app/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg
       - install -Dm644 LICENSE /app/share/licenses/io.github.sirulex.cursor-clip/LICENSE
     sources:
       - type: archive
@@ -71,20 +75,3 @@ modules:
         commands:
           - mkdir -p .cargo
           - cp cargo/config .cargo/config.toml
-
-  - name: cursor-clip-desktop-integration
-    buildsystem: simple
-    build-commands:
-      - install -Dm755 cursor-clip-launch /app/bin/cursor-clip-launch
-      - install -Dm644 io.github.sirulex.cursor-clip.desktop /app/share/applications/io.github.sirulex.cursor-clip.desktop
-      - install -Dm644 io.github.sirulex.cursor-clip.metainfo.xml /app/share/metainfo/io.github.sirulex.cursor-clip.metainfo.xml
-      - install -Dm644 io.github.sirulex.cursor-clip.svg /app/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg
-    sources:
-      - type: file
-        path: flatpak/cursor-clip-launch
-      - type: file
-        path: flatpak/io.github.sirulex.cursor-clip.desktop
-      - type: file
-        path: flatpak/io.github.sirulex.cursor-clip.metainfo.xml
-      - type: file
-        path: flatpak/io.github.sirulex.cursor-clip.svg
