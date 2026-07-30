@@ -2,9 +2,9 @@ id: io.github.sirulex.cursor-clip
 runtime: org.gnome.Platform
 runtime-version: '50'
 sdk: org.gnome.Sdk
+command: cursor-clip-launch
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: cursor-clip-launch
 
 finish-args:
   # Hyprland and KDE hide clipboard data-control and layer-shell globals from
@@ -15,9 +15,6 @@ finish-args:
   - --filesystem=xdg-run/wayland-1:ro
   - --device=dri
   - --talk-name=org.freedesktop.secrets
-
-build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
 
 cleanup:
   - /include
@@ -30,6 +27,9 @@ cleanup:
   - /share/vala
   - '*.a'
   - '*.la'
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
 
 modules:
   - name: gtk4-layer-shell
