@@ -167,7 +167,7 @@ nix develop
 
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Launch Overlay**: Run `cursor-clip` without any arguments (ideally bind it to a hotkey, e.g., Super+V)
+2. **Toggle Overlay**: Run `cursor-clip` without any arguments to open and close it (ideally bind it to a hotkey, e.g., Super+V)
 3. **Trigger**: Your mouse position is automatically captured
 4. **View History**: The clipboard history window will appear at your cursor position, showing:
    - **Recent clipboard items** with content previews

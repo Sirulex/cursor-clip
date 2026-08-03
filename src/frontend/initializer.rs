@@ -11,22 +11,28 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
 use crate::frontend::ipc_client::FrontendClient;
+use crate::frontend::toggle::ToggleServer;
 use crate::frontend::{frontend_state::State, gtk_overlay};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::OpenOptions;
-use std::os::fd::BorrowedFd;
-use std::os::unix::io::AsRawFd;
+use std::io;
+use std::os::fd::{AsRawFd, BorrowedFd};
 
 fn run_main_event_loop(
     state: &mut State,
     queue: &mut EventQueue<State>,
+    toggle_server: &ToggleServer,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut gtk_window_created = false;
 
     loop {
-        // Process Wayland events
-        queue.blocking_dispatch(state)?;
+        // Wait for either compositor activity or another invocation. Monitoring
+        // both descriptors prevents additional capture layers from queueing.
+        if !dispatch_wayland_or_toggle(state, queue, toggle_server)? {
+            cleanup_capture_layer(state);
+            break;
+        }
 
         // Create GTK overlay window when coordinates are received
         if state.coords_received && !gtk_window_created {
@@ -44,6 +50,7 @@ fn run_main_event_loop(
                 state.monitor_width,
                 state.monitor_height,
                 state.clipboard_history.clone(),
+                toggle_server.try_clone_listener()?,
             ) {
                 error!("Error creating GTK overlay: {e:?}");
             }
@@ -68,8 +75,77 @@ fn run_main_event_loop(
     Ok(())
 }
 
+fn dispatch_wayland_or_toggle(
+    state: &mut State,
+    queue: &mut EventQueue<State>,
+    toggle_server: &ToggleServer,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if toggle_server.take_toggle_request()? {
+        return Ok(false);
+    }
+
+    if queue.dispatch_pending(state)? > 0 {
+        return Ok(true);
+    }
+    queue.flush()?;
+
+    loop {
+        if toggle_server.take_toggle_request()? {
+            return Ok(false);
+        }
+
+        let Some(read_guard) = queue.prepare_read() else {
+            if queue.dispatch_pending(state)? > 0 {
+                return Ok(true);
+            }
+            continue;
+        };
+
+        let mut poll_fds = [
+            libc::pollfd {
+                fd: read_guard.connection_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: toggle_server.raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+
+        // SAFETY: poll_fds points to two initialized pollfd values and remains
+        // alive for the duration of the call.
+        let result = unsafe { libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as _, -1) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            drop(read_guard);
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+
+        if poll_fds[1].revents != 0 {
+            drop(read_guard);
+            return Ok(!toggle_server.take_toggle_request()?);
+        }
+
+        if poll_fds[0].revents != 0 {
+            read_guard.read()?;
+            queue.dispatch_pending(state)?;
+            return Ok(true);
+        }
+    }
+}
+
 // Frontend always uses its own Wayland connection (may change in future to support shared connection/hide feature)
 pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(toggle_server) = ToggleServer::acquire()? else {
+        info!("An overlay is already active; requested it to close");
+        return Ok(());
+    };
+
     let mut state = State::new();
     // Prefetch clipboard history for instant GTK overlay population
     if let Ok(mut client) = FrontendClient::new() {
@@ -101,7 +177,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     setup_capture_layer(&mut state, &queue);
 
     // Main event loop (reuse existing implementation)
-    run_main_event_loop(&mut state, &mut queue)
+    run_main_event_loop(&mut state, &mut queue, &toggle_server)
 }
 
 fn init_wayland_protocols(

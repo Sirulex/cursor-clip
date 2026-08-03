@@ -11,10 +11,14 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs;
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::frontend::toggle::ToggleServer;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -136,6 +140,7 @@ pub fn init_clipboard_overlay(
     monitor_width: i32,
     monitor_height: i32,
     prefetched_items: Vec<ClipboardItemPreview>,
+    toggle_listener: UnixListener,
 ) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
         adw::init().expect("Failed to initialize libadwaita");
@@ -150,6 +155,13 @@ pub fn init_clipboard_overlay(
 
     let app_clone = app.clone();
     app.connect_activate(move |_| {
+        // A toggle can arrive after pointer capture but just before GTK starts
+        // dispatching. Do not briefly show a window in that race.
+        if is_close_requested() {
+            app_clone.quit();
+            return;
+        }
+
         let window = create_layer_shell_window(
             &app_clone,
             x,
@@ -175,8 +187,30 @@ pub fn init_clipboard_overlay(
         debug!("Libadwaita overlay window created at ({}, {})", x, y);
     });
 
+    // Keep listening while GTK owns the main loop. A new cursor-clip process
+    // connects here, causing this overlay to quit instead of queueing another.
+    let toggle_source = gtk4::glib::source::unix_fd_add_local(
+        toggle_listener.as_raw_fd(),
+        gtk4::glib::IOCondition::IN | gtk4::glib::IOCondition::HUP | gtk4::glib::IOCondition::ERR,
+        move |_fd, _condition| {
+            match ToggleServer::take_toggle_request_from(&toggle_listener) {
+                Ok(true) => request_quit(),
+                Ok(false) => return gtk4::glib::ControlFlow::Continue,
+                Err(error) => {
+                    warn!("Failed to receive overlay toggle request: {error}");
+                    request_quit();
+                }
+            }
+            gtk4::glib::ControlFlow::Break
+        },
+    );
+
     // Run the application
     app.run_with_args::<String>(&[]);
+
+    if !is_close_requested() {
+        toggle_source.remove();
+    }
 
     // Belt-and-suspenders: clear TLS after run returns
     OVERLAY_WINDOW.with(|w| {
