@@ -41,11 +41,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                         capture_surface.attach(Some(buffer), 0, 0);
                     }
 
-                    if state.capture_viewport.is_none() {
-                        if let Some(viewporter) = &state.viewporter {
-                            let viewport = viewporter.get_viewport(capture_surface, qhandle, ());
-                            state.capture_viewport = Some(viewport);
-                        }
+                    if state.capture_viewport.is_none()
+                        && let Some(viewporter) = &state.viewporter
+                    {
+                        let viewport = viewporter.get_viewport(capture_surface, qhandle, ());
+                        state.capture_viewport = Some(viewport);
                     }
                     if let Some(viewport) = &state.capture_viewport {
                         viewport.set_destination(width as i32, height as i32);
@@ -71,11 +71,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                         update_surface.attach(Some(buffer), 0, 0);
                     }
 
-                    if state.update_viewport.is_none() {
-                        if let Some(viewporter) = &state.viewporter {
-                            let viewport = viewporter.get_viewport(update_surface, qhandle, ());
-                            state.update_viewport = Some(viewport);
-                        }
+                    if state.update_viewport.is_none()
+                        && let Some(viewporter) = &state.viewporter
+                    {
+                        let viewport = viewporter.get_viewport(update_surface, qhandle, ());
+                        state.update_viewport = Some(viewport);
                     }
                     if let Some(viewport) = &state.update_viewport {
                         viewport.set_destination(width as i32, height as i32);

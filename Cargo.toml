@@ -1,7 +1,8 @@
 [package]
 name = "cursor-clip"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
+rust-version = "1.92"
 license = "GPL-3.0-only"
 
 [[bin]]
@@ -9,30 +10,30 @@ name = "cursor-clip"
 path = "src/main.rs"
 
 [dependencies]
-wayland-client = "0.31.13"
-wayland-protocols = { version = "0.32.11", features = ["client","staging"] }
-wayland-protocols-wlr = { version = "0.3.11", features = ["client"] }
-wayland-protocols-misc = { version = "0.3.11", features = ["client"] }
-gtk4 = { version = "0.10", features = ["v4_6"] }
-gtk4-layer-shell = "0.6.3"
-libadwaita = "0.8"
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client","staging"] }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
+gtk4 = { version = "0.11", features = ["v4_6"] }
+gtk4-layer-shell = "0.8.0"
+libadwaita = "0.9"
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
-tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "net", "io-util"] }
+toml = "1.1"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 libc = "0.2"
-indexmap = { version = "2.13", features = ["serde"] }
+indexmap = { version = "2.14", features = ["serde"] }
 bytes = { version = "1", features = ["serde"] }
 memmap2 = "0.9"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
-glib = "0.21.5"
+glib = "0.22.8"
 image = "0.25.10"
 fast_image_resize = "6"
-stoolap = "0.3.7"
-keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
-aes-gcm = "0.10.3"
-base64 = "0.22.1"
-sha2 = "0.10.9"
-rand = "0.10.1"
+stoolap = "0.4.0"
+keyring = "4.1.6"
+aes-gcm = "0.11.0"
+base64 = "0.23.0"
+sha2 = "0.11.0"
+rand = "0.10.2"

@@ -43,12 +43,14 @@ fn run_main_event_loop(
 
             // Create the GTK window using the unified client backend communication
             if let Err(e) = gtk_overlay::init_clipboard_overlay(
-                x,
-                y,
-                state.overlay_width,
-                state.overlay_height,
-                state.monitor_width,
-                state.monitor_height,
+                gtk_overlay::OverlayGeometry {
+                    x,
+                    y,
+                    overlay_width: state.overlay_width,
+                    overlay_height: state.overlay_height,
+                    monitor_width: state.monitor_width,
+                    monitor_height: state.monitor_height,
+                },
                 state.clipboard_history.clone(),
                 toggle_server.try_clone_listener()?,
             ) {

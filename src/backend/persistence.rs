@@ -230,10 +230,11 @@ fn derive_cipher(password: &str) -> Aes256Gcm {
 fn encrypt_payload(cipher: &Aes256Gcm, plaintext: &str) -> Result<String, String> {
     let mut nonce_bytes = [0u8; 12];
     rand::rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice())
+        .expect("AES-GCM nonce buffer must be exactly 12 bytes");
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| format!("Encryption failed: {e}"))?;
 
     Ok(format!(
@@ -262,14 +263,15 @@ fn decrypt_payload(cipher: &Aes256Gcm, payload: &str) -> Result<String, String> 
     if nonce_bytes.len() != 12 {
         return Err("Invalid encrypted nonce length".to_string());
     }
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice())
+        .map_err(|_| "Invalid encrypted nonce length".to_string())?;
 
     let ciphertext = BASE64
         .decode(ciphertext_b64)
         .map_err(|e| format!("Invalid encrypted ciphertext: {e}"))?;
 
     let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
+        .decrypt(&nonce, ciphertext.as_ref())
         .map_err(|e| format!("Decryption failed: {e}"))?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 plaintext: {e}"))

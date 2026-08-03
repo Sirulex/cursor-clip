@@ -11,17 +11,27 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs;
-use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crate::frontend::toggle::ToggleServer;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy)]
+pub struct OverlayGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub overlay_width: i32,
+    pub overlay_height: i32,
+    pub monitor_width: i32,
+    pub monitor_height: i32,
+}
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
@@ -133,12 +143,7 @@ fn request_quit() {
 }
 
 pub fn init_clipboard_overlay(
-    x: f64,
-    y: f64,
-    overlay_width: i32,
-    overlay_height: i32,
-    monitor_width: i32,
-    monitor_height: i32,
+    geometry: OverlayGeometry,
     prefetched_items: Vec<ClipboardItemPreview>,
     toggle_listener: UnixListener,
 ) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
@@ -162,16 +167,7 @@ pub fn init_clipboard_overlay(
             return;
         }
 
-        let window = create_layer_shell_window(
-            &app_clone,
-            x,
-            y,
-            overlay_width,
-            overlay_height,
-            monitor_width,
-            monitor_height,
-            prefetched_items.clone(),
-        );
+        let window = create_layer_shell_window(&app_clone, geometry, prefetched_items.clone());
 
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
@@ -184,15 +180,16 @@ pub fn init_clipboard_overlay(
 
         window.present();
 
-        debug!("Libadwaita overlay window created at ({}, {})", x, y);
+        debug!(
+            "Libadwaita overlay window created at ({}, {})",
+            geometry.x, geometry.y
+        );
     });
 
     // Keep listening while GTK owns the main loop. A new cursor-clip process
     // connects here, causing this overlay to quit instead of queueing another.
-    let toggle_source = gtk4::glib::source::unix_fd_add_local(
-        toggle_listener.as_raw_fd(),
-        gtk4::glib::IOCondition::IN | gtk4::glib::IOCondition::HUP | gtk4::glib::IOCondition::ERR,
-        move |_fd, _condition| {
+    let toggle_source =
+        gtk4::glib::source::timeout_add_local(Duration::from_millis(10), move || {
             match ToggleServer::take_toggle_request_from(&toggle_listener) {
                 Ok(true) => request_quit(),
                 Ok(false) => return gtk4::glib::ControlFlow::Continue,
@@ -202,8 +199,7 @@ pub fn init_clipboard_overlay(
                 }
             }
             gtk4::glib::ControlFlow::Break
-        },
-    );
+        });
 
     // Run the application
     app.run_with_args::<String>(&[]);
@@ -230,14 +226,18 @@ fn configure_color_scheme() {
 /// Create and configure the sync layer shell window
 fn create_layer_shell_window(
     app: &Application,
-    x: f64,
-    y: f64,
-    overlay_width: i32,
-    overlay_height: i32,
-    monitor_width: i32,
-    monitor_height: i32,
+    geometry: OverlayGeometry,
     prefetched_items: Vec<ClipboardItemPreview>,
 ) -> adw::ApplicationWindow {
+    let OverlayGeometry {
+        x,
+        y,
+        overlay_width,
+        overlay_height,
+        monitor_width,
+        monitor_height,
+    } = geometry;
+
     // Create the main window using Adwaita ApplicationWindow
     let window = adw::ApplicationWindow::builder()
         .application(app)
