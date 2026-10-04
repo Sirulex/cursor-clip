@@ -12,7 +12,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
 use crate::frontend::ipc_client::FrontendClient;
 use crate::frontend::toggle::ToggleServer;
-use crate::frontend::{frontend_state::State, gtk_overlay};
+use crate::frontend::{frontend_state::State, gtk_overlay, hyprland};
 use log::{debug, error, info, warn};
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::OpenOptions;
@@ -24,8 +24,6 @@ fn run_main_event_loop(
     queue: &mut EventQueue<State>,
     toggle_server: &ToggleServer,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut gtk_window_created = false;
-
     loop {
         // Wait for either compositor activity or another invocation. Monitoring
         // both descriptors prevents additional capture layers from queueing.
@@ -34,15 +32,17 @@ fn run_main_event_loop(
             break;
         }
 
-        // Create GTK overlay window when coordinates are received
-        if state.coords_received && !gtk_window_created {
+        if state.coords_received {
             let x = state.received_x;
             let y = state.received_y;
-
             debug!("Capture layer ready; creating GTK overlay window at ({x}, {y})");
 
-            // Create the GTK window using the unified client backend communication
-            if let Err(e) = gtk_overlay::init_clipboard_overlay(
+            // The overlay window covers the output itself and handles outside
+            // clicks, so the capture layer is no longer needed.
+            cleanup_capture_layer(state);
+            queue.flush()?;
+
+            show_overlay(
                 gtk_overlay::OverlayGeometry {
                     x,
                     y,
@@ -50,30 +50,34 @@ fn run_main_event_loop(
                     overlay_height: state.overlay_height,
                     monitor_width: state.monitor_width,
                     monitor_height: state.monitor_height,
+                    monitor: None,
                 },
-                state.clipboard_history.clone(),
-                toggle_server.try_clone_listener()?,
-            ) {
-                error!("Error creating GTK overlay: {e:?}");
-            }
-
-            gtk_window_created = true;
-        }
-
-        // Handle close requests
-        if gtk_window_created && (gtk_overlay::is_close_requested() || state.capture_layer_clicked)
-        {
-            gtk_overlay::reset_close_flags();
-            cleanup_capture_layer(state);
+                std::mem::take(&mut state.clipboard_history),
+                toggle_server,
+                false,
+            )?;
             break;
-        }
-
-        // Process GTK events if window has been created
-        if gtk_window_created {
-            gtk4::glib::MainContext::default().iteration(false);
         }
     }
 
+    Ok(())
+}
+
+fn show_overlay(
+    geometry: gtk_overlay::OverlayGeometry,
+    history: Vec<crate::shared::ClipboardItemPreview>,
+    toggle_server: &ToggleServer,
+    resident: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = gtk_overlay::init_clipboard_overlay(
+        geometry,
+        history,
+        toggle_server.try_clone_listener()?,
+        resident,
+    ) {
+        error!("Error creating GTK overlay: {e:?}");
+    }
+    gtk_overlay::reset_close_flags();
     Ok(())
 }
 
@@ -163,6 +167,27 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         warn!("Failed to connect to backend for history prefetch");
+    }
+
+    // Hyprland can report the pointer position directly; no capture layer needed.
+    if let Some(location) = hyprland::pointer_location() {
+        let defaults = State::new();
+        return show_overlay(
+            gtk_overlay::OverlayGeometry {
+                x: location.x,
+                y: location.y,
+                overlay_width: defaults.overlay_width,
+                overlay_height: defaults.overlay_height,
+                monitor_width: location.monitor_width,
+                monitor_height: location.monitor_height,
+                monitor: Some(location.monitor),
+            },
+            state.clipboard_history,
+            &toggle_server,
+            // Hyprland can tell us where the pointer is at any later time, so
+            // the overlay stays alive hidden and later opens skip GTK startup.
+            true,
+        );
     }
 
     // Initialize Wayland for layer shell capture

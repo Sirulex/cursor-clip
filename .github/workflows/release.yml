@@ -148,6 +148,7 @@ jobs:
           staging="dist/$archive"
 
           install -Dm755 "target/$TARGET/release/$BINARY_NAME" "$staging/$BINARY_NAME"
+          install -Dm755 "target/$TARGET/release/$BINARY_NAME-toggle" "$staging/$BINARY_NAME-toggle"
           install -Dm644 LICENSE "$staging/LICENSE"
           install -Dm644 README.md "$staging/README.md"
 

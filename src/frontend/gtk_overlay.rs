@@ -9,21 +9,22 @@ use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita::{self as adw, prelude::*};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
+use crate::frontend::hyprland;
 use crate::frontend::toggle::ToggleServer;
+use std::os::fd::AsRawFd;
 
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct OverlayGeometry {
     pub x: f64,
     pub y: f64,
@@ -31,12 +32,16 @@ pub struct OverlayGeometry {
     pub overlay_height: i32,
     pub monitor_width: i32,
     pub monitor_height: i32,
+    /// Output connector to open on; `None` lets the compositor choose
+    pub monitor: Option<String>,
 }
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
     static OVERLAY_WINDOW: RefCell<Option<adw::ApplicationWindow>> = const { RefCell::new(None) };
     static OVERLAY_APP: RefCell<Option<Application>> = const { RefCell::new(None) };
+    // Set when the overlay stays alive between uses (hidden instead of quit).
+    static RESIDENT: RefCell<Option<ResidentOverlay>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,11 +56,15 @@ struct UserConfig {
 
 #[derive(Clone)]
 struct HistoryListState {
-    items: Rc<RefCell<Vec<ClipboardItemPreview>>>,
+    // Ordered like the list rows; search hides rows through the filter instead
+    // of rebuilding them, so built rows and their layout stay alive.
     all_items: Rc<RefCell<Vec<ClipboardItemPreview>>>,
     search_query: Rc<RefCell<String>>,
     show_trash: Rc<RefCell<bool>>,
     show_pin: Rc<RefCell<bool>>,
+    // Bumped on every rebuild so an unfinished incremental fill stops.
+    render_generation: Rc<Cell<u64>>,
+    placeholder: Label,
 }
 
 struct OverlayContent {
@@ -63,7 +72,28 @@ struct OverlayContent {
     list_box: gtk4::ListBox,
     history_state: HistoryListState,
     search_entry: SearchEntry,
-    search_revealer: Revealer,
+    menu_revealer: Revealer,
+}
+
+/// The built overlay: window plus the parts that are reset on every show.
+struct OverlayUi {
+    window: adw::ApplicationWindow,
+    card: Overlay,
+    list_box: gtk4::ListBox,
+    history_state: HistoryListState,
+    search_entry: SearchEntry,
+    menu_revealer: Revealer,
+    /// Pointer position the card is anchored to, relative to the output
+    card_target: Rc<Cell<(f64, f64)>>,
+    overlay_width: i32,
+    overlay_height: i32,
+}
+
+/// A hidden overlay kept in memory with its rows already laid out, so the
+/// next open only has to apply history changes and map the window.
+struct ResidentOverlay {
+    ui: OverlayUi,
+    _hold: gtk4::gio::ApplicationHoldGuard,
 }
 
 impl Default for UserConfig {
@@ -126,6 +156,12 @@ pub fn reset_close_flags() {
 
 // Centralized quit path to avoid double-close reentrancy and ensure flags + app quit
 fn request_quit() {
+    // A resident overlay is only hidden; it stays ready for the next open.
+    if RESIDENT.with(|resident| resident.borrow().is_some()) {
+        hide_resident_overlay();
+        return;
+    }
+
     CLOSE_REQUESTED.store(true, Ordering::Relaxed);
     // Prefer quitting the application (cleaner teardown) over closing the window directly
     OVERLAY_APP.with(|a| {
@@ -142,10 +178,13 @@ fn request_quit() {
     });
 }
 
+/// Run the overlay. With `resident`, closing hides the window and later
+/// toggle requests show it again instead of starting a new process.
 pub fn init_clipboard_overlay(
     geometry: OverlayGeometry,
     prefetched_items: Vec<ClipboardItemPreview>,
     toggle_listener: UnixListener,
+    resident: bool,
 ) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
         adw::init().expect("Failed to initialize libadwaita");
@@ -167,7 +206,8 @@ pub fn init_clipboard_overlay(
             return;
         }
 
-        let window = create_layer_shell_window(&app_clone, geometry, prefetched_items.clone());
+        let ui = create_layer_shell_window(&app_clone, geometry.clone(), prefetched_items.clone());
+        let window = ui.window.clone();
 
         // Store the window in our thread-local storage
         OVERLAY_WINDOW.with(|w| {
@@ -179,6 +219,14 @@ pub fn init_clipboard_overlay(
         });
 
         window.present();
+        if resident {
+            RESIDENT.with(|slot| {
+                *slot.borrow_mut() = Some(ResidentOverlay {
+                    ui,
+                    _hold: app_clone.hold(),
+                });
+            });
+        }
 
         debug!(
             "Libadwaita overlay window created at ({}, {})",
@@ -187,28 +235,51 @@ pub fn init_clipboard_overlay(
     });
 
     // Keep listening while GTK owns the main loop. A new cursor-clip process
-    // connects here, causing this overlay to quit instead of queueing another.
-    let toggle_source =
-        gtk4::glib::source::timeout_add_local(Duration::from_millis(10), move || {
-            match ToggleServer::take_toggle_request_from(&toggle_listener) {
-                Ok(true) => request_quit(),
-                Ok(false) => return gtk4::glib::ControlFlow::Continue,
+    // connects here: a resident overlay toggles its visibility, otherwise the
+    // overlay quits instead of queueing another. The wait happens on a helper
+    // thread so an idle overlay never wakes up.
+    std::thread::spawn(move || {
+        loop {
+            let mut poll_fd = libc::pollfd {
+                fd: toggle_listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: poll_fd is a single initialized pollfd that outlives the call.
+            if unsafe { libc::poll(&mut poll_fd, 1, -1) } < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+            let requests = match ToggleServer::count_toggle_requests_from(&toggle_listener) {
+                Ok(requests) => requests,
                 Err(error) => {
                     warn!("Failed to receive overlay toggle request: {error}");
-                    request_quit();
+                    usize::from(!resident)
                 }
+            };
+            if requests == 0 {
+                continue;
             }
-            gtk4::glib::ControlFlow::Break
-        });
+            if !resident {
+                gtk4::glib::MainContext::default().invoke(request_quit);
+                break;
+            }
+            // Every request flips visibility; two quick presses cancel out.
+            if requests % 2 == 1 {
+                gtk4::glib::MainContext::default().invoke(toggle_resident_overlay);
+            }
+        }
+    });
 
     // Run the application
     app.run_with_args::<String>(&[]);
 
-    if !is_close_requested() {
-        toggle_source.remove();
-    }
-
     // Belt-and-suspenders: clear TLS after run returns
+    RESIDENT.with(|slot| {
+        slot.borrow_mut().take();
+    });
     OVERLAY_WINDOW.with(|w| {
         *w.borrow_mut() = None;
     });
@@ -228,7 +299,7 @@ fn create_layer_shell_window(
     app: &Application,
     geometry: OverlayGeometry,
     prefetched_items: Vec<ClipboardItemPreview>,
-) -> adw::ApplicationWindow {
+) -> OverlayUi {
     let OverlayGeometry {
         x,
         y,
@@ -236,6 +307,7 @@ fn create_layer_shell_window(
         overlay_height,
         monitor_width,
         monitor_height,
+        monitor,
     } = geometry;
 
     // Create the main window using Adwaita ApplicationWindow
@@ -244,6 +316,7 @@ fn create_layer_shell_window(
         .title("Clipboard History")
         .decorated(false)
         .build();
+    window.add_css_class("cursor-clip-backdrop");
 
     // Initialize layer shell for this window
     window.init_layer_shell();
@@ -252,32 +325,13 @@ fn create_layer_shell_window(
     window.set_layer(Layer::Overlay);
     window.set_namespace(Some("cursor-clip"));
 
-    // Anchor to top-left corner for precise positioning
-    window.set_anchor(Edge::Top, true);
-    window.set_anchor(Edge::Left, true);
-
-    // Set margins to position the window at the specified coordinates
-    window.set_margin(Edge::Top, y as i32);
-    window.set_margin(Edge::Left, x as i32);
-
-    // clamp with the real allocated size to avoid off-screen spawn.
-    if monitor_width > 0 && monitor_height > 0 {
-        window.connect_map(move |mapped_window| {
-            let mapped_window = mapped_window.clone();
-            gtk4::glib::idle_add_local_once(move || {
-                let margin = 5.0;
-                let window_width = mapped_window.allocated_width().max(overlay_width) as f64;
-                let window_height = mapped_window.allocated_height().max(overlay_height) as f64;
-
-                let max_x = (monitor_width as f64 - window_width - margin).max(margin);
-                let max_y = (monitor_height as f64 - window_height - margin).max(margin);
-                let clamped_x = x.clamp(margin, max_x) as i32;
-                let clamped_y = y.clamp(margin, max_y) as i32;
-
-                mapped_window.set_margin(Edge::Top, clamped_y);
-                mapped_window.set_margin(Edge::Left, clamped_x);
-            });
-        });
+    // Cover the whole output with a transparent surface. The card is placed
+    // inside it at the pointer, and a click on the transparent area closes it.
+    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+        window.set_anchor(edge, true);
+    }
+    if let Some(gdk_monitor) = monitor.as_deref().and_then(find_gdk_monitor) {
+        window.set_monitor(Some(&gdk_monitor));
     }
 
     window.set_exclusive_zone(-1);
@@ -290,16 +344,87 @@ fn create_layer_shell_window(
 
     // Create and set content (also obtain list_box for navigation)
     let content = generate_overlay_content(prefetched_items, overlay_width, overlay_height);
-    window.set_content(Some(&content.overlay));
+    let card = content.overlay.clone();
+    card.add_css_class("cursor-clip-card");
+    card.set_overflow(gtk4::Overflow::Hidden);
+    card.set_halign(Align::Start);
+    card.set_valign(Align::Start);
 
-    // Add key controller (Esc/j/k/Enter navigation & activation)
+    let root = Box::new(Orientation::Vertical, 0);
+    root.set_hexpand(true);
+    root.set_vexpand(true);
+    root.append(&card);
+    window.set_content(Some(&root));
+
+    // Position the card before the first frame using its natural size...
+    let (_, natural_width, _, _) = card.measure(Orientation::Horizontal, -1);
+    let (_, natural_height, _, _) = card.measure(Orientation::Vertical, natural_width);
+    place_card(
+        &card,
+        x,
+        y,
+        natural_width.max(overlay_width),
+        natural_height.max(overlay_height),
+        monitor_width,
+        monitor_height,
+    );
+
+    // ...then clamp again with the real allocation, which also covers the
+    // case where the output size was unknown up front.
+    let card_target = Rc::new(Cell::new((x, y)));
+    window.connect_map({
+        let card = card.clone();
+        let card_target = card_target.clone();
+        move |mapped_window| {
+            let mapped_window = mapped_window.clone();
+            let card = card.clone();
+            let (x, y) = card_target.get();
+            gtk4::glib::idle_add_local_once(move || {
+                place_card(
+                    &card,
+                    x,
+                    y,
+                    card.width().max(overlay_width),
+                    card.height().max(overlay_height),
+                    mapped_window.width(),
+                    mapped_window.height(),
+                );
+            });
+        }
+    });
+
+    let backdrop_click = gtk4::GestureClick::new();
+    backdrop_click.set_button(0);
+    backdrop_click.connect_pressed({
+        let card_widget: gtk4::Widget = card.clone().upcast();
+        move |gesture, _, click_x, click_y| {
+            let Some(widget) = gesture.widget() else {
+                return;
+            };
+            let inside_card = widget
+                .pick(click_x, click_y, gtk4::PickFlags::DEFAULT)
+                .is_some_and(|picked| picked == card_widget || picked.is_ancestor(&card_widget));
+            if !inside_card {
+                debug!("Click outside the overlay card - closing");
+                request_quit();
+            }
+        }
+    });
+    window.add_controller(backdrop_click);
+
+    // Esc/arrows/Enter/Delete handling and type-to-search
     let key_controller = generate_key_controller(
         &content.list_box,
         &content.history_state,
         &content.search_entry,
-        &content.search_revealer,
     );
     window.add_controller(key_controller);
+
+    // Start in the search field so typing filters right away.
+    window.connect_map({
+        let search_entry = content.search_entry.clone();
+        move |_| focus_search_entry(&search_entry)
+    });
 
     // Add close request handler to ensure any window close goes through our logic
     window.connect_close_request(|_window| {
@@ -309,7 +434,119 @@ fn create_layer_shell_window(
         gtk4::glib::Propagation::Stop
     });
 
-    window
+    OverlayUi {
+        window,
+        card,
+        list_box: content.list_box,
+        history_state: content.history_state,
+        search_entry: content.search_entry,
+        menu_revealer: content.menu_revealer,
+        card_target,
+        overlay_width,
+        overlay_height,
+    }
+}
+
+fn toggle_resident_overlay() {
+    let visible = RESIDENT.with(|resident| {
+        resident
+            .borrow()
+            .as_ref()
+            .is_some_and(|resident| resident.ui.window.is_visible())
+    });
+    if visible {
+        hide_resident_overlay();
+    } else {
+        show_resident_overlay();
+    }
+}
+
+fn hide_resident_overlay() {
+    RESIDENT.with(|resident| {
+        if let Some(resident) = resident.borrow().as_ref() {
+            resident.ui.window.set_visible(false);
+        }
+    });
+}
+
+/// Re-open the kept overlay: apply history changes to the existing rows,
+/// reset search/menu/scroll, move the card to the pointer and map it.
+fn show_resident_overlay() {
+    RESIDENT.with(|resident| {
+        let resident = resident.borrow();
+        let Some(resident) = resident.as_ref() else {
+            return;
+        };
+        let ui = &resident.ui;
+
+        match FrontendClient::new().and_then(|mut client| client.get_history()) {
+            Ok(items) => *ui.history_state.all_items.borrow_mut() = items,
+            Err(e) => warn!("Failed to refresh clipboard history: {e}"),
+        }
+
+        ui.history_state.search_query.borrow_mut().clear();
+        ui.search_entry.set_text("");
+        ui.menu_revealer.set_reveal_child(false);
+        ui.menu_revealer.set_visible(false);
+        rebuild_list(&ui.list_box, &ui.history_state);
+        refresh_time_labels(&ui.list_box, &ui.history_state);
+        if let Some(scrolled) = ui
+            .list_box
+            .ancestor(gtk4::ScrolledWindow::static_type())
+            .and_then(|widget| widget.downcast::<gtk4::ScrolledWindow>().ok())
+        {
+            scrolled.vadjustment().set_value(0.0);
+        }
+
+        if let Some(location) = hyprland::pointer_location() {
+            if let Some(gdk_monitor) = find_gdk_monitor(&location.monitor) {
+                ui.window.set_monitor(Some(&gdk_monitor));
+            }
+            ui.card_target.set((location.x, location.y));
+            place_card(
+                &ui.card,
+                location.x,
+                location.y,
+                ui.card.width().max(ui.overlay_width),
+                ui.card.height().max(ui.overlay_height),
+                location.monitor_width,
+                location.monitor_height,
+            );
+        }
+
+        ui.window.present();
+    });
+}
+
+fn find_gdk_monitor(connector: &str) -> Option<gtk4::gdk::Monitor> {
+    let display = gtk4::gdk::Display::default()?;
+    let monitors = display.monitors();
+    (0..monitors.n_items())
+        .filter_map(|index| monitors.item(index))
+        .filter_map(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
+        .find(|monitor| monitor.connector().as_deref() == Some(connector))
+}
+
+/// Keep the card at the pointer but fully on screen.
+fn place_card(
+    card: &Overlay,
+    x: f64,
+    y: f64,
+    card_width: i32,
+    card_height: i32,
+    area_width: i32,
+    area_height: i32,
+) {
+    let (left, top) = if area_width > 0 && area_height > 0 {
+        let margin = 5.0;
+        let max_x = (area_width as f64 - card_width as f64 - margin).max(margin);
+        let max_y = (area_height as f64 - card_height as f64 - margin).max(margin);
+        (x.clamp(margin, max_x), y.clamp(margin, max_y))
+    } else {
+        (x, y)
+    };
+    card.set_margin_start(left as i32);
+    card.set_margin_top(top as i32);
 }
 
 /// Create a Windows 11-style clipboard history list with provided (prefetched) backend data.
@@ -454,32 +691,21 @@ fn generate_overlay_content(
 
     main_box.append(&header_bar);
 
-    let search_revealer = Revealer::new();
-    search_revealer.set_reveal_child(false);
-    search_revealer.set_visible(false);
-    search_revealer.set_transition_duration(120);
-    search_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
-
+    // Always visible: the overlay opens with focus here so typing searches.
     let search_entry = SearchEntry::new();
-    search_entry.set_placeholder_text(Some("Search clipboard history"));
+    search_entry.set_placeholder_text(Some("Type to search"));
     search_entry.set_margin_start(12);
     search_entry.set_margin_end(12);
     search_entry.set_margin_bottom(6);
     search_entry.add_css_class("clipboard-search");
-    search_revealer.set_child(Some(&search_entry));
-    main_box.append(&search_revealer);
+    // Filtering ~100 rows is cheap; react to every keystroke immediately.
+    search_entry.set_property("search-delay", 0u32);
+    main_box.append(&search_entry);
 
-    let search_revealer_for_button = search_revealer.clone();
     let search_entry_for_button = search_entry.clone();
     search_button.connect_clicked(move |_| {
-        let next_state = !search_revealer_for_button.is_child_revealed();
-        search_revealer_for_button.set_visible(next_state);
-        search_revealer_for_button.set_reveal_child(next_state);
-
-        if next_state {
-            search_entry_for_button.grab_focus();
-            search_entry_for_button.select_region(0, -1);
-        }
+        search_entry_for_button.grab_focus();
+        search_entry_for_button.select_region(0, -1);
     });
 
     // Create scrolled window for the clipboard list
@@ -510,13 +736,40 @@ fn generate_overlay_content(
         }
     }
 
+    let placeholder = Label::new(None);
+    placeholder.add_css_class("dim-label");
+    placeholder.set_margin_top(20);
+    placeholder.set_margin_bottom(20);
+    list_box.set_placeholder(Some(&placeholder));
+
     let history_state = HistoryListState {
-        items: Rc::new(RefCell::new(Vec::new())),
         all_items: Rc::new(RefCell::new(prefetched_items)),
         search_query: Rc::new(RefCell::new(String::new())),
         show_trash: show_trash_state,
         show_pin: show_pin_state,
+        render_generation: Rc::new(Cell::new(0)),
+        placeholder,
     };
+
+    let history_state_for_filter = history_state.clone();
+    list_box.set_filter_func(move |row| {
+        let query = history_state_for_filter
+            .search_query
+            .borrow()
+            .trim()
+            .to_lowercase();
+        if query.is_empty() {
+            return true;
+        }
+        row_item_id(row).is_none_or(|item_id| {
+            history_state_for_filter
+                .all_items
+                .borrow()
+                .iter()
+                .find(|item| item.item_id == item_id)
+                .is_some_and(|item| item_matches_query(item, &query))
+        })
+    });
 
     rebuild_list(&list_box, &history_state);
     select_first_row(&list_box);
@@ -525,10 +778,11 @@ fn generate_overlay_content(
     let history_state_for_activation = history_state.clone();
     let config_for_activation = config_state.clone();
     list_box.connect_row_activated(move |_, row| {
-        let index = row.index() as usize;
-        let items = history_state_for_activation.items.borrow();
-        if index < items.len() {
-            let item = &items[index];
+        let Some(item_id) = row_item_id(row) else {
+            return;
+        };
+        let items = history_state_for_activation.all_items.borrow();
+        if let Some(item) = items.iter().find(|item| item.item_id == item_id) {
             let instant_paste = config_for_activation.borrow().instant_paste;
             debug!(
                 "Activated clipboard item ID {}: {}",
@@ -626,23 +880,13 @@ fn generate_overlay_content(
     let history_state_for_search = history_state.clone();
     search_entry.connect_search_changed(move |entry| {
         *history_state_for_search.search_query.borrow_mut() = entry.text().to_string();
-        rebuild_list(&list_box_for_search, &history_state_for_search);
-        select_first_row_without_focus(&list_box_for_search);
+        apply_search_filter(&list_box_for_search, &history_state_for_search);
     });
 
     let list_box_for_search_activate = list_box.clone();
     search_entry.connect_activate(move |_| {
         if let Some(row) = list_box_for_search_activate.selected_row() {
             row.emit_by_name::<()>("activate", &[]);
-        }
-    });
-
-    let list_box_for_stop_search = list_box.clone();
-    search_entry.connect_stop_search(move |_| {
-        if list_box_for_stop_search.selected_row().is_none() {
-            select_first_row(&list_box_for_stop_search);
-        } else {
-            list_box_for_stop_search.grab_focus();
         }
     });
 
@@ -715,157 +959,190 @@ fn generate_overlay_content(
         list_box,
         history_state,
         search_entry,
-        search_revealer,
+        menu_revealer,
     }
 }
 
-/// Build the key controller handling Esc (close), j/k or arrows (navigate) and Enter (activate)
+/// Build the key controller: Esc clears the search or closes, arrows/Enter
+/// navigate and activate, Delete removes and Ctrl+P pins the selected item.
+/// Any other typing goes to the search field, wherever the focus is.
 fn generate_key_controller(
     list_box: &gtk4::ListBox,
     history_state: &HistoryListState,
     search_entry: &SearchEntry,
-    search_revealer: &Revealer,
 ) -> gtk4::EventControllerKey {
     let controller = gtk4::EventControllerKey::new();
+    // Run before the focused widget so Esc and type-to-search always work.
+    controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
     let list_box_for_keys = list_box.clone();
     let history_state_for_keys = history_state.clone();
     let search_entry_for_keys = search_entry.clone();
-    let search_revealer_for_keys = search_revealer.clone();
-    controller.connect_key_pressed(move |_, key, _, _| {
-        use gtk4::gdk::Key;
-        match key {
-            Key::Escape => {
-                if search_revealer_for_keys.is_child_revealed() && search_entry_for_keys.has_focus()
-                {
-                    if list_box_for_keys.selected_row().is_none() {
-                        select_first_row(&list_box_for_keys);
-                    } else {
-                        list_box_for_keys.grab_focus();
-                    }
-                    return gtk4::glib::Propagation::Stop;
-                }
+    controller.connect_key_pressed(move |controller, key, _, state| {
+        use gtk4::gdk::{Key, ModifierType};
+
+        if key == Key::Escape {
+            if search_entry_for_keys.text().is_empty() {
                 request_quit();
+            } else {
+                search_entry_for_keys.set_text("");
+                focus_search_entry(&search_entry_for_keys);
+            }
+            return gtk4::glib::Propagation::Stop;
+        }
+
+        // Letters now go to the search field, so vim-style navigation moves
+        // to Ctrl+J/Ctrl+K and works from the search field as well.
+        if state.contains(ModifierType::CONTROL_MASK) && matches!(key, Key::j | Key::J) {
+            select_next_row(&list_box_for_keys, false);
+            return gtk4::glib::Propagation::Stop;
+        }
+        if state.contains(ModifierType::CONTROL_MASK) && matches!(key, Key::k | Key::K) {
+            if !select_previous_row(&list_box_for_keys, false) {
+                focus_search_entry(&search_entry_for_keys);
+            }
+            return gtk4::glib::Propagation::Stop;
+        }
+
+        // The search field handles its own editing, Up/Down and Enter.
+        if has_focus_within(&search_entry_for_keys) {
+            return gtk4::glib::Propagation::Proceed;
+        }
+
+        // Row shortcuts apply when a row itself is focused, not one of its
+        // inline delete/pin buttons (those keep Enter/Space for activation).
+        let focused = controller
+            .widget()
+            .and_then(|widget| widget.root())
+            .and_then(|root| root.focus());
+        let focus_on_row = has_focus_within(&list_box_for_keys)
+            && focused.is_none_or(|widget| {
+                widget.is::<gtk4::ListBoxRow>() || widget.is::<gtk4::ListBox>()
+            });
+        let has_shortcut_modifier = state.intersects(
+            ModifierType::CONTROL_MASK | ModifierType::ALT_MASK | ModifierType::SUPER_MASK,
+        );
+
+        match key {
+            Key::Delete | Key::KP_Delete if focus_on_row => {
+                delete_selected_item(&list_box_for_keys, &history_state_for_keys);
                 gtk4::glib::Propagation::Stop
             }
-            Key::slash => {
-                if search_entry_for_keys.has_focus() {
-                    return gtk4::glib::Propagation::Proceed;
-                }
-                search_revealer_for_keys.set_visible(true);
-                search_revealer_for_keys.set_reveal_child(true);
-                search_entry_for_keys.grab_focus();
+            Key::p | Key::P if focus_on_row && state.contains(ModifierType::CONTROL_MASK) => {
+                toggle_pin_selected_item(&list_box_for_keys, &history_state_for_keys);
                 gtk4::glib::Propagation::Stop
             }
-            Key::j | Key::J | Key::Down => {
-                if matches!(key, Key::j | Key::J) && search_entry_for_keys.has_focus() {
-                    return gtk4::glib::Propagation::Proceed;
+            Key::Up | Key::KP_Up if focus_on_row => {
+                if !select_previous_row(&list_box_for_keys, false) {
+                    focus_search_entry(&search_entry_for_keys);
                 }
-                if key == Key::Down && search_entry_for_keys.has_focus() {
-                    list_box_for_keys.grab_focus();
-                }
+                gtk4::glib::Propagation::Stop
+            }
+            Key::Down | Key::KP_Down if focus_on_row => {
                 select_next_row(&list_box_for_keys, false);
                 gtk4::glib::Propagation::Stop
             }
-            Key::k | Key::K | Key::Up => {
-                if matches!(key, Key::k | Key::K) && search_entry_for_keys.has_focus() {
-                    return gtk4::glib::Propagation::Proceed;
-                }
-                if key == Key::Up && search_entry_for_keys.has_focus() {
-                    list_box_for_keys.grab_focus();
-                }
-                select_previous_row(&list_box_for_keys, false);
-                gtk4::glib::Propagation::Stop
-            }
-            Key::Return | Key::KP_Enter => {
+            Key::Return | Key::KP_Enter if focus_on_row => {
                 if let Some(row) = list_box_for_keys.selected_row() {
                     row.emit_by_name::<()>("activate", &[]);
-                    return gtk4::glib::Propagation::Stop;
                 }
-                gtk4::glib::Propagation::Proceed
+                gtk4::glib::Propagation::Stop
             }
-            Key::Delete => {
-                if search_entry_for_keys.has_focus() {
-                    return gtk4::glib::Propagation::Proceed;
+            // Space keeps activating focused buttons and checkboxes.
+            Key::space if !focus_on_row => gtk4::glib::Propagation::Proceed,
+            _ if !has_shortcut_modifier
+                && (key == Key::BackSpace || key.to_unicode().is_some_and(|c| !c.is_control())) =>
+            {
+                focus_search_entry(&search_entry_for_keys);
+                if let Some(text) = search_entry_for_keys.delegate() {
+                    controller.forward(&text);
                 }
-                if let Some(row) = list_box_for_keys.selected_row() {
-                    let index = row.index() as usize;
-                    let item_id = {
-                        let items = history_state_for_keys.items.borrow();
-                        if index >= items.len() {
-                            return gtk4::glib::Propagation::Stop;
-                        }
-                        items[index].item_id
-                    };
-
-                    match FrontendClient::new() {
-                        Ok(mut client) => {
-                            if let Err(e) = client.delete_item_by_id(item_id) {
-                                error!("Error deleting clipboard item by ID: {}", e);
-                                return gtk4::glib::Propagation::Stop;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error creating frontend client: {}", e);
-                            return gtk4::glib::Propagation::Stop;
-                        }
-                    }
-
-                    {
-                        let mut items = history_state_for_keys.all_items.borrow_mut();
-                        if let Some(index) = items.iter().position(|item| item.item_id == item_id) {
-                            items.remove(index);
-                        }
-                    }
-
-                    rebuild_list(&list_box_for_keys, &history_state_for_keys);
-                    select_first_row(&list_box_for_keys);
-                    return gtk4::glib::Propagation::Stop;
-                }
-                gtk4::glib::Propagation::Proceed
-            }
-            Key::p | Key::P => {
-                if search_entry_for_keys.has_focus() {
-                    return gtk4::glib::Propagation::Proceed;
-                }
-                if let Some(row) = list_box_for_keys.selected_row() {
-                    let index = row.index() as usize;
-                    let item_id = {
-                        let items = history_state_for_keys.items.borrow();
-                        if index >= items.len() {
-                            return gtk4::glib::Propagation::Stop;
-                        }
-                        items[index].item_id
-                    };
-
-                    let Some(pinned) = next_pinned_state(&history_state_for_keys, item_id) else {
-                        return gtk4::glib::Propagation::Stop;
-                    };
-
-                    match FrontendClient::new() {
-                        Ok(mut client) => {
-                            if let Err(e) = client.set_pinned(item_id, pinned) {
-                                error!("Error updating pinned state: {}", e);
-                                return gtk4::glib::Propagation::Stop;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error creating frontend client: {}", e);
-                            return gtk4::glib::Propagation::Stop;
-                        }
-                    }
-
-                    apply_pinned_state(&history_state_for_keys, item_id, pinned);
-                    rebuild_list(&list_box_for_keys, &history_state_for_keys);
-                    select_row_by_item_id(&list_box_for_keys, &history_state_for_keys, item_id);
-                    debug!("Updated pinned state for clipboard item ID {}", item_id);
-                    return gtk4::glib::Propagation::Stop;
-                }
-                gtk4::glib::Propagation::Proceed
+                gtk4::glib::Propagation::Stop
             }
             _ => gtk4::glib::Propagation::Proceed,
         }
     });
     controller
+}
+
+/// Focus the search field without selecting its text, so typing appends.
+fn focus_search_entry(search_entry: &SearchEntry) {
+    match search_entry
+        .delegate()
+        .and_then(|editable| editable.downcast::<gtk4::Text>().ok())
+    {
+        Some(text) => {
+            text.grab_focus_without_selecting();
+        }
+        None => {
+            search_entry.grab_focus();
+        }
+    }
+}
+
+fn has_focus_within(widget: &impl IsA<gtk4::Widget>) -> bool {
+    widget
+        .state_flags()
+        .contains(gtk4::StateFlags::FOCUS_WITHIN)
+}
+
+fn selected_item_id(list_box: &gtk4::ListBox) -> Option<u64> {
+    row_item_id(&list_box.selected_row()?)
+}
+
+fn delete_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+    let Some(item_id) = selected_item_id(list_box) else {
+        return;
+    };
+
+    match FrontendClient::new() {
+        Ok(mut client) => {
+            if let Err(e) = client.delete_item_by_id(item_id) {
+                error!("Error deleting clipboard item by ID: {}", e);
+                return;
+            }
+        }
+        Err(e) => {
+            error!("Error creating frontend client: {}", e);
+            return;
+        }
+    }
+
+    {
+        let mut items = history_state.all_items.borrow_mut();
+        if let Some(index) = items.iter().position(|item| item.item_id == item_id) {
+            items.remove(index);
+        }
+    }
+
+    rebuild_list(list_box, history_state);
+    select_first_row(list_box);
+}
+
+fn toggle_pin_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+    let Some(item_id) = selected_item_id(list_box) else {
+        return;
+    };
+    let Some(pinned) = next_pinned_state(history_state, item_id) else {
+        return;
+    };
+
+    match FrontendClient::new() {
+        Ok(mut client) => {
+            if let Err(e) = client.set_pinned(item_id, pinned) {
+                error!("Error updating pinned state: {}", e);
+                return;
+            }
+        }
+        Err(e) => {
+            error!("Error creating frontend client: {}", e);
+            return;
+        }
+    }
+
+    apply_pinned_state(history_state, item_id, pinned);
+    rebuild_list(list_box, history_state);
+    select_row_by_item_id(list_box, history_state, item_id);
+    debug!("Updated pinned state for clipboard item ID {}", item_id);
 }
 
 /// Apply custom CSS styling for modern GNOME-style rounded window
@@ -893,7 +1170,13 @@ fn apply_custom_styling(window: &adw::ApplicationWindow) {
 fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
     css_provider.load_from_data(if is_dark {
         "
-        window {
+        window.cursor-clip-backdrop {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        .cursor-clip-card {
             border-radius: 12px;
             background: #222226;
             background: @window_bg_color;
@@ -1045,7 +1328,13 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         "
     } else {
         "
-        window {
+        window.cursor-clip-backdrop {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        .cursor-clip-card {
             border-radius: 12px;
             background: #f6f7f9;
             background: @window_bg_color;
@@ -1209,6 +1498,7 @@ fn generate_listboxrow_from_preview(
 ) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::new();
     row.add_css_class("clipboard-item");
+    row.set_widget_name(&row_key(item));
 
     let main_box = Box::new(Orientation::Vertical, 6);
     main_box.set_margin_top(8);
@@ -1351,40 +1641,164 @@ fn generate_listboxrow_from_preview(
     row
 }
 
+/// Rows built before the first frame; enough to fill the visible part of the list.
+const INITIAL_ROWS: usize = 8;
+/// Rows added per frame afterwards.
+const ROWS_PER_FRAME: usize = 12;
+
+/// Bring the rows in line with `all_items`. Existing rows are reused and only
+/// new items get widgets; the first few are built now and the rest follow
+/// frame by frame so a cold start does not lay out every row before showing.
 fn rebuild_list(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
-    while let Some(child) = list_box.first_child() {
-        list_box.remove(&child);
+    let generation = history_state.render_generation.get().wrapping_add(1);
+    history_state.render_generation.set(generation);
+
+    let done = sync_rows(list_box, history_state, INITIAL_ROWS);
+    apply_search_filter(list_box, history_state);
+    if done {
+        return;
     }
 
-    let query = history_state.search_query.borrow().trim().to_lowercase();
-    let filtered_items: Vec<ClipboardItemPreview> = history_state
-        .all_items
-        .borrow()
-        .iter()
-        .filter(|item| item_matches_query(item, &query))
-        .cloned()
-        .collect();
+    let history_state = history_state.clone();
+    list_box.add_tick_callback(move |list_box, _| {
+        if history_state.render_generation.get() != generation {
+            return gtk4::glib::ControlFlow::Break;
+        }
+        let done = sync_rows(list_box, &history_state, ROWS_PER_FRAME);
+        // A search match may only exist once its row has been created.
+        if list_box.selected_row().filter(is_row_shown).is_none() {
+            select_first_row_without_focus(list_box);
+        }
+        if done {
+            gtk4::glib::ControlFlow::Break
+        } else {
+            gtk4::glib::ControlFlow::Continue
+        }
+    });
+}
 
-    {
-        let mut visible_items = history_state.items.borrow_mut();
-        *visible_items = filtered_items;
+/// One pass of row reconciliation creating at most `budget` new rows.
+/// Returns true once the rows match `all_items` exactly.
+fn sync_rows(list_box: &gtk4::ListBox, history_state: &HistoryListState, budget: usize) -> bool {
+    let items = history_state.all_items.borrow().clone();
+    let wanted: std::collections::HashSet<String> = items.iter().map(row_key).collect();
+
+    let mut existing = std::collections::HashMap::new();
+    for row in list_rows(list_box) {
+        let key = row.widget_name().to_string();
+        if wanted.contains(&key) && !existing.contains_key(&key) {
+            existing.insert(key, row);
+        } else {
+            list_box.remove(&row);
+        }
     }
 
     let show_trash = *history_state.show_trash.borrow();
     let show_pin = *history_state.show_pin.borrow();
-    for item in history_state.items.borrow().iter() {
+    let mut created = 0;
+    for (position, item) in items.iter().enumerate() {
+        let key = row_key(item);
+        let index = position as i32;
+        if list_box
+            .row_at_index(index)
+            .is_some_and(|row| row.widget_name() == key)
+        {
+            continue;
+        }
+        if let Some(row) = existing.get(&key) {
+            list_box.remove(row);
+            list_box.insert(row, index);
+            continue;
+        }
+        if created == budget {
+            return false;
+        }
         let row =
             generate_listboxrow_from_preview(item, list_box, history_state, show_trash, show_pin);
-        list_box.append(&row);
+        list_box.insert(&row, index);
+        created += 1;
     }
+    true
+}
 
-    if history_state.items.borrow().is_empty() {
-        list_box.append(&make_placeholder_row_with_message(if query.is_empty() {
+fn apply_search_filter(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+    list_box.invalidate_filter();
+    history_state
+        .placeholder
+        .set_label(if history_state.all_items.borrow().is_empty() {
             "No clipboard history yet"
         } else {
             "No matches found"
-        }));
+        });
+    select_first_row_without_focus(list_box);
+}
+
+/// Row widget name: item id, pinned state and a hash of what the row shows.
+/// A pin change rebuilds the row, and so does an id that the daemon reused
+/// for different content (ids restart when history is not persistent).
+fn row_key(item: &ClipboardItemPreview) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    item.timestamp.hash(&mut hasher);
+    item.content_preview.hash(&mut hasher);
+    item.thumbnail.as_deref().hash(&mut hasher);
+    format!(
+        "{}:{}:{:016x}",
+        item.item_id,
+        u8::from(item.pinned),
+        hasher.finish()
+    )
+}
+
+fn row_item_id(row: &gtk4::ListBoxRow) -> Option<u64> {
+    row.widget_name().split(':').next()?.parse().ok()
+}
+
+fn list_rows(list_box: &gtk4::ListBox) -> Vec<gtk4::ListBoxRow> {
+    let mut rows = Vec::new();
+    let mut child = list_box.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk4::ListBoxRow>() {
+            rows.push(row);
+        }
     }
+    rows
+}
+
+/// Rows hidden by the search filter are skipped by keyboard navigation.
+fn is_row_shown(row: &gtk4::ListBoxRow) -> bool {
+    row.is_child_visible() && row.is_selectable()
+}
+
+/// Relative times ("5 minutes ago") of reused rows go stale while hidden.
+fn refresh_time_labels(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+    let items = history_state.all_items.borrow();
+    for row in list_rows(list_box) {
+        let Some(item) = row_item_id(&row).and_then(|id| items.iter().find(|i| i.item_id == id))
+        else {
+            continue;
+        };
+        if let Some(label) = find_descendant_with_class(row.upcast_ref(), "clipboard-time")
+            .and_then(|widget| widget.downcast::<Label>().ok())
+        {
+            label.set_label(&format_timestamp(item.timestamp));
+        }
+    }
+}
+
+fn find_descendant_with_class(widget: &gtk4::Widget, class_name: &str) -> Option<gtk4::Widget> {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.has_css_class(class_name) {
+            return Some(current);
+        }
+        if let Some(found) = find_descendant_with_class(&current, class_name) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
 }
 
 fn item_matches_query(item: &ClipboardItemPreview, query: &str) -> bool {
@@ -1405,64 +1819,65 @@ fn select_first_row_without_focus(list_box: &gtk4::ListBox) {
 }
 
 fn select_first_row_with_focus(list_box: &gtk4::ListBox, grab_focus: bool) -> bool {
-    if let Some(row) = list_box.row_at_index(0)
-        && row.is_selectable()
-    {
-        list_box.select_row(Some(&row));
-        if grab_focus {
-            row.grab_focus();
+    let Some(row) = list_rows(list_box).into_iter().find(is_row_shown) else {
+        list_box.unselect_all();
+        return false;
+    };
+    list_box.select_row(Some(&row));
+    if grab_focus {
+        row.grab_focus();
+    }
+    true
+}
+
+/// Next shown row after (`step` = 1) or before (`step` = -1) `index`.
+fn shown_row_from(list_box: &gtk4::ListBox, index: i32, step: i32) -> Option<gtk4::ListBoxRow> {
+    let mut index = index + step;
+    while let Some(row) = list_box.row_at_index(index) {
+        if is_row_shown(&row) {
+            return Some(row);
         }
+        index += step;
+    }
+    None
+}
+
+fn select_adjacent_row(list_box: &gtk4::ListBox, step: i32, wrap_to_first: bool) -> bool {
+    let Some(current) = list_box.selected_row().filter(is_row_shown) else {
+        return select_first_row_with_focus(list_box, true);
+    };
+    if let Some(row) = shown_row_from(list_box, current.index(), step) {
+        list_box.select_row(Some(&row));
+        row.grab_focus();
         return true;
     }
-    false
+    wrap_to_first && select_first_row_with_focus(list_box, true)
 }
 
 fn select_next_row(list_box: &gtk4::ListBox, wrap_to_first: bool) -> bool {
-    if let Some(current) = list_box.selected_row() {
-        let next_index = current.index() + 1;
-        if let Some(next_row) = list_box.row_at_index(next_index) {
-            list_box.select_row(Some(&next_row));
-            next_row.grab_focus();
-            return true;
-        }
-
-        return wrap_to_first && select_first_row_with_focus(list_box, true);
-    }
-
-    select_first_row_with_focus(list_box, true)
+    select_adjacent_row(list_box, 1, wrap_to_first)
 }
 
 fn select_previous_row(list_box: &gtk4::ListBox, wrap_to_first: bool) -> bool {
-    if let Some(current) = list_box.selected_row() {
-        if current.index() > 0 {
-            let prev_index = current.index() - 1;
-            if let Some(prev_row) = list_box.row_at_index(prev_index) {
-                list_box.select_row(Some(&prev_row));
-                prev_row.grab_focus();
-                return true;
-            }
-        }
-
-        return wrap_to_first && select_first_row_with_focus(list_box, true);
-    }
-
-    select_first_row_with_focus(list_box, true)
+    select_adjacent_row(list_box, -1, wrap_to_first)
 }
 
-fn select_row_by_item_id(list_box: &gtk4::ListBox, history_state: &HistoryListState, item_id: u64) {
-    let Some(index) = history_state
-        .items
-        .borrow()
-        .iter()
-        .position(|item| item.item_id == item_id)
-    else {
-        select_first_row(list_box);
-        return;
-    };
-
-    if let Some(row) = list_box.row_at_index(index as i32) {
-        list_box.select_row(Some(&row));
-        row.grab_focus();
+fn select_row_by_item_id(
+    list_box: &gtk4::ListBox,
+    _history_state: &HistoryListState,
+    item_id: u64,
+) {
+    match list_rows(list_box)
+        .into_iter()
+        .find(|row| row_item_id(row) == Some(item_id) && is_row_shown(row))
+    {
+        Some(row) => {
+            list_box.select_row(Some(&row));
+            row.grab_focus();
+        }
+        None => {
+            select_first_row(list_box);
+        }
     }
 }
 
@@ -1492,18 +1907,6 @@ fn apply_pinned_state(history_state: &HistoryListState, item_id: u64, pinned: bo
             .unwrap_or(items.len())
     };
     items.insert(insert_index, item);
-}
-
-fn make_placeholder_row_with_message(message: &str) -> gtk4::ListBoxRow {
-    let placeholder_row = gtk4::ListBoxRow::new();
-    let placeholder_label = Label::new(Some(message));
-    placeholder_label.add_css_class("dim-label");
-    placeholder_label.set_margin_top(20);
-    placeholder_label.set_margin_bottom(20);
-    placeholder_row.set_child(Some(&placeholder_label));
-    placeholder_row.set_selectable(false);
-    placeholder_row.set_activatable(false);
-    placeholder_row
 }
 
 fn set_delete_buttons_visible(list_box: &gtk4::ListBox, visible: bool) {

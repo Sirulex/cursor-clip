@@ -9,6 +9,10 @@ license = "GPL-3.0-only"
 name = "cursor-clip"
 path = "src/main.rs"
 
+[[bin]]
+name = "cursor-clip-toggle"
+path = "src/bin/cursor-clip-toggle.rs"
+
 [dependencies]
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client","staging"] }
