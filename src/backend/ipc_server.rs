@@ -12,6 +12,10 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
     let socket_dir = format!("{xdg_runtime_dir}/cursor-clip");
     std::fs::create_dir_all(&socket_dir)?;
 
+    // Only one daemon may own the socket and the clipboard store; a second one
+    // would wipe or garbage-collect the first one's data.
+    let _instance_lock = acquire_instance_lock(&socket_dir)?;
+
     // Remove existing socket if it exists
     let socket_path = format!("{socket_dir}/cursor-clip.sock");
     let _ = std::fs::remove_file(&socket_path);
@@ -119,4 +123,19 @@ async fn handle_client(
     }
 
     Ok(())
+}
+
+fn acquire_instance_lock(socket_dir: &str) -> Result<std::fs::File, Box<dyn std::error::Error>> {
+    use std::os::fd::AsRawFd;
+
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(format!("{socket_dir}/daemon.lock"))?;
+    // SAFETY: flock on a valid descriptor; the lock lives as long as the file.
+    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("another cursor-clip daemon is already running".into());
+    }
+    Ok(lock_file)
 }

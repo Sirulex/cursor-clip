@@ -10,8 +10,26 @@ pub struct ClipboardItem {
     pub timestamp: u64, // Unix timestamp
     #[serde(default)]
     pub pinned: bool,
-    pub mime_data: IndexMap<String, Bytes>, // content type -> payload bytes
+    // content type -> blob id; payloads live on disk in the clipboard store, not in memory
+    pub mime_blobs: IndexMap<String, String>,
     pub thumbnail: Option<Bytes>,
+}
+
+impl ClipboardItem {
+    /// Blob holding the representation used to detect duplicate copies.
+    pub fn primary_blob(&self) -> Option<&str> {
+        const PRIMARY_MIMES: [&str; 4] = [
+            "image/png",
+            "text/plain;charset=utf-8",
+            "text/plain",
+            "UTF8_STRING",
+        ];
+        PRIMARY_MIMES
+            .iter()
+            .find_map(|mime| self.mime_blobs.get(*mime))
+            .or_else(|| self.mime_blobs.values().next())
+            .map(String::as_str)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
