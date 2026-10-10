@@ -24,6 +24,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Pin or delete items**: Manage your history with ease
 - **Instant paste**: Option to immediately paste the selected item into the active application
 - **Persistent history**: Option to store clipboard history across sessions with automatic encryption
+- **Password-manager expiry**: Entries marked with `x-kde-passwordManagerHint` expire after two minutes.
 
 ### 🖱️ **Advanced Wayland Integration**
 - **Layer Shell Protocol**: Proper overlay positioning above all windows
@@ -196,7 +197,7 @@ Running the application requires a supported Wayland session (see Compositor Sup
 
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Toggle Overlay**: Run `cursor-clip-toggle` to open and close it (ideally bind it to a hotkey, e.g., Super+V). It is a tiny launcher that signals a running overlay and otherwise starts `cursor-clip`; running `cursor-clip` without arguments directly works too, it just starts slower because it loads GTK.
+2. **Toggle Overlay**: Run `cursor-clip-toggle` to open and close it (ideally bind it to a hotkey, e.g., Super+V). It is a tiny launcher that signals a running overlay and otherwise starts `cursor-clip`; running `cursor-clip` without arguments directly works too, it just starts slower because it loads GTK the old way (still kept for existing workflows). This backwards compatibility will be removed in a future version.
    - On Hyprland the overlay stays alive in the background after closing, with its rows already laid out, so later opens take a few milliseconds instead of a full GTK start.
 3. **Trigger**: Your mouse position is automatically captured
 4. **View History**: The clipboard history window will appear at your cursor position, showing:

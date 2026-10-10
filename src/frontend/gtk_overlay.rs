@@ -573,8 +573,8 @@ fn generate_overlay_content(
     // Header bar
     let header_bar = adw::HeaderBar::new();
     let title = Label::new(Some("Clipboard History"));
-    title.set_margin_start(10);
-    title.set_margin_end(10);
+    title.set_margin_start(30);
+    title.set_margin_end(30);
     header_bar.set_title_widget(Some(&title));
     header_bar.set_centering_policy(adw::CenteringPolicy::Strict);
     // Layer-shell + undecorated windows can render built-in title buttons unreliably.
@@ -1698,6 +1698,36 @@ const ROWS_PER_FRAME: usize = 12;
 fn rebuild_list(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
     let generation = history_state.render_generation.get().wrapping_add(1);
     history_state.render_generation.set(generation);
+
+    // Also remove expired rows while the overlay stays open or resident.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    history_state
+        .all_items
+        .borrow_mut()
+        .retain(|item| item.expires_at.is_none_or(|expires| expires > now));
+    if let Some(deadline) = history_state
+        .all_items
+        .borrow()
+        .iter()
+        .filter_map(|item| item.expires_at)
+        .min()
+    {
+        let list_box = list_box.downgrade();
+        let history_state = history_state.clone();
+        gtk4::glib::timeout_add_local_once(
+            std::time::Duration::from_secs(deadline.saturating_sub(now)),
+            move || {
+                if history_state.render_generation.get() == generation
+                    && let Some(list_box) = list_box.upgrade()
+                {
+                    rebuild_list(&list_box, &history_state);
+                }
+            },
+        );
+    }
 
     let done = sync_rows(list_box, history_state, INITIAL_ROWS);
     apply_search_filter(list_box, history_state);

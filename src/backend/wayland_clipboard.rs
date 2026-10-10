@@ -19,6 +19,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
 
+use crate::shared::PASSWORD_HINT_MIME;
 use bytes::Bytes;
 use indexmap::IndexMap;
 use log::{debug, error, info, warn};
@@ -196,10 +197,19 @@ fn handle_selection_event<F>(
         state.mime_type_offers.clear();
     }
 
-    let mime_map = read_mime_data(mime_list);
+    // Presence is authoritative even when the hint payload is empty/unreadable.
+    let password_hint = mime_list.iter().any(|mime| mime == PASSWORD_HINT_MIME);
+    let mut mime_map = read_mime_data(mime_list);
+    if password_hint && !mime_map.is_empty() {
+        mime_map
+            .entry(PASSWORD_HINT_MIME.to_string())
+            .or_insert_with(|| Bytes::from_static(b"secret"));
+    }
     if !mime_map.is_empty() {
         let mut state = wrapper.backend_state.lock().unwrap();
         if let Some(new_id) = state.add_clipboard_item_from_mime_map(mime_map)
+            // Let the password manager retain ownership and clear its own selection.
+            && !password_hint
             && !state.monitor_only
             && !state.suppress_next_selection_read
         {
@@ -315,6 +325,7 @@ fn handle_source_cancelled(state: &mut BackendState, source_id: wayland_client::
     if state.current_source_object.as_ref().map(|s| s.id()) == Some(source_id) {
         state.suppress_next_selection_read = false;
         state.current_source_object = None;
+        state.current_source_entry_id = None;
         debug!("Re-enabled selection reading (external client took over)");
     }
 }

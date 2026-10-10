@@ -60,6 +60,16 @@ impl std::fmt::Debug for ClipboardStore {
 }
 
 impl ClipboardStore {
+    #[cfg(test)]
+    pub(super) fn isolated_test_store(persistent: bool) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "cursor-clip-password-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>(),
+        ));
+        Self::open_at(dir, [7u8; 32], [9u8; 32], persistent).unwrap()
+    }
+
     pub fn persistent_dir() -> PathBuf {
         xdg_dir("XDG_DATA_HOME", ".local/share")
             .join("cursor-clip")

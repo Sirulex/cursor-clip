@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use super::backend_state::BackendState;
+use super::backend_state::{BackendState, unix_timestamp};
 use super::wayland_clipboard::WaylandClipboardMonitor;
 use crate::shared::{BackendMessage, FrontendMessage};
 use log::{error, info};
@@ -25,6 +25,7 @@ pub async fn run_backend(monitor_only: bool) -> Result<(), Box<dyn std::error::E
     info!("Clipboard backend listening on {socket_path}");
 
     let state = Arc::new(Mutex::new(BackendState::new(monitor_only)));
+    tokio::spawn(expire_passwords(state.clone()));
 
     // Start Wayland clipboard monitoring in a separate task
     let wayland_state = state.clone();
@@ -75,7 +76,7 @@ async fn handle_client(
 
         let response = match message {
             FrontendMessage::GetHistory => {
-                let state = state.lock().unwrap();
+                let mut state = state.lock().unwrap();
                 BackendMessage::History {
                     items: state.get_history(),
                 }
@@ -123,6 +124,27 @@ async fn handle_client(
     }
 
     Ok(())
+}
+
+/// Sleep until the next secret expires, waking early when history changes.
+pub(super) async fn expire_passwords(state: Arc<Mutex<BackendState>>) {
+    let notify = state.lock().unwrap().expiry_notify.clone();
+    loop {
+        let now = unix_timestamp();
+        let next_expiry = {
+            let mut state = state.lock().unwrap();
+            state.expire_password_items(now);
+            state.next_password_expiry()
+        };
+        if let Some(deadline) = next_expiry {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(deadline.saturating_sub(now))) => {},
+                _ = notify.notified() => {},
+            }
+        } else {
+            notify.notified().await;
+        }
+    }
 }
 
 fn acquire_instance_lock(socket_dir: &str) -> Result<std::fs::File, Box<dyn std::error::Error>> {
