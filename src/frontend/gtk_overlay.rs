@@ -572,7 +572,11 @@ fn generate_overlay_content(
 
     // Header bar
     let header_bar = adw::HeaderBar::new();
-    header_bar.set_title_widget(Some(&Label::new(Some("Clipboard History"))));
+    let title = Label::new(Some("Clipboard History"));
+    title.set_margin_start(10);
+    title.set_margin_end(10);
+    header_bar.set_title_widget(Some(&title));
+    header_bar.set_centering_policy(adw::CenteringPolicy::Strict);
     // Layer-shell + undecorated windows can render built-in title buttons unreliably.
     // Use an explicit close button styled like a normal Adwaita title button instead.
     header_bar.set_show_end_title_buttons(false);
