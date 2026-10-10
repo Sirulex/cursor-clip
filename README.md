@@ -37,7 +37,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Dynamic theming**: Adapts to light/dark mode and system accent colors
 
 ### 📂 **Automatic Clipboard Monitoring (Wayland)**
-- Stores copied items in memory or in a persistent database and removes duplicates.
+- Stores copied items encrypted on disk (in memory only the history index is kept) and removes duplicates.
 - Automatic classification of content types:
   - 📝 Text
   - 🔗 URLs
@@ -196,7 +196,8 @@ Running the application requires a supported Wayland session (see Compositor Sup
 
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Toggle Overlay**: Run `cursor-clip` without any arguments to open and close it (ideally bind it to a hotkey, e.g., Super+V)
+2. **Toggle Overlay**: Run `cursor-clip-toggle` to open and close it (ideally bind it to a hotkey, e.g., Super+V). It is a tiny launcher that signals a running overlay and otherwise starts `cursor-clip`; running `cursor-clip` without arguments directly works too, it just starts slower because it loads GTK.
+   - On Hyprland the overlay stays alive in the background after closing, with its rows already laid out, so later opens take a few milliseconds instead of a full GTK start.
 3. **Trigger**: Your mouse position is automatically captured
 4. **View History**: The clipboard history window will appear at your cursor position, showing:
    - **Recent clipboard items** with content previews
@@ -209,14 +210,19 @@ Running the application requires a supported Wayland session (see Compositor Sup
    - **Clear All** to remove all history items
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
-   - **Search**: Press the search icon or `/` on your keyboard to focus the search field and filter clipboard items live by preview text or content type
-   - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to leave the search field and continue navigating the filtered list; press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
-   - **Keyboard navigation**: Use `Arrow keys` or `J/K` to navigate, `Enter` to select, `Delete` to remove, `P` to pin, `Esc` to close the overlay when the search field is not focused
+   - **Close**: Press `Esc` or click anywhere outside the overlay
+   - **Search**: Just start typing; the search field is focused when the overlay opens and any typing is sent to it. Items are filtered live by preview text or content type
+   - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to clear the search (a second `Esc` closes the overlay); press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
+   - **Keyboard navigation**: Use `Arrow keys` or `Ctrl+J/K` to navigate, `Enter` to select, `Delete` to remove, `Ctrl+P` to pin
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
 
 ## Persistent History Security
 
-If persistent history is enabled, clipboard history is stored in an encrypted local database. The database key is stored in your operating system keyring and reused on restart. This ensures that your clipboard history remains secure and private, even if someone gains access to your filesystem (e.g., sidechannel attacks). The encryption and key management are handled automatically by Cursor Clip, so you can enable persistent history with just a simple toggle.
+If persistent history is enabled, clipboard history is stored encrypted on disk in `$XDG_DATA_HOME/cursor-clip/store` (usually `~/.local/share/cursor-clip/store`). The key is stored in your operating system keyring and reused on restart. This ensures that your clipboard history remains secure and private, even if someone gains access to your filesystem (e.g., sidechannel attacks). The encryption and key management are handled automatically by Cursor Clip, so you can enable persistent history with just a simple toggle.
+
+Clipboard contents are kept out of memory either way: every payload is written once as an AES-GCM encrypted, content-addressed file and only read back when an application pastes it. The daemon keeps just the history index (previews and small thumbnails) in memory. Without persistent history the files live in `$XDG_CACHE_HOME/cursor-clip/session`, encrypted with a key that only exists in memory, and are removed on the next start. Turning persistent history off deletes the persistent store.
+
+History saved by older versions in `~/.config/cursor-clip/history.stoolap.db` is migrated automatically on first start; the old database is kept as `history.stoolap.db.migrated` and can be deleted afterwards.
 
 ## Instant paste note:
 On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
@@ -238,8 +244,8 @@ On KDE Plasma, instant paste is currently not available because the compositor d
 │  Clipboard Management                           │
 │  ├── Data Control Manager for privileged access │
 │  ├── IPC communication via UNIX domain sockets  │
-│  ├── IndexMap for clipboard history storage     │
-│  └── Stoolap for persistent history storage     │
+│  ├── In-memory history index (previews only)    │
+│  └── Encrypted on-disk payload store            │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -257,7 +263,8 @@ On KDE Plasma, instant paste is currently not available because the compositor d
 - **indexmap**: Ordered map for clipboard history
 - **fast_image_resize**: Efficient image resizing for previews
 - **keyring**: Secure storage for encryption keys
-- **stoolap**: Encrypted local database for persistent history
+- **aes-gcm**: Encryption of the on-disk clipboard store
+- **stoolap**: Reading history saved by older versions (one-time migration)
 - **env_logger**: Logging framework
 ---
 

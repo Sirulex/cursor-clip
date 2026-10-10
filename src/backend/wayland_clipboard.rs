@@ -1,5 +1,6 @@
 use crate::backend::backend_state::{BackendState, DataControlManager};
 use std::sync::Arc as StdArc; // for event_created_child return type clarity
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry;
@@ -212,31 +213,99 @@ fn handle_selection_event<F>(
     destroy_offer();
 }
 
+/// Transfers to paste targets that are still being written.
+static ACTIVE_TRANSFERS: AtomicUsize = AtomicUsize::new(0);
+const MAX_ACTIVE_TRANSFERS: usize = 8;
+/// Give up on a receiver that stops reading for this long.
+const TRANSFER_STALL_TIMEOUT_MS: i32 = 5_000;
+
 /// Handle a Source Send event for either Wlr or Ext source.
 fn handle_source_send(state: &BackendState, mime_type: String, fd: std::os::fd::OwnedFd) {
-    use std::io::Write;
     debug!("Data source Send event for MIME type: {mime_type}");
     let Some(item_id) = state.current_source_entry_id else {
         warn!("No current_source_id set when Send event received");
         return;
     };
-    let Some(item) = state.get_item_by_id(item_id) else {
-        warn!("Clipboard item id {item_id} no longer exists in history");
-        return;
-    };
-    let mut file: std::fs::File = fd.into();
-    if let Some(bytes) = item.mime_data.get(&mime_type) {
-        if let Err(e) = file.write_all(bytes.as_ref()) {
-            error!("Failed writing selection data (id {item_id}, mime {mime_type}): {e}");
-        } else {
-            debug!(
-                "Wrote {} bytes for id {item_id} (mime {mime_type})",
-                bytes.len()
-            );
+    // Opened under the lock so a concurrent delete or store switch cannot
+    // remove the blob before the worker reads it.
+    let blob = match state.open_item_payload(item_id, &mime_type) {
+        Ok(blob) => blob,
+        Err(e) => {
+            warn!("{e}; nothing written");
+            return;
         }
-    } else {
-        warn!("No data stored for MIME {mime_type} (id {item_id}), nothing written");
+    };
+
+    if ACTIVE_TRANSFERS.fetch_add(1, Ordering::SeqCst) >= MAX_ACTIVE_TRANSFERS {
+        ACTIVE_TRANSFERS.fetch_sub(1, Ordering::SeqCst);
+        warn!("Too many pending clipboard transfers; dropping request for {mime_type}");
+        return;
     }
+
+    // Reading, decrypting and writing happen off the Wayland thread and
+    // without the backend lock, so a large payload or slow reader blocks nothing.
+    let spawned = std::thread::Builder::new()
+        .name("clipboard-send".into())
+        .spawn(move || {
+            let result = blob
+                .read()
+                .and_then(|data| write_with_stall_timeout(fd, &data).map(|()| data.len()));
+            match result {
+                Ok(len) => debug!("Wrote {len} bytes for id {item_id} (mime {mime_type})"),
+                Err(e) => {
+                    error!("Failed writing selection data (id {item_id}, mime {mime_type}): {e}");
+                }
+            }
+            ACTIVE_TRANSFERS.fetch_sub(1, Ordering::SeqCst);
+        });
+    if let Err(e) = spawned {
+        ACTIVE_TRANSFERS.fetch_sub(1, Ordering::SeqCst);
+        error!("Could not start clipboard transfer thread: {e}");
+    }
+}
+
+fn write_with_stall_timeout(fd: std::os::fd::OwnedFd, data: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+
+    let raw_fd = fd.as_raw_fd();
+    // SAFETY: raw_fd is a valid open descriptor owned by `fd` for this scope.
+    unsafe {
+        let flags = libc::fcntl(raw_fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(raw_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+
+    let mut file: std::fs::File = fd.into();
+    let mut remaining = data;
+    while !remaining.is_empty() {
+        match file.write(remaining) {
+            Ok(0) => return Err("receiver closed the pipe".into()),
+            Ok(written) => remaining = &remaining[written..],
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut poll_fd = libc::pollfd {
+                    fd: raw_fd,
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                // SAFETY: poll_fd is a single initialized pollfd that outlives the call.
+                let ready = unsafe { libc::poll(&mut poll_fd, 1, TRANSFER_STALL_TIMEOUT_MS) };
+                if ready == 0 {
+                    return Err("receiver stopped reading".into());
+                }
+                if ready < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(error.to_string());
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
 }
 
 /// Handle a Source Cancelled event. Re-enables selection reading if this is the active source.

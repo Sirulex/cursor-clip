@@ -94,13 +94,14 @@ impl ToggleServer {
         }
     }
 
-    pub fn take_toggle_request_from(listener: &UnixListener) -> io::Result<bool> {
-        let mut requested = false;
+    /// Accept all pending connections and return how many there were.
+    pub fn count_toggle_requests_from(listener: &UnixListener) -> io::Result<usize> {
+        let mut requests = 0;
 
         loop {
             match listener.accept() {
-                Ok((_stream, _address)) => requested = true,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(requested),
+                Ok((_stream, _address)) => requests += 1,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(requests),
                 Err(error) => return Err(error),
             }
         }

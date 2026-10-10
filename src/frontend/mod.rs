@@ -1,6 +1,7 @@
 pub mod dispatch;
 pub mod frontend_state;
 pub mod gtk_overlay;
+pub mod hyprland;
 pub mod initializer;
 pub mod ipc_client;
 pub mod toggle;
