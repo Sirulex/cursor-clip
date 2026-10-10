@@ -211,8 +211,8 @@ Running the application requires a supported Wayland session (see Compositor Sup
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
    - **Close**: Press `Esc` or click anywhere outside the overlay
-   - **Search**: Just start typing; the search field is focused when the overlay opens and any typing is sent to it. Items are filtered live by preview text or content type
-   - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to clear the search (a second `Esc` closes the overlay); press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
+   - **Search**: Click the search icon or just start typing to show and focus the search field. It stays hidden when the overlay opens. Items are filtered live by preview text or content type
+   - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to clear and hide the search (a second `Esc` closes the overlay); press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
    - **Keyboard navigation**: Use `Arrow keys` or `Ctrl+J/K` to navigate, `Enter` to select, `Delete` to remove, `Ctrl+P` to pin
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
 

@@ -420,10 +420,10 @@ fn create_layer_shell_window(
     );
     window.add_controller(key_controller);
 
-    // Start in the search field so typing filters right away.
+    // Start in the history list; typing reveals and focuses search on demand.
     window.connect_map({
-        let search_entry = content.search_entry.clone();
-        move |_| focus_search_entry(&search_entry)
+        let list_box = content.list_box.clone();
+        move |_| select_first_row(&list_box)
     });
 
     // Add close request handler to ensure any window close goes through our logic
@@ -486,6 +486,7 @@ fn show_resident_overlay() {
 
         ui.history_state.search_query.borrow_mut().clear();
         ui.search_entry.set_text("");
+        ui.search_entry.set_visible(false);
         ui.menu_revealer.set_reveal_child(false);
         ui.menu_revealer.set_visible(false);
         rebuild_list(&ui.list_box, &ui.history_state);
@@ -691,8 +692,9 @@ fn generate_overlay_content(
 
     main_box.append(&header_bar);
 
-    // Always visible: the overlay opens with focus here so typing searches.
+    // Search stays hidden until the search button is clicked or typing starts.
     let search_entry = SearchEntry::new();
+    search_entry.set_visible(false);
     search_entry.set_placeholder_text(Some("Type to search"));
     search_entry.set_margin_start(12);
     search_entry.set_margin_end(12);
@@ -704,7 +706,7 @@ fn generate_overlay_content(
 
     let search_entry_for_button = search_entry.clone();
     search_button.connect_clicked(move |_| {
-        search_entry_for_button.grab_focus();
+        focus_search_entry(&search_entry_for_button);
         search_entry_for_button.select_region(0, -1);
     });
 
@@ -963,7 +965,7 @@ fn generate_overlay_content(
     }
 }
 
-/// Build the key controller: Esc clears the search or closes, arrows/Enter
+/// Build the key controller: Esc hides and clears search or closes, arrows/Enter
 /// navigate and activate, Delete removes and Ctrl+P pins the selected item.
 /// Any other typing goes to the search field, wherever the focus is.
 fn generate_key_controller(
@@ -981,11 +983,12 @@ fn generate_key_controller(
         use gtk4::gdk::{Key, ModifierType};
 
         if key == Key::Escape {
-            if search_entry_for_keys.text().is_empty() {
-                request_quit();
-            } else {
+            if search_entry_for_keys.is_visible() {
                 search_entry_for_keys.set_text("");
-                focus_search_entry(&search_entry_for_keys);
+                search_entry_for_keys.set_visible(false);
+                select_first_row(&list_box_for_keys);
+            } else {
+                request_quit();
             }
             return gtk4::glib::Propagation::Stop;
         }
@@ -997,7 +1000,8 @@ fn generate_key_controller(
             return gtk4::glib::Propagation::Stop;
         }
         if state.contains(ModifierType::CONTROL_MASK) && matches!(key, Key::k | Key::K) {
-            if !select_previous_row(&list_box_for_keys, false) {
+            if !select_previous_row(&list_box_for_keys, false) && search_entry_for_keys.is_visible()
+            {
                 focus_search_entry(&search_entry_for_keys);
             }
             return gtk4::glib::Propagation::Stop;
@@ -1032,7 +1036,9 @@ fn generate_key_controller(
                 gtk4::glib::Propagation::Stop
             }
             Key::Up | Key::KP_Up if focus_on_row => {
-                if !select_previous_row(&list_box_for_keys, false) {
+                if !select_previous_row(&list_box_for_keys, false)
+                    && search_entry_for_keys.is_visible()
+                {
                     focus_search_entry(&search_entry_for_keys);
                 }
                 gtk4::glib::Propagation::Stop
@@ -1050,7 +1056,8 @@ fn generate_key_controller(
             // Space keeps activating focused buttons and checkboxes.
             Key::space if !focus_on_row => gtk4::glib::Propagation::Proceed,
             _ if !has_shortcut_modifier
-                && (key == Key::BackSpace || key.to_unicode().is_some_and(|c| !c.is_control())) =>
+                && ((key == Key::BackSpace && search_entry_for_keys.is_visible())
+                    || key.to_unicode().is_some_and(|c| !c.is_control())) =>
             {
                 focus_search_entry(&search_entry_for_keys);
                 if let Some(text) = search_entry_for_keys.delegate() {
@@ -1064,8 +1071,9 @@ fn generate_key_controller(
     controller
 }
 
-/// Focus the search field without selecting its text, so typing appends.
+/// Show and focus the search field without selecting its text, so typing appends.
 fn focus_search_entry(search_entry: &SearchEntry) {
+    search_entry.set_visible(true);
     match search_entry
         .delegate()
         .and_then(|editable| editable.downcast::<gtk4::Text>().ok())
