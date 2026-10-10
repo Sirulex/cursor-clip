@@ -10,7 +10,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 
 ## Features
 
-<img src="https://github.com/user-attachments/assets/604896e7-b48e-4851-a9f4-1f06f32ab9c2" width="400" alt="Overlay Preview" align="right" />
+<img src="https://github.com/user-attachments/assets/a587e8bd-907f-4b01-b6c0-27fee7b0fe90" width="400" alt="Overlay Preview" align="right" />
 
 <div style="margin-right: 400px;">
 
@@ -50,9 +50,9 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 </div>
 
 ### 🎥 **Video Showcase**
-   <video src="https://github.com/user-attachments/assets/387c6441-fa6f-4d63-bea8-96d0eece85ee" >
+   <video src="https://github.com/user-attachments/assets/fdc88317-d81f-454d-ba7e-bf9c4659701d" >
       Your browser does not support the video tag. You can watch it here:
-      <a href="https://github.com/user-attachments/assets/387c6441-fa6f-4d63-bea8-96d0eece85ee">Video link</a>.
+      <a href="https://github.com/user-attachments/assets/fdc88317-d81f-454d-ba7e-bf9c4659701d">Video link</a>.
    </video>
 
 ## Compositor Support
