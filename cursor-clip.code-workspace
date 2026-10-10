@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../cursor-clip-git-aur"
+		},
+		{
+			"path": "../cursor-clip-bin-aur"
+		}
+	],
+	"settings": {}
+}

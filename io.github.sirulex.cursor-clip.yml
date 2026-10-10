@@ -60,7 +60,7 @@ modules:
       - install -Dm755 flatpak/cursor-clip-launch /app/bin/cursor-clip-launch
       - install -Dm644 flatpak/io.github.sirulex.cursor-clip.desktop /app/share/applications/io.github.sirulex.cursor-clip.desktop
       - install -Dm644 flatpak/io.github.sirulex.cursor-clip.metainfo.xml /app/share/metainfo/io.github.sirulex.cursor-clip.metainfo.xml
-      - install -Dm644 flatpak/io.github.sirulex.cursor-clip.svg /app/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg
+      - install -Dm644 assets/io.github.sirulex.cursor-clip.svg /app/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg
       - install -Dm644 LICENSE /app/share/licenses/io.github.sirulex.cursor-clip/LICENSE
     sources:
       - type: archive
@@ -71,4 +71,7 @@ modules:
           url: https://api.github.com/repos/Sirulex/cursor-clip/releases/latest
           version-query: .tag_name | sub("^v"; "")
           url-query: .tarball_url
+      - type: file
+        path: assets/io.github.sirulex.cursor-clip.svg
+        dest: assets
       - cargo-sources.json

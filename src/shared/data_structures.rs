@@ -2,6 +2,9 @@ use bytes::Bytes;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+pub const PASSWORD_HINT_MIME: &str = "x-kde-passwordManagerHint";
+pub const PASSWORD_ENTRY_TTL_SECS: u64 = 120;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardItem {
     pub item_id: u64,
@@ -10,8 +13,36 @@ pub struct ClipboardItem {
     pub timestamp: u64, // Unix timestamp
     #[serde(default)]
     pub pinned: bool,
-    pub mime_data: IndexMap<String, Bytes>, // content type -> payload bytes
+    // content type -> blob id; payloads live on disk in the clipboard store, not in memory
+    pub mime_blobs: IndexMap<String, String>,
     pub thumbnail: Option<Bytes>,
+}
+
+impl ClipboardItem {
+    pub fn expires_at(&self) -> Option<u64> {
+        self.mime_blobs
+            .contains_key(PASSWORD_HINT_MIME)
+            .then(|| self.timestamp.saturating_add(PASSWORD_ENTRY_TTL_SECS))
+    }
+
+    pub fn is_expired(&self, now: u64) -> bool {
+        self.expires_at().is_some_and(|expires| expires <= now)
+    }
+
+    /// Blob holding the representation used to detect duplicate copies.
+    pub fn primary_blob(&self) -> Option<&str> {
+        const PRIMARY_MIMES: [&str; 4] = [
+            "image/png",
+            "text/plain;charset=utf-8",
+            "text/plain",
+            "UTF8_STRING",
+        ];
+        PRIMARY_MIMES
+            .iter()
+            .find_map(|mime| self.mime_blobs.get(*mime))
+            .or_else(|| self.mime_blobs.values().next())
+            .map(String::as_str)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +54,8 @@ pub struct ClipboardItemPreview {
     #[serde(default)]
     pub pinned: bool,
     pub thumbnail: Option<Bytes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
 }
 
 impl From<&ClipboardItem> for ClipboardItemPreview {
@@ -34,6 +67,7 @@ impl From<&ClipboardItem> for ClipboardItemPreview {
             timestamp: full.timestamp,
             pinned: full.pinned,
             thumbnail: full.thumbnail.clone(),
+            expires_at: full.expires_at(),
         }
     }
 }

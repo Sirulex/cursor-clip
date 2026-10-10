@@ -26,7 +26,10 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # 4. Build cursor-clip
 RUN cargo install --git https://github.com/Sirulex/cursor-clip
 
-# 5. Move the compiled binary and libraries to an output folder
+# 5. Export both binaries, native desktop integration, and libraries
 RUN mkdir /output && \
     cp /root/.cargo/bin/cursor-clip /output/ && \
+    cp /root/.cargo/bin/cursor-clip-toggle /output/ && \
     cp -a /usr/local/lib/x86_64-linux-gnu/libgtk4-layer-shell.so* /output/
+COPY Makefile /output/Makefile
+COPY assets /output/assets

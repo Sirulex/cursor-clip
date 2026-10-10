@@ -1,4 +1,5 @@
 /target
+/.direnv
 /.flatpak-builder
 /build-flatpak
 /repo
