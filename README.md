@@ -68,7 +68,7 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
    - Although the application uses GNOME styling and follows the GNOME HIG, GNOME Shell is unfortunately **NOT SUPPORTED**. It does not implement the required Wayland protocols (`zwlr_layer_shell_v1` and `zwlr_data_control_manager_v1`) needed for Cursor Clip's key features. Future support is not impossible but will require major code and workflow changes and a separate GNOME Extension.
 
 ### System Requirements
-- **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita**, **Rust**
+- **Wayland compositor**, **GTK4**, **gtk4-layer-shell**, **libadwaita 1.5 or newer**, **Rust**
 
 ## Installation on Arch Linux based distributions via AUR
 You can install the prebuilt Cursor Clip binary from the AUR using an AUR helper like `yay`:
@@ -207,7 +207,7 @@ Running the application requires a supported Wayland session (see Compositor Sup
 5. **Interact**:
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
-   - **Clear** to remove all history items
+   - **Clear icon** on the left side of the header to remove all history items after confirming; choose **Cancel** or press `Esc` to keep them
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
    - **Close**: Press `Esc` or click anywhere outside the overlay

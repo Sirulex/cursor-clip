@@ -401,6 +401,13 @@ fn create_layer_shell_window(
             let Some(widget) = gesture.widget() else {
                 return;
             };
+            // Let the modal dialog handle clicks, including its backdrop.
+            if widget
+                .downcast_ref::<adw::ApplicationWindow>()
+                .is_some_and(|window| window.visible_dialog().is_some())
+            {
+                return;
+            }
             let inside_card = widget
                 .pick(click_x, click_y, gtk4::PickFlags::DEFAULT)
                 .is_some_and(|picked| picked == card_widget || picked.is_ancestor(&card_widget));
@@ -464,6 +471,9 @@ fn toggle_resident_overlay() {
 fn hide_resident_overlay() {
     RESIDENT.with(|resident| {
         if let Some(resident) = resident.borrow().as_ref() {
+            if let Some(dialog) = resident.ui.window.visible_dialog() {
+                dialog.force_close();
+            }
             resident.ui.window.set_visible(false);
         }
     });
@@ -582,7 +592,7 @@ fn generate_overlay_content(
         warn!("Failed to sync persistence setting with backend: {}", e);
     }
 
-    // Add right-side header actions (search + menu + close)
+    // Search and clear are on the left; options and close are on the right.
     let search_button = Button::builder().icon_name("edit-find-symbolic").build();
     search_button.add_css_class("flat");
     search_button.add_css_class("compact-header-action");
@@ -595,7 +605,6 @@ fn generate_overlay_content(
 
     let header_action_group = Box::new(Orientation::Horizontal, 0);
     header_action_group.add_css_class("header-action-group");
-    header_action_group.append(&search_button);
     header_action_group.append(&three_dot_menu);
 
     let close_icon = gtk4::Image::from_icon_name("window-close-symbolic");
@@ -685,10 +694,12 @@ fn generate_overlay_content(
         request_quit();
     });
 
-    // Add clear all button to header
-    let clear_button = Button::with_label("Clear");
-    clear_button.add_css_class("destructive-action");
+    let clear_button = Button::builder().icon_name("user-trash-symbolic").build();
+    clear_button.add_css_class("flat");
+    clear_button.add_css_class("compact-header-action");
+    clear_button.set_tooltip_text(Some("Clear entire clipboard history"));
     header_bar.pack_start(&clear_button);
+    header_bar.pack_start(&search_button);
 
     main_box.append(&header_bar);
 
@@ -934,22 +945,36 @@ fn generate_overlay_content(
         menu_revealer_toggle.set_reveal_child(next_state);
     });
 
-    // Connect button signals
-    clear_button.connect_clicked(move |_| {
-        match FrontendClient::new() {
-            Ok(mut client) => {
-                if let Err(e) = client.clear_history() {
-                    error!("Error clearing clipboard history: {}", e);
-                } else {
-                    info!("Clipboard history cleared");
-                    // Close the overlay after clearing
-                    request_quit();
+    clear_button.connect_clicked(move |button| {
+        let dialog = adw::AlertDialog::new(
+            Some("Clear clipboard history?"),
+            Some("All clipboard history items will be deleted. This cannot be undone."),
+        );
+        dialog.add_response("cancel", "_Cancel");
+        dialog.add_response("clear", "_Clear");
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+        dialog.connect_response(None, |_, response| {
+            if response != "clear" {
+                return;
+            }
+            match FrontendClient::new() {
+                Ok(mut client) => {
+                    if let Err(e) = client.clear_history() {
+                        error!("Error clearing clipboard history: {}", e);
+                    } else {
+                        info!("Clipboard history cleared");
+                        // Close the overlay after clearing.
+                        request_quit();
+                    }
+                }
+                Err(e) => {
+                    error!("Error creating frontend client: {}", e);
                 }
             }
-            Err(e) => {
-                error!("Error creating frontend client: {}", e);
-            }
-        }
+        });
+        dialog.present(Some(button));
     });
 
     let overlay = Overlay::new();
@@ -981,6 +1006,15 @@ fn generate_key_controller(
     let search_entry_for_keys = search_entry.clone();
     controller.connect_key_pressed(move |controller, key, _, state| {
         use gtk4::gdk::{Key, ModifierType};
+
+        // Modal dialogs own keyboard input; don't search, activate or close history.
+        if controller
+            .widget()
+            .and_then(|widget| widget.downcast::<adw::ApplicationWindow>().ok())
+            .is_some_and(|window| window.visible_dialog().is_some())
+        {
+            return gtk4::glib::Propagation::Proceed;
+        }
 
         if key == Key::Escape {
             if search_entry_for_keys.is_visible() {
