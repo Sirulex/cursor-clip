@@ -2,7 +2,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    
+
     crane.url = "github:ipetkov/crane";
   };
 
@@ -49,10 +49,18 @@
         devShells.default = craneLib.devShell {
           inputsFrom = [ cursor-clip ];
 
+          # Crane supplies Cargo, rustc, Clippy, and rustfmt.
           packages = with pkgs; [
             rust-analyzer
-            clippy
+            adwaita-icon-theme
           ];
+
+          RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+
+          # Make GTK schemas and icons discoverable when running through Cargo.
+          shellHook = ''
+            export XDG_DATA_DIRS="${pkgs.adwaita-icon-theme}/share''${GSETTINGS_SCHEMAS_PATH:+:$GSETTINGS_SCHEMAS_PATH}''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+          '';
         };
       }
     );

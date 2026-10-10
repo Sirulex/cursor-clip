@@ -165,6 +165,35 @@ sudo cp result/bin/cursor-clip /usr/local/bin/
 nix develop
 ```
 
+### Developing with Nix and direnv
+
+The default development shell provides Cargo, rustc, Clippy, rustfmt,
+rust-analyzer, Rust sources, and the GTK4/Libadwaita build dependencies.
+The shell also exposes GTK schemas and icons for running the application locally.
+
+With Nix flakes enabled, install direnv and enable its hook in your shell.
+Then allow this repository's `.envrc` once:
+
+```bash
+direnv allow
+```
+
+The `.envrc` uses `use flake` to load the default development shell whenever
+you enter the repository. You can also enter it manually with `nix develop`.
+
+Inside the shell:
+
+```bash
+cargo check
+cargo fmt
+cargo clippy
+cargo run -- --daemon
+# In another terminal using the same development shell:
+cargo run
+```
+
+Running the application requires a supported Wayland session (see Compositor Support).
+
 ## Usage
 1. **Start Background Daemon**: `cursor-clip --daemon`
 2. **Toggle Overlay**: Run `cursor-clip` without any arguments to open and close it (ideally bind it to a hotkey, e.g., Super+V)
