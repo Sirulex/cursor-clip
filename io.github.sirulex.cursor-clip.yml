@@ -64,14 +64,11 @@ modules:
       - install -Dm644 LICENSE /app/share/licenses/io.github.sirulex.cursor-clip/LICENSE
     sources:
       - type: archive
-        url: https://github.com/Sirulex/cursor-clip/archive/refs/tags/v1.0.2.tar.gz
-        sha256: 5ddb0f7512da380a73635828ebba9cc27d8817259066d7094fdbc8e3bbe66ba7
+        url: https://github.com/Sirulex/cursor-clip/archive/refs/tags/v1.0.3.tar.gz
+        sha256: 538dae5f97dfbce56adc2336f4794dfe45b6959f101807907156cecb2e13a676
         x-checker-data:
           type: json
           url: https://api.github.com/repos/Sirulex/cursor-clip/releases/latest
           version-query: .tag_name | sub("^v"; "")
           url-query: .tarball_url
-      - type: file
-        path: assets/io.github.sirulex.cursor-clip.svg
-        dest: assets
       - cargo-sources.json
