@@ -24,13 +24,17 @@
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
-          nativeBuildInputs = with pkgs; [ pkg-config ];
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            wrapGAppsHook4
+          ];
           buildInputs = with pkgs; [
             gtk4
             dbus
             glib
             gtk4-layer-shell
             libadwaita
+            adwaita-icon-theme
           ];
         };
 
@@ -40,6 +44,15 @@
           commonArgs
           // {
             inherit cargoArtifacts;
+            meta.mainProgram = "cursor-clip-toggle";
+            postInstall = ''
+              install -Dm644 ${./assets/io.github.sirulex.cursor-clip.desktop} \
+                "$out/share/applications/io.github.sirulex.cursor-clip.desktop"
+              install -Dm644 ${./assets/io.github.sirulex.cursor-clip.svg} \
+                "$out/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg"
+              substituteInPlace "$out/share/applications/io.github.sirulex.cursor-clip.desktop" \
+                --replace-fail "Exec=cursor-clip-toggle" "Exec=$out/bin/cursor-clip-toggle"
+            '';
           }
         );
       in

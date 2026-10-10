@@ -151,6 +151,9 @@ jobs:
           install -Dm755 "target/$TARGET/release/$BINARY_NAME-toggle" "$staging/$BINARY_NAME-toggle"
           install -Dm644 LICENSE "$staging/LICENSE"
           install -Dm644 README.md "$staging/README.md"
+          install -Dm644 Makefile "$staging/Makefile"
+          install -Dm644 assets/io.github.sirulex.cursor-clip.desktop "$staging/assets/io.github.sirulex.cursor-clip.desktop"
+          install -Dm644 assets/io.github.sirulex.cursor-clip.svg "$staging/assets/io.github.sirulex.cursor-clip.svg"
 
           tar -C dist -czf "dist/$archive.tar.gz" "$archive"
           (

@@ -135,7 +135,21 @@ cd cursor-clip
 
 # Build in release mode
 cargo build --release
+
+# Install both binaries, the desktop launcher, and the application logo
+sudo make install
 ```
+
+The desktop launcher appears as **Cursor Clip** with the application logo and
+runs `cursor-clip-toggle`. Keep `cursor-clip --daemon` in your compositor's
+autostart configuration to record clipboard history.
+
+For a user-only installation, run `make install PREFIX="$HOME/.local"` instead
+and ensure `~/.local/bin` is on your desktop session's `PATH`.
+Packagers can stage an installation with `make install DESTDIR=/path/to/staging PREFIX=/usr`.
+
+Release archives include the launcher, logo, and Makefile too. After extracting
+an archive, install it with `sudo make install BUILD_DIR=.`.
 
 ## Building with Docker
 
@@ -145,8 +159,9 @@ Build a containerized version that includes all dependencies:
 # Build the Docker image and install the binary
 docker build -t cursor-clip .
 docker create --name cursor-clip-temp cursor-clip
-sudo docker cp cursor-clip-temp:/output/cursor-clip /usr/local/bin/
-sudo docker cp cursor-clip-temp:/output/libgtk4-layer-shell.so* /usr/local/lib/
+docker cp cursor-clip-temp:/output/. ./cursor-clip-output
+sudo make -C cursor-clip-output install BUILD_DIR=.
+sudo cp cursor-clip-output/libgtk4-layer-shell.so* /usr/local/lib/
 docker rm cursor-clip-temp
 
 # Update library cache and run
@@ -157,14 +172,19 @@ cursor-clip --daemon
 ## Building with Nix Flake
 
 ```bash
-# Build and install using Nix Flakes (default package)
+# Build using Nix Flakes (default package)
 nix build .
 # or: nix build .#default
-sudo cp result/bin/cursor-clip /usr/local/bin/
+
+# Install both binaries, the desktop launcher, and logo into your Nix profile
+nix profile add .
 
 # Optional: enter the development shell
 nix develop
 ```
+
+The Nix package includes the desktop launcher and logo under `result/share`.
+On NixOS, add the flake's default package to `environment.systemPackages` instead.
 
 ### Developing with Nix and direnv
 
