@@ -686,7 +686,7 @@ fn generate_overlay_content(
     });
 
     // Add clear all button to header
-    let clear_button = Button::with_label("Clear All");
+    let clear_button = Button::with_label("Clear");
     clear_button.add_css_class("destructive-action");
     header_bar.pack_start(&clear_button);
 

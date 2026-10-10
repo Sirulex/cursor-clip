@@ -203,11 +203,11 @@ Running the application requires a supported Wayland session (see Compositor Sup
    - **Recent clipboard items** with content previews
    - **Content type icons** (text, URL, code, password, file)
    - **Timestamps** showing when items were copied
-   - **Quick actions**: Clear All, Delete, Pin and Close
+   - **Quick actions**: Clear, Delete, Pin and Close
 5. **Interact**:
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
-   - **Clear All** to remove all history items
+   - **Clear** to remove all history items
    - **Delete** to remove a single item from history
    - **Pin** to keep an item permanently at the top of the list
    - **Close**: Press `Esc` or click anywhere outside the overlay
