@@ -651,6 +651,7 @@ fn generate_overlay_content(
     menu_box.set_margin_end(10);
 
     let toggle_row = Box::new(Orientation::Horizontal, 8);
+    toggle_row.add_css_class("settings-row");
     let toggle_label = Label::new(Some("Show delete button"));
     toggle_label.set_halign(Align::Start);
     toggle_label.set_hexpand(true);
@@ -661,6 +662,7 @@ fn generate_overlay_content(
     menu_box.append(&toggle_row);
 
     let pin_toggle_row = Box::new(Orientation::Horizontal, 8);
+    pin_toggle_row.add_css_class("settings-row");
     let pin_toggle_label = Label::new(Some("Show pin icon"));
     pin_toggle_label.set_halign(Align::Start);
     pin_toggle_label.set_hexpand(true);
@@ -671,6 +673,7 @@ fn generate_overlay_content(
     menu_box.append(&pin_toggle_row);
 
     let persistence_toggle_row = Box::new(Orientation::Horizontal, 8);
+    persistence_toggle_row.add_css_class("settings-row");
     let persistence_toggle_label = Label::new(Some("Persistent history"));
     persistence_toggle_label.set_halign(Align::Start);
     persistence_toggle_label.set_hexpand(true);
@@ -681,6 +684,7 @@ fn generate_overlay_content(
     menu_box.append(&persistence_toggle_row);
 
     let instant_paste_toggle_row = Box::new(Orientation::Horizontal, 8);
+    instant_paste_toggle_row.add_css_class("settings-row");
     let instant_paste_toggle_label = Label::new(Some("Instant paste"));
     instant_paste_toggle_label.set_halign(Align::Start);
     instant_paste_toggle_label.set_hexpand(true);
@@ -1362,6 +1366,17 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
             padding-right: 0;
         }
 
+        .settings-row {
+            border-radius: 6px;
+            padding: 6px 8px;
+            transition: background-color 120ms ease;
+        }
+
+        .settings-row:hover,
+        .settings-row:focus-within {
+            background-color: alpha(@popover_fg_color, 0.08);
+        }
+
         .menu-revealer {
             background: #2b2b2f;
             background: @popover_bg_color;
@@ -1518,6 +1533,17 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
             min-height: 28px;
             padding-left: 0;
             padding-right: 0;
+        }
+
+        .settings-row {
+            border-radius: 6px;
+            padding: 6px 8px;
+            transition: background-color 120ms ease;
+        }
+
+        .settings-row:hover,
+        .settings-row:focus-within {
+            background-color: alpha(@popover_fg_color, 0.08);
         }
 
         .menu-revealer {
