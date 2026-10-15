@@ -1,4 +1,4 @@
-use crate::frontend::ipc_client::FrontendClient;
+use crate::frontend::ipc_client::{FrontendClient, PersistenceUpdate, PersistenceUpdateError};
 use crate::shared::{ClipboardContentType, ClipboardItemPreview};
 use gtk4::prelude::*;
 use gtk4::{
@@ -42,6 +42,7 @@ thread_local! {
     static OVERLAY_APP: RefCell<Option<Application>> = const { RefCell::new(None) };
     // Set when the overlay stays alive between uses (hidden instead of quit).
     static RESIDENT: RefCell<Option<ResidentOverlay>> = const { RefCell::new(None) };
+    static PERSISTENCE_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +66,19 @@ struct HistoryListState {
     // Bumped on every rebuild so an unfinished incremental fill stops.
     render_generation: Rc<Cell<u64>>,
     placeholder: Label,
+}
+
+#[derive(Clone)]
+struct PersistenceControls {
+    check: CheckButton,
+    spinner: gtk4::Spinner,
+    status: Label,
+    list_box: gtk4::ListBox,
+    clear_button: Button,
+    history_state: HistoryListState,
+    config: Rc<RefCell<UserConfig>>,
+    config_path: PathBuf,
+    confirmed: Rc<Cell<Option<bool>>>,
 }
 
 struct OverlayContent {
@@ -137,13 +151,324 @@ fn load_or_create_config() -> UserConfig {
 }
 
 fn save_config(config: &UserConfig) -> Result<(), std::io::Error> {
-    let path = config_path();
+    save_config_at(config, &config_path())
+}
+
+fn save_config_at(config: &UserConfig, path: &std::path::Path) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let contents = toml::to_string_pretty(config)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     fs::write(path, contents)
+}
+
+fn persistence_pending() -> bool {
+    PERSISTENCE_PENDING.with(Cell::get)
+}
+
+#[cfg(test)]
+mod persistence_ui_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn controls(path: PathBuf) -> PersistenceControls {
+        PersistenceControls {
+            check: CheckButton::new(),
+            spinner: gtk4::Spinner::new(),
+            status: Label::new(None),
+            list_box: gtk4::ListBox::new(),
+            clear_button: Button::new(),
+            history_state: HistoryListState {
+                all_items: Rc::new(RefCell::new(Vec::new())),
+                search_query: Rc::new(RefCell::new(String::new())),
+                show_trash: Rc::new(RefCell::new(true)),
+                show_pin: Rc::new(RefCell::new(true)),
+                render_generation: Rc::new(Cell::new(0)),
+                placeholder: Label::new(None),
+            },
+            config: Rc::new(RefCell::new(UserConfig::default())),
+            config_path: path,
+            confirmed: Rc::new(Cell::new(None)),
+        }
+    }
+
+    fn finish_pending(context: &gtk4::glib::MainContext) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while persistence_pending() {
+            assert!(Instant::now() < deadline, "Persistence UI did not finish");
+            context.iteration(false);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    async fn reply(
+        result: Result<PersistenceUpdate, PersistenceUpdateError>,
+    ) -> Result<PersistenceUpdate, PersistenceUpdateError> {
+        gtk4::glib::timeout_future(Duration::from_millis(20)).await;
+        result
+    }
+
+    #[test]
+    #[ignore = "requires a native GTK display; uses only isolated widgets/config"]
+    fn persistence_feedback_handles_acknowledgement_errors_and_close() {
+        adw::init().expect("Native GTK display required");
+        let context = gtk4::glib::MainContext::default();
+        let _context_owner = context.acquire().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "cursor-clip-persistence-ui-{}-{}",
+            std::process::id(),
+            rand::random::<u64>(),
+        ));
+        let controls = controls(dir.join("config.toml"));
+        let reentrant_changes = Rc::new(Cell::new(0));
+        controls.check.connect_toggled({
+            let reentrant_changes = reentrant_changes.clone();
+            move |_| {
+                if !persistence_pending() {
+                    reentrant_changes.set(reentrant_changes.get() + 1);
+                }
+            }
+        });
+
+        // The loaded preference is not proof of the daemon's initial state.
+        update_persistence_with(
+            controls.clone(),
+            reply(Err(PersistenceUpdateError::Rejected(
+                "Initial sync failed".into(),
+            ))),
+        );
+        finish_pending(&context);
+        assert!(controls.check.is_inconsistent());
+        assert!(!controls.config_path.exists());
+
+        controls.check.set_active(true);
+        reentrant_changes.set(0);
+        update_persistence_with(
+            controls.clone(),
+            reply(Ok(PersistenceUpdate {
+                enabled: true,
+                history: Ok(Vec::new()),
+            })),
+        );
+        assert!(persistence_pending());
+        assert!(!controls.check.is_sensitive());
+        assert!(!controls.list_box.is_sensitive());
+        assert!(!controls.clear_button.is_sensitive());
+        assert!(controls.spinner.is_spinning());
+        assert!(!controls.config.borrow().persistence_enabled);
+        assert!(
+            !controls.config_path.exists(),
+            "Unacknowledged setting was saved"
+        );
+        // Changes to other preferences made during IPC must survive its reply.
+        controls.config.borrow_mut().show_pin = false;
+        finish_pending(&context);
+        assert!(controls.check.is_active());
+        assert!(controls.check.is_sensitive());
+        assert!(controls.list_box.is_sensitive());
+        assert!(controls.clear_button.is_sensitive());
+        assert!(!controls.spinner.is_spinning());
+        assert!(!controls.status.is_visible());
+        let saved: UserConfig =
+            toml::from_str(&fs::read_to_string(&controls.config_path).unwrap()).unwrap();
+        assert!(saved.persistence_enabled);
+        assert!(!saved.show_pin);
+
+        controls.check.set_active(false);
+        reentrant_changes.set(0);
+        update_persistence_with(
+            controls.clone(),
+            reply(Err(PersistenceUpdateError::Rejected(
+                "Synthetic rejection".into(),
+            ))),
+        );
+        finish_pending(&context);
+        assert!(controls.check.is_active());
+        assert!(controls.config.borrow().persistence_enabled);
+        assert!(!controls.check.is_inconsistent());
+        assert!(controls.status.has_css_class("error"));
+        assert_eq!(
+            reentrant_changes.get(),
+            0,
+            "Rollback triggered another request"
+        );
+
+        controls.check.set_active(false);
+        update_persistence_with(
+            controls.clone(),
+            reply(Err(PersistenceUpdateError::Unconfirmed(
+                "Synthetic disconnect".into(),
+            ))),
+        );
+        finish_pending(&context);
+        assert!(controls.check.is_inconsistent());
+        assert!(controls.config.borrow().persistence_enabled);
+        assert!(controls.check.is_sensitive());
+
+        // Losing the history refresh must not undo an acknowledged mutation.
+        update_persistence_with(
+            controls.clone(),
+            reply(Ok(PersistenceUpdate {
+                enabled: false,
+                history: Err("Synthetic refresh failure".into()),
+            })),
+        );
+        finish_pending(&context);
+        assert!(!controls.check.is_active());
+        assert!(!controls.check.is_inconsistent());
+        assert!(!controls.config.borrow().persistence_enabled);
+        assert!(controls.status.is_visible());
+        assert!(!controls.status.has_css_class("error"));
+
+        // A failed config write does not invalidate the daemon's ACK.
+        let unwritable = PersistenceControls {
+            config_path: dir.clone(), // A directory cannot be a config file.
+            ..controls.clone()
+        };
+        update_persistence_with(
+            unwritable,
+            reply(Ok(PersistenceUpdate {
+                enabled: true,
+                history: Ok(Vec::new()),
+            })),
+        );
+        finish_pending(&context);
+        assert!(controls.check.is_active());
+        assert!(controls.config.borrow().persistence_enabled);
+        assert!(controls.status.has_css_class("error"));
+
+        // Closing a nonresident overlay hides it, then lets the ACK/config
+        // commit finish before request_quit tears the window down.
+        let window = adw::ApplicationWindow::builder()
+            .title("Isolated persistence QA")
+            .build();
+        window.set_content(Some(&controls.list_box));
+        window.present();
+        OVERLAY_WINDOW.with(|slot| *slot.borrow_mut() = Some(window.clone()));
+        reset_close_flags();
+        update_persistence_with(
+            controls.clone(),
+            reply(Ok(PersistenceUpdate {
+                enabled: false,
+                history: Ok(Vec::new()),
+            })),
+        );
+        request_quit();
+        assert!(is_close_requested());
+        assert!(persistence_pending());
+        assert!(!window.is_visible());
+        finish_pending(&context);
+        let saved: UserConfig =
+            toml::from_str(&fs::read_to_string(&controls.config_path).unwrap()).unwrap();
+        assert!(!saved.persistence_enabled);
+        OVERLAY_WINDOW.with(|slot| slot.borrow_mut().take());
+        reset_close_flags();
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// Keep the GTK loop free while the daemon migrates encrypted history. The
+/// setting is committed only after its acknowledgement, using the latest
+/// config so other options changed during the request are preserved.
+fn update_persistence(controls: PersistenceControls, enabled: bool) {
+    update_persistence_with(
+        controls,
+        FrontendClient::set_persistence_enabled_in_background(enabled),
+    );
+}
+
+fn update_persistence_with(
+    controls: PersistenceControls,
+    request: impl std::future::Future<Output = Result<PersistenceUpdate, PersistenceUpdateError>>
+    + 'static,
+) {
+    if PERSISTENCE_PENDING.with(|pending| pending.replace(true)) {
+        return;
+    }
+    controls.check.set_sensitive(false);
+    controls.list_box.set_sensitive(false);
+    controls.clear_button.set_sensitive(false);
+    controls.status.remove_css_class("error");
+    controls.status.set_label("Updating history storage…");
+    controls.status.set_visible(true);
+    controls.spinner.set_visible(true);
+    controls.spinner.start();
+
+    gtk4::glib::spawn_future_local(async move {
+        // A nonresident overlay can be hidden during the request, but must
+        // finish applying the acknowledged setting before exiting.
+        let _hold = gtk4::gio::Application::default().map(|app| app.hold());
+        let result = request.await;
+        match result {
+            Ok(update) => {
+                controls.confirmed.set(Some(update.enabled));
+                controls.check.set_inconsistent(false);
+                controls.check.set_active(update.enabled);
+                let saved = {
+                    let mut config = controls.config.borrow_mut();
+                    config.persistence_enabled = update.enabled;
+                    save_config_at(&config, &controls.config_path)
+                };
+                let refresh_failed = match update.history {
+                    Ok(items) => {
+                        *controls.history_state.all_items.borrow_mut() = items;
+                        rebuild_list(&controls.list_box, &controls.history_state);
+                        false
+                    }
+                    Err(error) => {
+                        warn!("History storage changed, but history refresh failed: {error}");
+                        true
+                    }
+                };
+                if let Err(error) = saved {
+                    warn!("History storage changed, but config save failed: {error}");
+                    controls
+                        .status
+                        .set_label("History storage changed, but the setting could not be saved.");
+                    controls.status.add_css_class("error");
+                } else if refresh_failed {
+                    controls
+                        .status
+                        .set_label("History storage changed. Reopen to refresh the history list.");
+                } else {
+                    controls.status.set_visible(false);
+                }
+            }
+            Err(PersistenceUpdateError::Rejected(error)) => {
+                warn!("Failed to update history storage: {error}");
+                if let Some(enabled) = controls.confirmed.get() {
+                    controls.check.set_inconsistent(false);
+                    controls.check.set_active(enabled);
+                } else {
+                    controls.check.set_inconsistent(true);
+                }
+                controls
+                    .status
+                    .set_label("Could not change history storage.");
+                controls.status.add_css_class("error");
+            }
+            Err(PersistenceUpdateError::Unconfirmed(error)) => {
+                warn!("History storage update could not be confirmed: {error}");
+                controls.confirmed.set(None);
+                // A disconnected reply does not prove the mutation failed.
+                controls.check.set_inconsistent(true);
+                controls
+                    .status
+                    .set_label("The history storage change could not be confirmed.");
+                controls.status.add_css_class("error");
+            }
+        }
+        controls.spinner.stop();
+        controls.spinner.set_visible(false);
+        PERSISTENCE_PENDING.with(|pending| pending.set(false));
+        controls.check.set_sensitive(true);
+        controls.list_box.set_sensitive(true);
+        controls.clear_button.set_sensitive(true);
+        if is_close_requested() {
+            request_quit();
+        }
+    });
 }
 
 pub fn is_close_requested() -> bool {
@@ -163,6 +488,14 @@ fn request_quit() {
     }
 
     CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+    if persistence_pending() {
+        OVERLAY_WINDOW.with(|window| {
+            if let Some(window) = window.borrow().as_ref() {
+                window.set_visible(false);
+            }
+        });
+        return;
+    }
     // Prefer quitting the application (cleaner teardown) over closing the window directly
     OVERLAY_APP.with(|a| {
         if let Some(ref app) = *a.borrow() {
@@ -489,9 +822,11 @@ fn show_resident_overlay() {
         };
         let ui = &resident.ui;
 
-        match FrontendClient::new().and_then(|mut client| client.get_history()) {
-            Ok(items) => *ui.history_state.all_items.borrow_mut() = items,
-            Err(e) => warn!("Failed to refresh clipboard history: {e}"),
+        if !persistence_pending() {
+            match FrontendClient::new().and_then(|mut client| client.get_history()) {
+                Ok(items) => *ui.history_state.all_items.borrow_mut() = items,
+                Err(e) => warn!("Failed to refresh clipboard history: {e}"),
+            }
         }
 
         ui.history_state.search_query.borrow_mut().clear();
@@ -590,12 +925,6 @@ fn generate_overlay_content(
     let show_trash_state = Rc::new(RefCell::new(show_trash_default));
     let show_pin_state = Rc::new(RefCell::new(show_pin_default));
 
-    if let Ok(mut client) = FrontendClient::new()
-        && let Err(e) = client.set_persistence_enabled(persistence_enabled_default)
-    {
-        warn!("Failed to sync persistence setting with backend: {}", e);
-    }
-
     // Search and clear are on the left; options and close are on the right.
     let search_button = Button::builder().icon_name("edit-find-symbolic").build();
     search_button.add_css_class("flat");
@@ -677,6 +1006,9 @@ fn generate_overlay_content(
     let persistence_toggle_check = CheckButton::new();
     persistence_toggle_check.set_active(persistence_enabled_default);
     persistence_toggle_row.append(&persistence_toggle_label);
+    let persistence_spinner = gtk4::Spinner::new();
+    persistence_spinner.set_visible(false);
+    persistence_toggle_row.append(&persistence_spinner);
     persistence_toggle_row.append(&persistence_toggle_check);
     menu_box.append(&persistence_toggle_row);
 
@@ -689,6 +1021,13 @@ fn generate_overlay_content(
     instant_paste_toggle_row.append(&instant_paste_toggle_label);
     instant_paste_toggle_row.append(&instant_paste_toggle_check);
     menu_box.append(&instant_paste_toggle_row);
+
+    let persistence_status = Label::new(None);
+    persistence_status.set_halign(Align::Start);
+    persistence_status.set_wrap(true);
+    persistence_status.set_max_width_chars(32);
+    persistence_status.set_visible(false);
+    menu_box.append(&persistence_status);
 
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&close_button);
@@ -795,6 +1134,9 @@ fn generate_overlay_content(
     let history_state_for_activation = history_state.clone();
     let config_for_activation = config_state.clone();
     list_box.connect_row_activated(move |_, row| {
+        if persistence_pending() {
+            return;
+        }
         let Some(item_id) = row_item_id(row) else {
             return;
         };
@@ -860,26 +1202,21 @@ fn generate_overlay_content(
         set_pin_icons_visible(&list_box_for_pin_toggle, state);
     });
 
-    let config_for_persistence_toggle = config_state.clone();
+    let persistence_controls = PersistenceControls {
+        check: persistence_toggle_check.clone(),
+        spinner: persistence_spinner,
+        status: persistence_status,
+        list_box: list_box.clone(),
+        clear_button: clear_button.clone(),
+        history_state: history_state.clone(),
+        config: config_state.clone(),
+        config_path: config_path(),
+        confirmed: Rc::new(Cell::new(None)),
+    };
+    let controls_for_persistence_toggle = persistence_controls.clone();
     persistence_toggle_check.connect_toggled(move |check| {
-        let state = check.is_active();
-        {
-            let mut config = config_for_persistence_toggle.borrow_mut();
-            config.persistence_enabled = state;
-            if let Err(e) = save_config(&config) {
-                warn!("Failed to save config: {}", e);
-            }
-        }
-
-        match FrontendClient::new() {
-            Ok(mut client) => {
-                if let Err(e) = client.set_persistence_enabled(state) {
-                    warn!("Failed to update persistence in backend: {}", e);
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to backend for persistence toggle: {}", e);
-            }
+        if !persistence_pending() {
+            update_persistence(controls_for_persistence_toggle.clone(), check.is_active());
         }
     });
 
@@ -950,6 +1287,9 @@ fn generate_overlay_content(
     });
 
     clear_button.connect_clicked(move |button| {
+        if persistence_pending() {
+            return;
+        }
         let dialog = adw::AlertDialog::new(
             Some("Clear clipboard history?"),
             Some("All clipboard history items will be deleted. This cannot be undone."),
@@ -960,7 +1300,7 @@ fn generate_overlay_content(
         dialog.set_close_response("cancel");
         dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
         dialog.connect_response(None, |_, response| {
-            if response != "clear" {
+            if response != "clear" || persistence_pending() {
                 return;
             }
             match FrontendClient::new() {
@@ -984,6 +1324,8 @@ fn generate_overlay_content(
     let overlay = Overlay::new();
     overlay.set_child(Some(&main_box));
     overlay.add_overlay(&menu_revealer);
+
+    update_persistence(persistence_controls, persistence_enabled_default);
 
     OverlayContent {
         overlay,
@@ -1136,6 +1478,9 @@ fn selected_item_id(list_box: &gtk4::ListBox) -> Option<u64> {
 }
 
 fn delete_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+    if persistence_pending() {
+        return;
+    }
     let Some(item_id) = selected_item_id(list_box) else {
         return;
     };
@@ -1165,6 +1510,9 @@ fn delete_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListSta
 }
 
 fn toggle_pin_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+    if persistence_pending() {
+        return;
+    }
     let Some(item_id) = selected_item_id(list_box) else {
         return;
     };
@@ -1636,6 +1984,9 @@ fn generate_listboxrow_from_preview(
     let list_box_for_delete = list_box.clone();
     let history_state_for_delete = history_state.clone();
     delete_button.connect_clicked(move |_| {
+        if persistence_pending() {
+            return;
+        }
         match FrontendClient::new() {
             Ok(mut client) => {
                 if let Err(e) = client.delete_item_by_id(item_id) {
@@ -1662,6 +2013,9 @@ fn generate_listboxrow_from_preview(
     let list_box_for_pin = list_box.clone();
     let history_state_for_pin = history_state.clone();
     pin_button.connect_clicked(move |_| {
+        if persistence_pending() {
+            return;
+        }
         let Some(pinned) = next_pinned_state(&history_state_for_pin, item_id) else {
             return;
         };
