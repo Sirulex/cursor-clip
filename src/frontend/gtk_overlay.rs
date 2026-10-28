@@ -52,6 +52,8 @@ struct UserConfig {
     #[serde(alias = "persistent_history")]
     persistence_enabled: bool,
     instant_paste: bool,
+    /// Width of the history list in logical pixels.
+    width: i32,
 }
 
 #[derive(Clone)]
@@ -103,6 +105,7 @@ impl Default for UserConfig {
             show_pin: true,
             persistence_enabled: false,
             instant_paste: true,
+            width: DEFAULT_LIST_WIDTH,
         }
     }
 }
@@ -538,6 +541,9 @@ fn find_gdk_monitor(connector: &str) -> Option<gtk4::gdk::Monitor> {
         .find(|monitor| monitor.connector().as_deref() == Some(connector))
 }
 
+/// Default width of the history list, in logical pixels (`width` in config.toml).
+const DEFAULT_LIST_WIDTH: i32 = 320;
+
 /// Keep the card at the pointer but fully on screen.
 fn place_card(
     card: &Overlay,
@@ -728,7 +734,11 @@ fn generate_overlay_content(
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
     scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-    scrolled_window.set_min_content_width(overlay_width);
+    // Fixed list width (config `width`): the card must not resize while rows fill in
+    // or while search filters them. Natural width is not propagated from the rows.
+    let list_width = config_state.borrow().width.clamp(overlay_width, 1200);
+    scrolled_window.set_min_content_width(list_width);
+    scrolled_window.set_max_content_width(list_width);
     scrolled_window.set_min_content_height(overlay_height);
 
     // Create list box for clipboard items
@@ -1611,7 +1621,16 @@ fn generate_listboxrow_from_preview(
         picture.add_css_class("clipboard-preview");
         main_box.append(&picture);
     } else {
-        let content_label = Label::new(Some(&item.content_preview));
+        // Collapse whitespace runs: Pango cannot wrap inside a long run of spaces, so one
+        // indented snippet (e.g. pasted HTML) used to force the whole card to its width.
+        let preview: String = item
+            .content_preview
+            .lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content_label = Label::new(Some(&preview));
         content_label.add_css_class("clipboard-preview");
         if matches!(
             item.content_type,
