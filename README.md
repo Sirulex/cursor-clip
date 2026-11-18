@@ -6,7 +6,7 @@
 </div>
 
 A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell** that makes clipboard handling more reliable.
-Features a Windows 11–style clipboard history interface with native GNOME design, which is always positioned at the current mouse pointer location.
+Features a Windows 11–style clipboard history interface with native GNOME design and configurable placement.
 
 ## Features
 
@@ -219,13 +219,12 @@ Running the application requires a supported Wayland session (see Compositor Sup
 1. **Start Background Daemon**: `cursor-clip --daemon`
 2. **Toggle Overlay**: Run `cursor-clip-toggle` to open and close it (ideally bind it to a hotkey, e.g., Super+V). It is a tiny launcher that signals a running overlay and otherwise starts `cursor-clip`; running `cursor-clip` without arguments directly works too, it just starts slower because it loads GTK the old way (still kept for existing workflows). This backwards compatibility will be removed in a future version.
    - On Hyprland the overlay stays alive in the background after closing, with its rows already laid out, so later opens take a few milliseconds instead of a full GTK start.
-3. **Trigger**: Your mouse position is automatically captured
-4. **View History**: The clipboard history window will appear at your cursor position, showing:
+3. **View History**: The clipboard history window opens at your cursor by default, showing:
    - **Recent clipboard items** with content previews
    - **Content type icons** (text, URL, code, password, file)
    - **Timestamps** showing when items were copied
    - **Quick actions**: Clear, Delete, Pin and Close
-5. **Interact**:
+4. **Interact**:
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
    - **Clear icon** on the left side of the header to remove all history items after confirming; choose **Cancel** or press `Esc` to keep them
@@ -237,6 +236,19 @@ Running the application requires a supported Wayland session (see Compositor Sup
    - **Keyboard navigation**: Use `Arrow keys` or `Ctrl+J/K` to navigate, `Enter` to select, `Delete` to remove, `Ctrl+P` to pin
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
    - **History list size** defaults to **350 × 400** logical pixels. Enter **width × height** in the three-dot menu, then press Enter or click **Apply** to resize and save. You can also set the top-level integers `width` and `height` in `config.toml`.
+
+### Popup placement
+
+Set the top-level `position` and `margin` keys in `~/.config/cursor-clip/config.toml`.
+
+```toml
+position = "bottom-right"
+margin = 16
+```
+
+`position` accepts `cursor` (the default), `center`, `top-left`, `top-right`, `bottom-left`, and `bottom-right`. The center and corner positions use the active monitor selected by your compositor and open without waiting for pointer movement.
+
+`margin` is a non-negative integer in logical pixels and defaults to `5`. It sets the inset from the screen edges for corner placement and the edge clearance for cursor placement, space permitting. Center placement ignores the margin. Changes take effect the next time the popup opens.
 
 ## Persistent History Security
 
@@ -251,8 +263,9 @@ On KDE Plasma, instant paste is currently not available because the compositor d
 
 ## niri specific fix: Overlay waits for mouse movement
 
-With `cursor { hide-when-typing }` configured in niri, launching Cursor Clip from
-a keybind or terminal can leave the frontend waiting until you move the mouse.
+With `position = "cursor"` and niri's `cursor { hide-when-typing }` enabled,
+launching Cursor Clip from a keybind or terminal can leave the frontend waiting
+until you move the mouse.
 The keypress hides the pointer, and niri withholds pointer focus from the new
 capture layer. Moving the mouse restores focus so Cursor Clip can receive the
 Wayland `wl_pointer.enter` event and open the overlay at the cursor. See

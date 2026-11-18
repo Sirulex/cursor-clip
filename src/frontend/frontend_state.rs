@@ -35,8 +35,6 @@ pub struct State {
     pub update_frame_callback: Option<wl_callback::WlCallback>,
     pub capture_viewport: Option<wp_viewport::WpViewport>,
     pub update_viewport: Option<wp_viewport::WpViewport>,
-    pub overlay_width: i32,
-    pub monitor_width: i32,
     pub monitor_height: i32,
 }
 
@@ -72,8 +70,6 @@ impl State {
             update_frame_callback: None,
             capture_viewport: None,
             update_viewport: None,
-            overlay_width: 200,
-            monitor_width: 0,
             monitor_height: 0,
         }
     }

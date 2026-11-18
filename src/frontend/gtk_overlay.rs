@@ -1,5 +1,5 @@
 use crate::frontend::ipc_client::{FrontendClient, PersistenceUpdateError};
-use crate::shared::config::{UserConfig, config_path};
+use crate::shared::config::{PopupPosition, UserConfig, config_path};
 use crate::shared::{ClipboardContentType, ClipboardItemPreview};
 use gtk4::prelude::*;
 use gtk4::{
@@ -20,19 +20,12 @@ use crate::frontend::hyprland;
 use crate::frontend::toggle::ToggleServer;
 use std::os::fd::AsRawFd;
 
+use super::OverlayLocation;
+
 static INIT: Once = Once::new();
 pub static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone)]
-pub struct OverlayGeometry {
-    pub x: f64,
-    pub y: f64,
-    pub overlay_width: i32,
-    pub monitor_width: i32,
-    pub monitor_height: i32,
-    /// Output connector to open on; `None` lets the compositor choose
-    pub monitor: Option<String>,
-}
+const OVERLAY_MIN_WIDTH: i32 = 200;
 
 // Thread-local storage for the overlay state since GTK objects aren't Send/Sync
 thread_local! {
@@ -90,14 +83,13 @@ struct OverlayContent {
 /// The built overlay: window plus the parts that are reset on every show.
 struct OverlayUi {
     window: adw::ApplicationWindow,
-    card: Overlay,
+    backdrop: Overlay,
     list_size: Rc<ListSize>,
     list_box: gtk4::ListBox,
     history_state: HistoryListState,
     search_entry: SearchEntry,
     menu_revealer: Revealer,
-    /// Pointer position the card is anchored to, relative to the output
-    card_target: Rc<Cell<(f64, f64)>>,
+    placement: Rc<Cell<CardPlacement>>,
 }
 
 /// A hidden overlay kept in memory with its rows already laid out, so the
@@ -266,7 +258,7 @@ fn update_persistence(controls: Rc<PersistenceControls>, enabled: Option<bool>) 
     });
 }
 
-fn overlay_config(path: &Path) -> Option<UserConfig> {
+pub(super) fn overlay_config(path: &Path) -> Option<UserConfig> {
     match UserConfig::load_or_create(path) {
         Ok(config) => Some(config),
         Err(e) => {
@@ -321,10 +313,11 @@ fn request_quit() {
 
 /// Run the overlay. With `resident`, closing hides the window and later
 /// toggle requests show it again instead of starting a new process.
-pub fn init_clipboard_overlay(
-    geometry: OverlayGeometry,
+pub(super) fn init_clipboard_overlay(
+    location: OverlayLocation,
     toggle_listener: UnixListener,
     resident: bool,
+    config: UserConfig,
 ) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
     INIT.call_once(|| {
         adw::init().expect("Failed to initialize libadwaita");
@@ -346,7 +339,7 @@ pub fn init_clipboard_overlay(
             return;
         }
 
-        let ui = create_layer_shell_window(&app_clone, geometry.clone());
+        let ui = create_layer_shell_window(&app_clone, location.clone(), config.clone());
         let window = ui.window.clone();
 
         // Store the window in our thread-local storage
@@ -368,10 +361,7 @@ pub fn init_clipboard_overlay(
             });
         }
 
-        debug!(
-            "Libadwaita overlay window created at ({}, {})",
-            geometry.x, geometry.y
-        );
+        debug!("Libadwaita overlay window created");
     });
 
     // Keep listening while GTK owns the main loop. A new cursor-clip process
@@ -435,16 +425,11 @@ fn configure_color_scheme() {
 }
 
 /// Create and configure the sync layer shell window
-fn create_layer_shell_window(app: &Application, geometry: OverlayGeometry) -> OverlayUi {
-    let OverlayGeometry {
-        x,
-        y,
-        overlay_width,
-        monitor_width,
-        monitor_height,
-        monitor,
-    } = geometry;
-
+fn create_layer_shell_window(
+    app: &Application,
+    location: OverlayLocation,
+    config: UserConfig,
+) -> OverlayUi {
     // Create the main window using Adwaita ApplicationWindow
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -460,12 +445,11 @@ fn create_layer_shell_window(app: &Application, geometry: OverlayGeometry) -> Ov
     window.set_layer(Layer::Overlay);
     window.set_namespace(Some("cursor-clip"));
 
-    // Cover the whole output with a transparent surface. The card is placed
-    // inside it at the pointer, and a click on the transparent area closes it.
+    // Cover the output so a click outside the card can close the overlay.
     for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
         window.set_anchor(edge, true);
     }
-    if let Some(gdk_monitor) = monitor.as_deref().and_then(find_gdk_monitor) {
+    if let Some(gdk_monitor) = location.monitor.as_deref().and_then(find_gdk_monitor) {
         window.set_monitor(Some(&gdk_monitor));
     }
 
@@ -478,71 +462,42 @@ fn create_layer_shell_window(app: &Application, geometry: OverlayGeometry) -> Ov
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let content = generate_overlay_content(
-        overlay_config(&config_path()).unwrap_or_default(),
-        overlay_width,
-    );
+    let placement = Rc::new(Cell::new(CardPlacement {
+        position: config.position,
+        margin: config.margin,
+        cursor: location.cursor,
+    }));
+    let content = generate_overlay_content(config);
     let card = content.overlay.clone();
     card.add_css_class("cursor-clip-card");
     card.set_overflow(gtk4::Overflow::Hidden);
-    card.set_halign(Align::Start);
-    card.set_valign(Align::Start);
 
-    let root = Box::new(Orientation::Vertical, 0);
-    root.set_hexpand(true);
-    root.set_vexpand(true);
-    root.append(&card);
-    window.set_content(Some(&root));
-    content.list_size.apply(monitor_height);
-
-    let card_target = Rc::new(Cell::new((x, y)));
-    place_card(&card, x, y, monitor_width, monitor_height);
-    let reposition = {
-        let window = window.downgrade();
-        let card = card.downgrade();
-        let target = card_target.clone();
-        move || {
-            if let (Some(window), Some(card)) = (window.upgrade(), card.upgrade()) {
-                let (x, y) = target.get();
-                place_card(&card, x, y, window.width(), window.height());
-            }
-        }
-    };
-    content
-        .list_size
-        .connect_apply(&config_path(), reposition.clone());
-    // A short list can be smaller than the open settings panel.
-    content.menu_revealer.connect_child_revealed_notify({
-        let reposition = reposition.clone();
-        move |_| reposition()
-    });
-    content.list_size.error.connect_visible_notify({
-        let reposition = reposition.clone();
-        move |_| reposition()
-    });
+    let backdrop = create_backdrop(&card, placement.clone());
+    window.set_content(Some(&backdrop));
+    content.list_size.apply(location.monitor_height);
+    content.list_size.connect_apply(&config_path());
     content.search_entry.connect_visible_notify({
         let size = Rc::downgrade(&content.list_size);
         let window = window.downgrade();
-        let reposition = reposition.clone();
         move |_| {
             if let (Some(size), Some(window)) = (size.upgrade(), window.upgrade())
                 && window.is_mapped()
             {
                 size.apply(window.height());
-                reposition();
             }
         }
     });
-    window.connect_map({
+    window.connect_realize({
         let size = content.list_size.clone();
         move |window| {
-            let window = window.clone();
-            let size = size.clone();
-            let reposition = reposition.clone();
-            gtk4::glib::idle_add_local_once(move || {
-                size.apply(window.height());
-                reposition();
-            });
+            if let Some(surface) = window.surface() {
+                let size = Rc::downgrade(&size);
+                surface.connect_layout(move |_, _, height| {
+                    if let Some(size) = size.upgrade() {
+                        size.apply(height);
+                    }
+                });
+            }
         }
     });
 
@@ -598,13 +553,13 @@ fn create_layer_shell_window(app: &Application, geometry: OverlayGeometry) -> Ov
 
     OverlayUi {
         window,
-        card,
+        backdrop,
         list_size: content.list_size,
         list_box: content.list_box,
         history_state: content.history_state,
         search_entry: content.search_entry,
         menu_revealer: content.menu_revealer,
-        card_target,
+        placement,
     }
 }
 
@@ -634,7 +589,7 @@ fn hide_resident_overlay() {
 }
 
 /// Re-open the kept overlay: apply history changes to the existing rows,
-/// reset search/menu/scroll, move the card to the pointer and map it.
+/// reset search/menu/scroll and place the card on the current output.
 fn show_resident_overlay() {
     RESIDENT.with(|resident| {
         let resident = resident.borrow();
@@ -642,8 +597,11 @@ fn show_resident_overlay() {
             return;
         };
         let ui = &resident.ui;
+        let mut placement = ui.placement.get();
         if let Some(config) = overlay_config(&config_path()) {
             ui.list_size.set_requested(config.width, config.height);
+            placement.position = config.position;
+            placement.margin = config.margin;
         }
 
         ui.history_state.search_query.borrow_mut().clear();
@@ -661,21 +619,19 @@ fn show_resident_overlay() {
             scrolled.vadjustment().set_value(0.0);
         }
 
-        if let Some(location) = hyprland::pointer_location() {
-            if let Some(gdk_monitor) = find_gdk_monitor(&location.monitor) {
-                ui.window.set_monitor(Some(&gdk_monitor));
-            }
-            ui.card_target.set((location.x, location.y));
-            ui.list_size.apply(location.monitor_height);
-            place_card(
-                &ui.card,
-                location.x,
-                location.y,
-                location.monitor_width,
-                location.monitor_height,
-            );
+        let mut monitor_height = ui.window.height();
+        if let Some(location) = hyprland::overlay_location(placement.position) {
+            let monitor = location.monitor.as_deref().and_then(find_gdk_monitor);
+            ui.window.set_monitor(monitor.as_ref());
+            placement.cursor = location.cursor;
+            monitor_height = location.monitor_height;
+        } else if placement.position != PopupPosition::Cursor {
+            ui.window.set_monitor(None);
         }
 
+        ui.list_size.apply(monitor_height);
+        ui.placement.set(placement);
+        ui.backdrop.queue_allocate();
         ui.window.present();
     });
 }
@@ -704,7 +660,6 @@ fn dimension_entry(label: &str, value: i32) -> gtk4::Entry {
 struct ListSize {
     header: adw::HeaderBar,
     scrolled: gtk4::ScrolledWindow,
-    overlay_min_width: i32,
     width_entry: gtk4::Entry,
     height_entry: gtk4::Entry,
     apply_button: Button,
@@ -724,7 +679,7 @@ impl ListSize {
     fn apply(&self, area_height: i32) {
         let (requested_width, requested_height) = self.requested.get();
         let (header_min, _, _, _) = self.header.measure(Orientation::Horizontal, -1);
-        let minimum = header_min.max(self.overlay_min_width);
+        let minimum = header_min.max(OVERLAY_MIN_WIDTH);
         let width = requested_width.min(1200).max(minimum);
         if requested_width < minimum
             && (self.last_width.get() != Some(requested_width)
@@ -751,7 +706,7 @@ impl ListSize {
             .set_min_content_height(requested_height.clamp(1, max_height));
     }
 
-    fn connect_apply(self: &Rc<Self>, path: &Path, reposition: impl Fn() + 'static) {
+    fn connect_apply(self: &Rc<Self>, path: &Path) {
         for entry in [&self.width_entry, &self.height_entry] {
             let button = self.apply_button.downgrade();
             entry.connect_activate(move |_| {
@@ -794,31 +749,60 @@ impl ListSize {
                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
                 .map_or(0, |window| window.height());
             size.apply(height);
-            reposition();
         });
     }
 }
 
-/// Keep the card at the pointer but fully on screen.
-fn place_card(card: &Overlay, x: f64, y: f64, area_width: i32, area_height: i32) {
-    // Measurements include the current margins, which describe the old position.
-    let (_, width, _, _) = card.measure(Orientation::Horizontal, -1);
-    let card_width = width - card.margin_start() - card.margin_end();
-    let (_, height, _, _) = card.measure(Orientation::Vertical, width);
-    let card_height = height - card.margin_top() - card.margin_bottom();
-    let (left, top) = if area_width > 0 && area_height > 0 {
-        let margin = 5.0;
-        let max_x = (area_width as f64 - card_width as f64 - margin).max(margin);
-        let max_y = (area_height as f64 - card_height as f64 - margin).max(margin);
-        (x.clamp(margin, max_x), y.clamp(margin, max_y))
-    } else {
-        (x, y)
-    };
-    card.set_margin_start(left as i32);
-    card.set_margin_top(top as i32);
+#[derive(Clone, Copy)]
+struct CardPlacement {
+    position: PopupPosition,
+    margin: i32,
+    cursor: (f64, f64),
 }
 
-fn generate_overlay_content(config: UserConfig, overlay_min_width: i32) -> OverlayContent {
+impl CardPlacement {
+    fn origin(self, free_width: i32, free_height: i32) -> (i32, i32) {
+        let left = self.margin.min(free_width);
+        let top = self.margin.min(free_height);
+        let right = free_width - left;
+        let bottom = free_height - top;
+        match self.position {
+            PopupPosition::Cursor => (
+                (self.cursor.0 as i32).clamp(left, right.max(left)),
+                (self.cursor.1 as i32).clamp(top, bottom.max(top)),
+            ),
+            PopupPosition::Center => (free_width / 2, free_height / 2),
+            PopupPosition::TopLeft => (left, top),
+            PopupPosition::TopRight => (right, top),
+            PopupPosition::BottomLeft => (left, bottom),
+            PopupPosition::BottomRight => (right, bottom),
+        }
+    }
+}
+
+fn create_backdrop(card: &Overlay, placement: Rc<Cell<CardPlacement>>) -> Overlay {
+    let backdrop = Overlay::new();
+    // Allocate the card within the output size without adding its position
+    // to the window's size request.
+    backdrop.add_overlay(card);
+    backdrop.connect_get_child_position(move |backdrop, card| {
+        let width = card
+            .measure(Orientation::Horizontal, -1)
+            .1
+            .min(backdrop.width());
+        let height = card
+            .measure(Orientation::Vertical, width)
+            .1
+            .min(backdrop.height());
+        let (left, top) = placement
+            .get()
+            .origin(backdrop.width() - width, backdrop.height() - height);
+        Some(gtk4::gdk::Rectangle::new(left, top, width, height))
+    });
+    backdrop
+}
+
+fn generate_overlay_content(config: UserConfig) -> OverlayContent {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
 
@@ -1261,7 +1245,6 @@ fn generate_overlay_content(config: UserConfig, overlay_min_width: i32) -> Overl
         list_size: Rc::new(ListSize {
             header: header_bar,
             scrolled: scrolled_window,
-            overlay_min_width,
             width_entry,
             height_entry,
             apply_button,
@@ -2392,7 +2375,7 @@ fn format_timestamp(timestamp: u64) -> String {
 #[cfg(test)]
 mod size_tests {
     use super::*;
-    use crate::shared::config::{DEFAULT_LIST_HEIGHT, DEFAULT_LIST_WIDTH};
+    use crate::shared::config::{DEFAULT_LIST_HEIGHT, DEFAULT_LIST_WIDTH, DEFAULT_MARGIN};
     use std::fs;
 
     #[test]
@@ -2410,6 +2393,8 @@ mod size_tests {
             "height = \"400\"",
             "persistence_enabled = true\nwidth = \"700\"\n",
             "widht = 700\n",
+            "position = \"side\"",
+            "margin = -1",
         ] {
             fs::write(&path, invalid).unwrap();
             assert!(overlay_config(&path).is_none());
@@ -2423,7 +2408,42 @@ mod size_tests {
         let config = UserConfig::load_or_create(&path).unwrap();
         assert!(config.persistence_enabled && !config.show_pin);
         assert_eq!((config.width, config.height), (700, DEFAULT_LIST_HEIGHT));
+        assert_eq!(
+            (config.position, config.margin),
+            (PopupPosition::Cursor, DEFAULT_MARGIN)
+        );
+
+        fs::write(&path, "position = \"bottom-right\"\nmargin = 24\n").unwrap();
+        UserConfig::update(&path, |cfg| cfg.show_pin = false).unwrap();
+        let config = UserConfig::read(&path).unwrap();
+        assert_eq!(
+            (config.position, config.margin),
+            (PopupPosition::BottomRight, 24)
+        );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn card_origins_respect_the_output_and_margin() {
+        let mut placement = CardPlacement {
+            position: PopupPosition::Cursor,
+            margin: 24,
+            cursor: (125.0, 480.0),
+        };
+        for (position, origin) in [
+            (PopupPosition::Cursor, (125, 326)),
+            (PopupPosition::Center, (250, 175)),
+            (PopupPosition::TopLeft, (24, 24)),
+            (PopupPosition::TopRight, (476, 24)),
+            (PopupPosition::BottomLeft, (24, 326)),
+            (PopupPosition::BottomRight, (476, 326)),
+        ] {
+            placement.position = position;
+            assert_eq!(placement.origin(500, 350), origin, "{position:?}");
+        }
+        assert_eq!(placement.origin(12, 0), (0, 0));
+        placement.margin = 0;
+        assert_eq!(placement.origin(500, 350), (500, 350));
     }
 
     #[test]
@@ -2450,16 +2470,22 @@ mod size_tests {
             .default_height(550)
             .build();
         apply_custom_styling(&window);
-        let content = generate_overlay_content(config, 200);
+        let content = generate_overlay_content(config);
         apply_history(&content.list_box, &content.history_state, vec![item]);
         content.overlay.add_css_class("cursor-clip-card");
-        content.overlay.set_halign(Align::Start);
-        content.overlay.set_valign(Align::Start);
-        let root = Box::new(Orientation::Vertical, 0);
-        root.append(&content.overlay);
+        let placement = Rc::new(Cell::new(CardPlacement {
+            position: PopupPosition::BottomRight,
+            margin: 24,
+            cursor: (990.0, 540.0),
+        }));
+        let root = create_backdrop(&content.overlay, placement);
         window.set_content(Some(&root));
         let size = &content.list_size;
-        let minimum = size.header.measure(Orientation::Horizontal, -1).0.max(200);
+        let minimum = size
+            .header
+            .measure(Orientation::Horizontal, -1)
+            .0
+            .max(OVERLAY_MIN_WIDTH);
         let wait_for_size = |width, height| {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while (size.scrolled.width(), size.scrolled.height()) != (width, height) {
@@ -2479,10 +2505,7 @@ mod size_tests {
             &content.search_entry,
         );
         window.add_controller(keys.clone());
-        size.connect_apply(&path, {
-            let card = content.overlay.downgrade();
-            move || place_card(&card.upgrade().unwrap(), 990.0, 540.0, 1000, 550)
-        });
+        size.connect_apply(&path);
         size.apply(550);
         window.present();
         wait_for_size(350, 400);
@@ -2560,8 +2583,9 @@ mod size_tests {
             "header title was truncated on a wide card: {} pixels",
             title.width()
         );
-        assert!(content.overlay.margin_start() + content.overlay.width() <= 1000);
-        assert!(content.overlay.margin_top() + content.overlay.height() <= 550);
+        let bounds = content.overlay.compute_bounds(&root).unwrap();
+        assert_eq!(bounds.x() + bounds.width(), (root.width() - 24) as f32);
+        assert_eq!(bounds.y() + bounds.height(), (root.height() - 24) as f32);
         let saved = UserConfig::load_or_create(&path).unwrap();
         assert_eq!((saved.width, saved.height), (600, 280));
 
@@ -2665,7 +2689,7 @@ mod tests {
                 }
             });
             let next_request = || until(|| rx.try_recv().ok());
-            let content = generate_overlay_content(UserConfig::default(), 200);
+            let content = generate_overlay_content(UserConfig::default());
             let controls = &content.persistence;
             let window = adw::ApplicationWindow::builder()
                 .title("Cursor Clip focus test")
