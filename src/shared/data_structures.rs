@@ -99,6 +99,8 @@ pub enum FrontendMessage {
     DeleteItemById { id: u64 },
     /// Clear all clipboard history
     ClearHistory,
+    /// Read the current storage mode.
+    GetHistoryPersistence,
     /// Enable or disable persistent history storage
     SetHistoryPersistence { enabled: bool },
 }

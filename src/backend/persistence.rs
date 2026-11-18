@@ -1,4 +1,5 @@
 use crate::backend::store::ClipboardStore;
+use crate::shared::config::config_dir;
 use crate::shared::{ClipboardContentType, ClipboardItem};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -14,38 +15,6 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use stoolap::Database;
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct BackendConfig {
-    #[serde(alias = "persistent_history")]
-    persistence_enabled: bool,
-}
-
-pub fn load_persistence_enabled_from_config() -> bool {
-    let path = config_path();
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(e) => {
-            eprintln!(
-                "cursor-clip: cannot read {}. Starting with session-only history.\n{e}",
-                path.display()
-            );
-            return false;
-        }
-    };
-    match toml::from_str::<BackendConfig>(&contents) {
-        Ok(config) => config.persistence_enabled,
-        Err(e) => {
-            eprintln!(
-                "cursor-clip: invalid config in {}. Starting with session-only history.\n{e}",
-                path.display()
-            );
-            false
-        }
-    }
-}
 
 pub fn history_db_path() -> PathBuf {
     config_dir().join("history.stoolap.db")
@@ -222,15 +191,6 @@ pub fn migrate_legacy_history(
     }
 
     Ok(Some(items))
-}
-
-fn config_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("cursor-clip")
-}
-
-fn config_path() -> PathBuf {
-    config_dir().join("config.toml")
 }
 
 fn derive_cipher(password: &str) -> Aes256Gcm {

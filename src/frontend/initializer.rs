@@ -10,7 +10,6 @@ use wayland_protocols::wp::{
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
-use crate::frontend::ipc_client::FrontendClient;
 use crate::frontend::toggle::ToggleServer;
 use crate::frontend::{frontend_state::State, gtk_overlay, hyprland};
 use log::{debug, error, info, warn};
@@ -51,7 +50,6 @@ fn run_main_event_loop(
                     monitor_height: state.monitor_height,
                     monitor: None,
                 },
-                std::mem::take(&mut state.clipboard_history),
                 toggle_server,
                 false,
             )?;
@@ -64,16 +62,12 @@ fn run_main_event_loop(
 
 fn show_overlay(
     geometry: gtk_overlay::OverlayGeometry,
-    history: Vec<crate::shared::ClipboardItemPreview>,
     toggle_server: &ToggleServer,
     resident: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Err(e) = gtk_overlay::init_clipboard_overlay(
-        geometry,
-        history,
-        toggle_server.try_clone_listener()?,
-        resident,
-    ) {
+    if let Err(e) =
+        gtk_overlay::init_clipboard_overlay(geometry, toggle_server.try_clone_listener()?, resident)
+    {
         error!("Error creating GTK overlay: {e:?}");
     }
     gtk_overlay::reset_close_flags();
@@ -152,22 +146,6 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut state = State::new();
-    // Prefetch clipboard history for instant GTK overlay population
-    if let Ok(mut client) = FrontendClient::new() {
-        match client.get_history() {
-            Ok(items) => {
-                state.clipboard_history = items;
-                debug!(
-                    "Prefetched {} clipboard history items",
-                    state.clipboard_history.len()
-                );
-            }
-            Err(e) => warn!("Failed to prefetch clipboard history: {e}"),
-        }
-    } else {
-        warn!("Failed to connect to backend for history prefetch");
-    }
-
     // Hyprland can report the pointer position directly; no capture layer needed.
     if let Some(location) = hyprland::pointer_location() {
         let defaults = State::new();
@@ -180,7 +158,6 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
                 monitor_height: location.monitor_height,
                 monitor: Some(location.monitor),
             },
-            state.clipboard_history,
             &toggle_server,
             // Hyprland can tell us where the pointer is at any later time, so
             // the overlay stays alive hidden and later opens skip GTK startup.

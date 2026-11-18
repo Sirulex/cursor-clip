@@ -1,10 +1,11 @@
 use crate::backend::persistence::{
-    db_has_persisted_items, generate_and_store_db_password, load_persistence_enabled_from_config,
-    migrate_legacy_history, read_db_password_from_keyring_once, warn_persistence_sync_error,
+    db_has_persisted_items, generate_and_store_db_password, migrate_legacy_history,
+    read_db_password_from_keyring_once, warn_persistence_sync_error,
 };
 use crate::backend::store::{ClipboardStore, OpenBlob};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
+use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
@@ -173,7 +174,6 @@ impl Default for BackendState {
 
 impl BackendState {
     pub fn new(monitor_only: bool) -> Self {
-        let persistence_enabled = load_persistence_enabled_from_config();
         let db_password = match read_db_password_from_keyring_once() {
             Ok(password) => password,
             Err(e) => {
@@ -182,6 +182,14 @@ impl BackendState {
             }
         };
 
+        Self::with_password(monitor_only, db_password)
+    }
+
+    pub(super) fn with_password(monitor_only: bool, db_password: Option<String>) -> Self {
+        let persistence_enabled = read_persistence_enabled(&config_path()).unwrap_or_else(|e| {
+            eprintln!("cursor-clip: cannot load persistence setting. Starting with session-only history.\n{e}");
+            false
+        });
         let store = match ClipboardStore::open_ephemeral() {
             Ok(store) => store,
             Err(e) => panic!("Cannot create clipboard store: {e}"),
@@ -207,7 +215,7 @@ impl BackendState {
             expiry_notify: Arc::new(Notify::new()),
         };
 
-        if let Err(e) = state.set_persistence_enabled(persistence_enabled) {
+        if let Err(e) = state.transition_persistence(persistence_enabled, || Ok(())) {
             warn!("Failed to initialize persistence from config: {e}");
         }
 
@@ -565,12 +573,23 @@ impl BackendState {
     }
 
     pub fn set_persistence_enabled(&mut self, enabled: bool) -> Result<(), String> {
-        // The overlay re-sends the setting on every open; keep that cheap.
+        self.transition_persistence(enabled, || {
+            UserConfig::update(&config_path(), |config| {
+                config.persistence_enabled = enabled
+            })
+        })
+    }
+
+    fn transition_persistence(
+        &mut self,
+        enabled: bool,
+        commit_preference: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
         if enabled == self.persistence_enabled && enabled == self.store.is_persistent() {
-            return Ok(());
+            return commit_preference();
         }
 
-        if enabled {
+        let (store, history) = if enabled {
             if self.db_password.is_none() {
                 if db_has_persisted_items()? {
                     return Err(
@@ -591,32 +610,61 @@ impl BackendState {
             // Always read what is already on disk first. If that fails we
             // return before writing anything, so existing history is never
             // replaced by an index that does not contain it.
-            let mut existing = match migrate_legacy_history(password, &persistent)? {
+            let original = match migrate_legacy_history(password, &persistent)? {
                 Some(migrated) => migrated,
                 None => persistent.load_index()?,
             };
+            let had_index = ClipboardStore::persistent_index_exists();
+            let mut existing = original.clone();
             prepare_restored_history(&mut existing, unix_timestamp());
             self.expire_password_items(unix_timestamp());
-            let session = self.store.transfer_to(&persistent, &self.history)?;
-            let merged = merge_histories(session, existing);
-            persistent.save_index(&merged)?;
+            let prepare = || {
+                let session = self.store.transfer_to(&persistent, &self.history)?;
+                let merged = merge_histories(session, existing);
+                persistent.save_index(&merged)?;
+                commit_preference()?;
+                Ok::<_, String>(merged)
+            };
+            let merged = match prepare() {
+                Ok(merged) => merged,
+                Err(error) => {
+                    // A rejected enable must not leave session entries on disk.
+                    if had_index {
+                        persistent.save_index(&original).map_err(|restore| {
+                            format!("{error}. Restoring previous index failed: {restore}")
+                        })?;
+                        persistent.collect_garbage(&original);
+                    } else {
+                        persistent.destroy().map_err(|cleanup| {
+                            format!("{error}. Removing incomplete store failed: {cleanup}")
+                        })?;
+                    }
+                    return Err(error);
+                }
+            };
             persistent.collect_garbage(&merged);
-
-            // Swap only after the new index is safely on disk.
-            self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&merged));
-            self.history = merged;
-            self.replace_store(persistent);
-            self.persistence_enabled = true;
+            (persistent, merged)
         } else {
-            // Turning persistence off removes the on-disk history; the current
-            // session keeps working from a store that dies with the daemon.
             let ephemeral = ClipboardStore::open_ephemeral()?;
-            let history = self.store.transfer_to(&ephemeral, &self.history)?;
-            self.history = history;
-            self.replace_store(ephemeral);
-            self.persistence_enabled = false;
-        }
-
+            let history = self
+                .store
+                .transfer_to(&ephemeral, &self.history)
+                .and_then(|history| {
+                    commit_preference()?;
+                    Ok(history)
+                });
+            match history {
+                Ok(history) => (ephemeral, history),
+                Err(error) => {
+                    ephemeral.destroy()?;
+                    return Err(error);
+                }
+            }
+        };
+        self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&history));
+        self.history = history;
+        self.replace_store(store);
+        self.persistence_enabled = enabled;
         release_freed_memory();
         self.expiry_notify.notify_one();
         Ok(())
@@ -749,6 +797,31 @@ fn release_freed_memory() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_preference_write_preserves_both_stores() {
+        crate::shared::isolated_test(|| {
+            let mut old = BackendState::with_password(false, Some("test key".into()));
+            old.add_clipboard_item_from_text("saved entry");
+            old.set_persistence_enabled(true).unwrap();
+            // Simulate an ephemeral session with a previous persistent index.
+            UserConfig::update(&config_path(), |config| config.persistence_enabled = false)
+                .unwrap();
+            drop(old);
+            let mut session = BackendState::with_password(false, Some("test key".into()));
+            session.add_clipboard_item_from_text("session entry");
+            std::fs::write(config_path(), "invalid TOML [").unwrap();
+            assert!(session.set_persistence_enabled(true).is_err());
+            assert!(!session.persistence_enabled);
+            assert_eq!(session.get_history()[0].content_preview, "session entry");
+            let disk = ClipboardStore::open_persistent("test key")
+                .unwrap()
+                .load_index()
+                .unwrap();
+            assert_eq!(disk.len(), 1);
+            assert_eq!(disk[0].content_preview, "saved entry");
+        });
+    }
 
     #[tokio::test]
     async fn expiry_timer_wakes_for_new_earlier_deadline() {

@@ -100,6 +100,9 @@ async fn handle_client(
                 state.clear_history();
                 BackendMessage::HistoryCleared
             }
+            FrontendMessage::GetHistoryPersistence => BackendMessage::PersistenceState {
+                enabled: state.lock().unwrap().persistence_enabled,
+            },
             FrontendMessage::SetHistoryPersistence { enabled } => {
                 let mut state = state.lock().unwrap();
                 match state.set_persistence_enabled(enabled) {
@@ -160,4 +163,70 @@ fn acquire_instance_lock(socket_dir: &str) -> Result<std::fs::File, Box<dyn std:
         return Err("another cursor-clip daemon is already running".into());
     }
     Ok(lock_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::ipc_client::FrontendClient;
+    use crate::shared::config::{UserConfig, config_path};
+
+    #[test]
+    fn lost_acknowledgement_preserves_history_on_reopen_and_restart() {
+        crate::shared::isolated_test(|| {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let dir = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
+                    .join("cursor-clip");
+                std::fs::create_dir(&dir).unwrap();
+                let path = dir.join("cursor-clip.sock");
+                let listener = UnixListener::bind(&path).unwrap();
+                let key = Some("isolated test key".to_owned());
+                let mut backend = BackendState::with_password(false, key.clone());
+                backend.add_clipboard_item_from_text("keep this entry");
+                let state = Arc::new(Mutex::new(backend));
+
+                let mut client = UnixStream::connect(&path).await.unwrap();
+                client
+                    .write_all(b"{\"SetHistoryPersistence\":{\"enabled\":true}}\n")
+                    .await
+                    .unwrap();
+                drop(client);
+                let (stream, _) = listener.accept().await.unwrap();
+                // The frontend has already disconnected when the daemon sends the ACK.
+                let _ = handle_client(stream, state.clone()).await;
+                assert!(
+                    UserConfig::read(&config_path())
+                        .unwrap()
+                        .persistence_enabled
+                );
+                UserConfig::update(&config_path(), |config| config.show_pin = false).unwrap();
+
+                let server = tokio::spawn(async move {
+                    for _ in 0..2 {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        handle_client(stream, state.clone()).await.unwrap();
+                    }
+                });
+                assert!(FrontendClient::persistence(None).await.unwrap());
+                assert_eq!(
+                    FrontendClient::history().await.unwrap()[0].content_preview,
+                    "keep this entry"
+                );
+                server.await.unwrap();
+                let mut restarted = BackendState::with_password(false, key);
+                assert!(restarted.persistence_enabled);
+                assert_eq!(
+                    restarted.get_history()[0].content_preview,
+                    "keep this entry"
+                );
+                restarted.set_persistence_enabled(false).unwrap();
+                assert!(
+                    !UserConfig::read(&config_path())
+                        .unwrap()
+                        .persistence_enabled
+                );
+                assert!(!UserConfig::read(&config_path()).unwrap().show_pin);
+            });
+        });
+    }
 }

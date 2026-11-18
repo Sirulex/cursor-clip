@@ -10,6 +10,7 @@
 //! ephemeral store with a random in-memory key is used instead, so payloads
 //! are still never kept in RAM and become unreadable once the daemon exits.
 
+use crate::shared::write_atomic;
 use crate::shared::{ClipboardContentType, ClipboardItem};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -21,8 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 const BLOB_MAGIC: &[u8; 4] = b"CCB1";
@@ -410,40 +410,6 @@ fn xdg_dir(var: &str, home_fallback: &str) -> PathBuf {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             PathBuf::from(home).join(home_fallback)
         })
-}
-
-fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let mut suffix = [0u8; 8];
-    rand::rng().fill_bytes(&mut suffix);
-    let tmp_name = format!(
-        ".tmp-{}",
-        suffix
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
-    let tmp_path = path.with_file_name(tmp_name);
-
-    let result = (|| -> std::io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp_path)?;
-        file.write_all(contents)?;
-        file.sync_data()?;
-        fs::rename(&tmp_path, path)?;
-        // Make the new name durable before callers delete what it replaces.
-        if let Some(parent) = path.parent() {
-            fs::File::open(parent)?.sync_all()?;
-        }
-        Ok(())
-    })();
-
-    result.map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        format!("Failed to write {}: {e}", path.display())
-    })
 }
 
 fn remove_dir_if_exists(dir: &Path) -> Result<(), String> {
