@@ -10,8 +10,6 @@ use wayland_protocols::wp::{
     viewporter::client::{wp_viewport, wp_viewporter},
 };
 
-use crate::shared::ClipboardItemPreview;
-
 pub struct State {
     pub compositor: Option<wl_compositor::WlCompositor>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
@@ -41,7 +39,6 @@ pub struct State {
     pub overlay_height: i32,
     pub monitor_width: i32,
     pub monitor_height: i32,
-    pub clipboard_history: Vec<ClipboardItemPreview>,
 }
 
 impl Default for State {
@@ -80,7 +77,6 @@ impl State {
             overlay_height: 400,
             monitor_width: 0,
             monitor_height: 0,
-            clipboard_history: Vec::new(),
         }
     }
 }

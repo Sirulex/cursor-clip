@@ -1,17 +1,12 @@
 use crate::shared::{BackendMessage, ClipboardItemPreview, FrontendMessage};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Frontend client for communicating with the backend
 pub struct FrontendClient {
     stream: UnixStream,
-}
-
-/// The backend has confirmed the setting, even if refreshing history failed.
-#[derive(Debug)]
-pub struct PersistenceUpdate {
-    pub enabled: bool,
-    pub history: Result<Vec<ClipboardItemPreview>, String>,
 }
 
 #[derive(Debug)]
@@ -25,9 +20,9 @@ pub enum PersistenceUpdateError {
 impl FrontendClient {
     /// Create a new client
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")?;
-        let socket_path = format!("{xdg_runtime_dir}/cursor-clip/cursor-clip.sock");
-        let stream = UnixStream::connect(socket_path)?;
+        let stream = UnixStream::connect(Self::socket_path()?)?;
+        stream.set_read_timeout(Some(Self::READ_TIMEOUT))?;
+        stream.set_write_timeout(Some(Self::READ_TIMEOUT))?;
         Ok(Self { stream })
     }
 
@@ -48,13 +43,53 @@ impl FrontendClient {
         Ok(response)
     }
 
-    /// Get clipboard history
-    pub fn get_history(&mut self) -> Result<Vec<ClipboardItemPreview>, Box<dyn std::error::Error>> {
-        let response = self.send_message(FrontendMessage::GetHistory)?;
-        match response {
+    const READ_TIMEOUT: Duration = Duration::from_secs(5);
+    const TRANSITION_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn socket_path() -> Result<PathBuf, std::env::VarError> {
+        Ok(PathBuf::from(std::env::var("XDG_RUNTIME_DIR")?).join("cursor-clip/cursor-clip.sock"))
+    }
+
+    // Run socket I/O and history decoding on the application's Tokio runtime.
+    // One deadline covers connecting, writing and reading the complete reply.
+    async fn request(
+        message: FrontendMessage,
+        timeout: Duration,
+    ) -> Result<BackendMessage, String> {
+        let path = Self::socket_path().map_err(|e| e.to_string())?;
+        tokio::spawn(async move { Self::request_at(&path, message, timeout).await })
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    async fn request_at(
+        path: &Path,
+        message: FrontendMessage,
+        timeout: Duration,
+    ) -> Result<BackendMessage, String> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let line = tokio::time::timeout(timeout, async {
+            let mut stream = tokio::net::UnixStream::connect(path).await?;
+            let mut request = serde_json::to_vec(&message)?;
+            request.push(b'\n');
+            stream.write_all(&request).await?;
+            let mut line = Vec::new();
+            tokio::io::BufReader::new(stream)
+                .read_until(b'\n', &mut line)
+                .await?;
+            Ok::<_, std::io::Error>(line)
+        })
+        .await
+        .map_err(|_| "Timed out waiting for clipboard daemon".to_owned())?
+        .map_err(|e| e.to_string())?;
+        serde_json::from_slice(&line).map_err(|e| e.to_string())
+    }
+
+    pub async fn history() -> Result<Vec<ClipboardItemPreview>, String> {
+        match Self::request(FrontendMessage::GetHistory, Self::READ_TIMEOUT).await? {
             BackendMessage::History { items } => Ok(items),
-            BackendMessage::Error { message } => Err(message.into()),
-            _ => Err("Unexpected response".into()),
+            BackendMessage::Error { message } => Err(message),
+            _ => Err("Unexpected response to history request".into()),
         }
     }
 
@@ -93,51 +128,24 @@ impl FrontendClient {
         }
     }
 
-    /// Wait for the store transition and refresh away from the GTK main loop.
-    pub async fn set_persistence_enabled_in_background(
-        enabled: bool,
-    ) -> Result<PersistenceUpdate, PersistenceUpdateError> {
-        Self::update_persistence_with_connector(enabled, || {
-            Self::new().map_err(|error| error.to_string())
-        })
-        .await
-    }
-
-    async fn update_persistence_with_connector(
-        enabled: bool,
-        connect: impl FnOnce() -> Result<Self, String> + Send + 'static,
-    ) -> Result<PersistenceUpdate, PersistenceUpdateError> {
-        gtk4::gio::spawn_blocking(move || {
-            let mut client = connect().map_err(PersistenceUpdateError::Unconfirmed)?;
-            let response = client
-                .send_message(FrontendMessage::SetHistoryPersistence { enabled })
-                .map_err(|error| PersistenceUpdateError::Unconfirmed(error.to_string()))?;
-
-            let enabled = match response {
-                BackendMessage::PersistenceState { enabled } => enabled,
-                BackendMessage::Error { message } => {
-                    return Err(PersistenceUpdateError::Rejected(message));
-                }
-                _ => {
-                    return Err(PersistenceUpdateError::Unconfirmed(
-                        "Unexpected response to persistence request".to_string(),
-                    ));
-                }
-            };
-
-            // An acknowledged transition must not become a failed transition
-            // merely because the following history refresh failed.
-            Ok(PersistenceUpdate {
-                enabled,
-                history: client.get_history().map_err(|error| error.to_string()),
-            })
-        })
-        .await
-        .map_err(|_| {
-            PersistenceUpdateError::Unconfirmed(
-                "Persistence update worker stopped unexpectedly".to_string(),
-            )
-        })?
+    pub async fn persistence(enabled: Option<bool>) -> Result<bool, PersistenceUpdateError> {
+        let (message, timeout) = match enabled {
+            Some(enabled) => (
+                FrontendMessage::SetHistoryPersistence { enabled },
+                Self::TRANSITION_TIMEOUT,
+            ),
+            None => (FrontendMessage::GetHistoryPersistence, Self::READ_TIMEOUT),
+        };
+        match Self::request(message, timeout)
+            .await
+            .map_err(PersistenceUpdateError::Unconfirmed)?
+        {
+            BackendMessage::PersistenceState { enabled } => Ok(enabled),
+            BackendMessage::Error { message } => Err(PersistenceUpdateError::Rejected(message)),
+            _ => Err(PersistenceUpdateError::Unconfirmed(
+                "Unexpected persistence reply".into(),
+            )),
+        }
     }
 
     /// Delete a single clipboard item by ID
@@ -154,181 +162,86 @@ impl FrontendClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gtk4::glib::{ControlFlow, MainContext, Priority};
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
 
-    fn read_request(reader: &mut BufReader<UnixStream>) -> FrontendMessage {
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        serde_json::from_str(&line).unwrap()
-    }
-
-    fn reply(reader: &mut BufReader<UnixStream>, response: BackendMessage) {
-        let response = serde_json::to_string(&response).unwrap();
-        writeln!(reader.get_mut(), "{response}").unwrap();
-    }
-
-    fn run_reply_script(replies: Vec<&str>) -> Result<PersistenceUpdate, PersistenceUpdateError> {
-        let (stream, backend) = UnixStream::pair().unwrap();
-        let replies: Vec<String> = replies.into_iter().map(str::to_string).collect();
-        let server = thread::spawn(move || {
-            let mut reader = BufReader::new(backend);
-            assert!(matches!(
-                read_request(&mut reader),
-                FrontendMessage::SetHistoryPersistence { enabled: true }
-            ));
-            for (index, response) in replies.into_iter().enumerate() {
-                if index > 0 {
+    #[test]
+    fn gtk_context_runs_during_requests_and_distinguishes_bad_replies() {
+        use gtk4::glib::{ControlFlow, MainContext, Priority};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+        crate::shared::isolated_test(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let _enter = runtime.enter();
+            let context = MainContext::new();
+            let path = FrontendClient::socket_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let listener = UnixListener::bind(path).unwrap();
+            let server_context = context.clone();
+            let server = std::thread::spawn(move || {
+                for response in [
+                    r#"{"PersistenceState":{"enabled":true}}"#,
+                    r#"{"Error":{"message":"rejected"}}"#,
+                    "invalid JSON",
+                    r#""HistoryCleared""#,
+                ] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut line = String::new();
+                    BufReader::new(&stream).read_line(&mut line).unwrap();
                     assert!(matches!(
-                        read_request(&mut reader),
-                        FrontendMessage::GetHistory
+                        serde_json::from_str(&line).unwrap(),
+                        FrontendMessage::SetHistoryPersistence { enabled: true }
+                    ));
+                    let (tx, rx) = mpsc::channel();
+                    let heartbeat =
+                        gtk4::glib::idle_source_new(None, Priority::DEFAULT, move || {
+                            tx.send(()).unwrap();
+                            ControlFlow::Break
+                        });
+                    heartbeat.attach(Some(&server_context));
+                    rx.recv_timeout(Duration::from_secs(2))
+                        .expect("GTK blocked waiting for the daemon");
+                    writeln!(stream, "{response}").unwrap();
+                }
+            });
+            context.block_on(async {
+                assert!(FrontendClient::persistence(Some(true)).await.unwrap());
+                assert!(matches!(
+                    FrontendClient::persistence(Some(true)).await,
+                    Err(PersistenceUpdateError::Rejected(_))
+                ));
+                for _ in 0..2 {
+                    assert!(matches!(
+                        FrontendClient::persistence(Some(true)).await,
+                        Err(PersistenceUpdateError::Unconfirmed(_))
                     ));
                 }
-                writeln!(reader.get_mut(), "{response}").unwrap();
-            }
+            });
+            server.join().unwrap();
         });
-        let context = MainContext::new();
-        let result = context
-            .with_thread_default(|| {
-                context.block_on(FrontendClient::update_persistence_with_connector(
-                    true,
-                    move || Ok(FrontendClient { stream }),
-                ))
-            })
-            .unwrap();
-        server.join().unwrap();
-        result
     }
 
-    #[test]
-    fn persistence_wait_keeps_main_context_timer_running() {
-        let context = MainContext::new();
-        let server_context = context.clone();
-        let (stream, backend) = UnixStream::pair().unwrap();
-        let server = thread::spawn(move || {
-            let mut reader = BufReader::new(backend);
-            assert!(matches!(
-                read_request(&mut reader),
-                FrontendMessage::SetHistoryPersistence { enabled: true }
-            ));
-
-            // Only install the heartbeat after IPC has started. The reply is
-            // withheld until GTK's context runs it, rather than sleeping and
-            // inferring responsiveness from elapsed time.
-            let (heartbeat, received) = mpsc::channel();
-            let timer = gtk4::glib::timeout_source_new(
-                Duration::from_millis(1),
-                None,
-                Priority::DEFAULT,
-                move || {
-                    let _ = heartbeat.send(());
-                    ControlFlow::Break
-                },
-            );
-            timer.attach(Some(&server_context));
-            let responsive = received.recv_timeout(Duration::from_secs(2)).is_ok();
-            timer.destroy();
-            if !responsive {
-                reply(
-                    &mut reader,
-                    BackendMessage::Error {
-                        message: "Main-context timer did not run during the request".to_string(),
-                    },
-                );
-                return false;
-            }
-            reply(
-                &mut reader,
-                BackendMessage::PersistenceState { enabled: true },
-            );
-            assert!(matches!(
-                read_request(&mut reader),
-                FrontendMessage::GetHistory
-            ));
-            reply(&mut reader, BackendMessage::History { items: vec![] });
-            true
-        });
-
-        let result = context
-            .with_thread_default(|| {
-                context.block_on(FrontendClient::update_persistence_with_connector(
-                    true,
-                    move || Ok(FrontendClient { stream }),
-                ))
-            })
-            .unwrap();
-        assert!(
-            server.join().unwrap(),
-            "The main context was blocked by IPC"
-        );
-        let update = result.unwrap();
-        assert!(update.enabled);
-        assert!(update.history.unwrap().is_empty());
-    }
-
-    #[test]
-    fn persistence_rejection_is_distinct_from_missing_acknowledgement() {
-        assert!(matches!(
-            run_reply_script(vec![r#"{"Error":{"message":"Cannot open store"}}"#]),
-            Err(PersistenceUpdateError::Rejected(message)) if message == "Cannot open store"
-        ));
-        assert!(matches!(
-            run_reply_script(vec![]),
-            Err(PersistenceUpdateError::Unconfirmed(_))
-        ));
-    }
-
-    #[test]
-    fn persistence_acknowledgement_survives_history_refresh_failure() {
-        for replies in [
-            vec![r#"{"PersistenceState":{"enabled":true}}"#],
-            vec![
-                r#"{"PersistenceState":{"enabled":true}}"#,
-                r#"{"Error":{"message":"History temporarily unavailable"}}"#,
-            ],
+    #[tokio::test]
+    async fn stalled_ack_and_history_reads_release_the_socket() {
+        let path = std::env::temp_dir().join(format!("cc-stall-{:x}.sock", rand::random::<u64>()));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        for message in [
+            FrontendMessage::SetHistoryPersistence { enabled: true },
+            FrontendMessage::GetHistory,
         ] {
-            let update = run_reply_script(replies).unwrap();
-            assert!(update.enabled);
-            assert!(update.history.is_err());
-        }
-    }
-
-    #[test]
-    fn malformed_or_unexpected_persistence_reply_is_unconfirmed() {
-        for reply in ["not JSON", r#""HistoryCleared""#] {
-            assert!(matches!(
-                run_reply_script(vec![reply]),
-                Err(PersistenceUpdateError::Unconfirmed(_))
-            ));
-        }
-    }
-
-    #[test]
-    fn connector_failure_and_worker_panic_are_unconfirmed() {
-        let context = MainContext::new();
-        context
-            .with_thread_default(|| {
-                let unavailable = context.block_on(
-                    FrontendClient::update_persistence_with_connector(true, || {
-                        Err("Backend unavailable".to_string())
-                    }),
-                );
-                assert!(matches!(
-                    unavailable,
-                    Err(PersistenceUpdateError::Unconfirmed(message)) if message == "Backend unavailable"
-                ));
-                let panicked = context.block_on(
-                    FrontendClient::update_persistence_with_connector(true, || {
-                        panic!("Synthetic persistence worker failure")
-                    }),
-                );
-                assert!(matches!(
-                    panicked,
-                    Err(PersistenceUpdateError::Unconfirmed(_))
-                ));
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                stream.read_to_end(&mut request).await.unwrap();
+                assert_eq!(request.last(), Some(&b'\n'));
+            };
+            let client = FrontendClient::request_at(&path, message, Duration::from_millis(50));
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+                tokio::join!(client, server)
             })
-            .unwrap();
+            .await
+            .expect("socket deadline did not release the connection");
+            assert!(result.unwrap_err().contains("Timed out"));
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }
