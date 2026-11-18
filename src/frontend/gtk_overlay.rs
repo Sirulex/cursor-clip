@@ -1367,7 +1367,7 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         }
 
         .settings-row {
-            border-radius: 6px;
+            border-radius: 10px;
             padding: 6px 8px;
             transition: background-color 120ms ease;
         }
@@ -1536,7 +1536,7 @@ fn load_overlay_css(css_provider: &gtk4::CssProvider, is_dark: bool) {
         }
 
         .settings-row {
-            border-radius: 6px;
+            border-radius: 10px;
             padding: 6px 8px;
             transition: background-color 120ms ease;
         }
