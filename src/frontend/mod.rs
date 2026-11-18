@@ -7,3 +7,12 @@ pub mod ipc_client;
 pub mod toggle;
 
 pub use initializer::*;
+
+#[derive(Clone, Debug, Default)]
+struct OverlayLocation {
+    /// Coordinates in logical pixels relative to the selected output
+    cursor: (f64, f64),
+    monitor_height: i32,
+    /// Output connector name, or `None` to let the compositor choose
+    monitor: Option<String>,
+}

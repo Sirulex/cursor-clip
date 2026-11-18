@@ -8,6 +8,19 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_LIST_WIDTH: i32 = 350;
 pub const DEFAULT_LIST_HEIGHT: i32 = 400;
+pub const DEFAULT_MARGIN: i32 = 5;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PopupPosition {
+    #[default]
+    Cursor,
+    Center,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -19,6 +32,8 @@ pub struct UserConfig {
     pub instant_paste: bool,
     pub width: i32,
     pub height: i32,
+    pub position: PopupPosition,
+    pub margin: i32,
 }
 
 impl Default for UserConfig {
@@ -30,6 +45,8 @@ impl Default for UserConfig {
             instant_paste: true,
             width: DEFAULT_LIST_WIDTH,
             height: DEFAULT_LIST_HEIGHT,
+            position: PopupPosition::Cursor,
+            margin: DEFAULT_MARGIN,
         }
     }
 }
@@ -68,6 +85,12 @@ impl UserConfig {
         if config.height < 1 {
             return Err(format!(
                 "Invalid {}: height must be a positive whole number",
+                path.display()
+            ));
+        }
+        if config.margin < 0 {
+            return Err(format!(
+                "Invalid {}: margin must be a non-negative whole number",
                 path.display()
             ));
         }

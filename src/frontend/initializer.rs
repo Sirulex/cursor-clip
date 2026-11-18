@@ -12,16 +12,20 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
 use crate::frontend::toggle::ToggleServer;
 use crate::frontend::{frontend_state::State, gtk_overlay, hyprland};
+use crate::shared::config::{PopupPosition, UserConfig, config_path};
 use log::{debug, error, info, warn};
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd};
 
+use super::OverlayLocation;
+
 fn run_main_event_loop(
     state: &mut State,
     queue: &mut EventQueue<State>,
     toggle_server: &ToggleServer,
+    config: UserConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         // Wait for either compositor activity or another invocation. Monitoring
@@ -42,16 +46,14 @@ fn run_main_event_loop(
             queue.flush()?;
 
             show_overlay(
-                gtk_overlay::OverlayGeometry {
-                    x,
-                    y,
-                    overlay_width: state.overlay_width,
-                    monitor_width: state.monitor_width,
+                OverlayLocation {
+                    cursor: (x, y),
                     monitor_height: state.monitor_height,
                     monitor: None,
                 },
                 toggle_server,
                 false,
+                config,
             )?;
             break;
         }
@@ -61,13 +63,17 @@ fn run_main_event_loop(
 }
 
 fn show_overlay(
-    geometry: gtk_overlay::OverlayGeometry,
+    location: OverlayLocation,
     toggle_server: &ToggleServer,
     resident: bool,
+    config: UserConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Err(e) =
-        gtk_overlay::init_clipboard_overlay(geometry, toggle_server.try_clone_listener()?, resident)
-    {
+    if let Err(e) = gtk_overlay::init_clipboard_overlay(
+        location,
+        toggle_server.try_clone_listener()?,
+        resident,
+        config,
+    ) {
         error!("Error creating GTK overlay: {e:?}");
     }
     gtk_overlay::reset_close_flags();
@@ -145,27 +151,18 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    let mut state = State::new();
-    // Hyprland can report the pointer position directly; no capture layer needed.
-    if let Some(location) = hyprland::pointer_location() {
-        let defaults = State::new();
-        return show_overlay(
-            gtk_overlay::OverlayGeometry {
-                x: location.x,
-                y: location.y,
-                overlay_width: defaults.overlay_width,
-                monitor_width: location.monitor_width,
-                monitor_height: location.monitor_height,
-                monitor: Some(location.monitor),
-            },
-            &toggle_server,
-            // Hyprland can tell us where the pointer is at any later time, so
-            // the overlay stays alive hidden and later opens skip GTK startup.
-            true,
-        );
+    let config = gtk_overlay::overlay_config(&config_path()).unwrap_or_default();
+    if let Some(location) = hyprland::overlay_location(config.position) {
+        // Hyprland can locate the overlay on every reopen without restarting GTK.
+        return show_overlay(location, &toggle_server, true, config);
+    }
+    if config.position != PopupPosition::Cursor {
+        // Layer Shell lets the compositor choose the active output.
+        return show_overlay(OverlayLocation::default(), &toggle_server, false, config);
     }
 
     // Initialize Wayland for layer shell capture
+    let mut state = State::new();
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (GlobalList, EventQueue<State>) =
         registry_queue_init::<State>(&conn)?;
@@ -179,7 +176,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     setup_capture_layer(&mut state, &queue);
 
     // Main event loop (reuse existing implementation)
-    run_main_event_loop(&mut state, &mut queue, &toggle_server)
+    run_main_event_loop(&mut state, &mut queue, &toggle_server, config)
 }
 
 fn init_wayland_protocols(
