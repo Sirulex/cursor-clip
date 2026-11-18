@@ -5,7 +5,7 @@ use crate::backend::persistence::{
 use crate::backend::store::{ClipboardStore, OpenBlob};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
-use crate::shared::config::{UserConfig, config_path};
+use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use image::{ImageFormat, RgbaImage};
@@ -186,12 +186,10 @@ impl BackendState {
     }
 
     pub(super) fn with_password(monitor_only: bool, db_password: Option<String>) -> Self {
-        let persistence_enabled = UserConfig::read(&config_path())
-            .unwrap_or_else(|e| {
-                warn!("Cannot load persistence setting: {e}");
-                UserConfig::default()
-            })
-            .persistence_enabled;
+        let persistence_enabled = read_persistence_enabled(&config_path()).unwrap_or_else(|e| {
+            eprintln!("cursor-clip: cannot load persistence setting. Starting with session-only history.\n{e}");
+            false
+        });
         let store = match ClipboardStore::open_ephemeral() {
             Ok(store) => store,
             Err(e) => panic!("Cannot create clipboard store: {e}"),

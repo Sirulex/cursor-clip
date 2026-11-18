@@ -236,6 +236,7 @@ Running the application requires a supported Wayland session (see Compositor Sup
    - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to clear and hide the search (a second `Esc` closes the overlay); press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
    - **Keyboard navigation**: Use `Arrow keys` or `Ctrl+J/K` to navigate, `Enter` to select, `Delete` to remove, `Ctrl+P` to pin
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
+   - **History list size** defaults to **350 × 400** logical pixels. Enter **width × height** in the three-dot menu, then press Enter or click **Apply** to resize and save. You can also set the top-level integers `width` and `height` in `config.toml`.
 
 ## Persistent History Security
 
