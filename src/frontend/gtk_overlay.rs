@@ -30,7 +30,6 @@ pub struct OverlayGeometry {
     pub x: f64,
     pub y: f64,
     pub overlay_width: i32,
-    pub overlay_height: i32,
     pub monitor_width: i32,
     pub monitor_height: i32,
     /// Output connector to open on; `None` lets the compositor choose
@@ -55,6 +54,8 @@ struct UserConfig {
     instant_paste: bool,
     /// Width of the history list in logical pixels.
     width: i32,
+    /// Height of the history list in logical pixels.
+    height: i32,
 }
 
 #[derive(Clone)]
@@ -72,7 +73,7 @@ struct HistoryListState {
 
 struct OverlayContent {
     overlay: Overlay,
-    list_width: ListWidth,
+    list_size: Rc<ListSize>,
     list_box: gtk4::ListBox,
     history_state: HistoryListState,
     search_entry: SearchEntry,
@@ -83,15 +84,13 @@ struct OverlayContent {
 struct OverlayUi {
     window: adw::ApplicationWindow,
     card: Overlay,
-    list_width: ListWidth,
+    list_size: Rc<ListSize>,
     list_box: gtk4::ListBox,
     history_state: HistoryListState,
     search_entry: SearchEntry,
     menu_revealer: Revealer,
     /// Pointer position the card is anchored to, relative to the output
     card_target: Rc<Cell<(f64, f64)>>,
-    overlay_width: i32,
-    overlay_height: i32,
 }
 
 /// A hidden overlay kept in memory with its rows already laid out, so the
@@ -109,6 +108,7 @@ impl Default for UserConfig {
             persistence_enabled: false,
             instant_paste: true,
             width: DEFAULT_LIST_WIDTH,
+            height: DEFAULT_LIST_HEIGHT,
         }
     }
 }
@@ -141,7 +141,15 @@ fn load_or_create_config(path: &Path) -> io::Result<UserConfig> {
         }
         Err(e) => return Err(e),
     };
-    toml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    let config: UserConfig =
+        toml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if config.height < 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "height must be a positive whole number",
+        ));
+    }
+    Ok(config)
 }
 
 fn overlay_config(path: &Path) -> Option<UserConfig> {
@@ -336,7 +344,6 @@ fn create_layer_shell_window(
         x,
         y,
         overlay_width,
-        overlay_height,
         monitor_width,
         monitor_height,
         monitor,
@@ -382,8 +389,7 @@ fn create_layer_shell_window(
     {
         warn!("Failed to sync persistence setting with backend: {e}");
     }
-    let requested_width = config.as_ref().map_or(DEFAULT_LIST_WIDTH, |cfg| cfg.width);
-    let content = generate_overlay_content(prefetched_items, config, overlay_height);
+    let content = generate_overlay_content(prefetched_items, config, overlay_width);
     let card = content.overlay.clone();
     card.add_css_class("cursor-clip-card");
     card.set_overflow(gtk4::Overflow::Hidden);
@@ -395,41 +401,55 @@ fn create_layer_shell_window(
     root.set_vexpand(true);
     root.append(&card);
     window.set_content(Some(&root));
-    content.list_width.apply(requested_width, overlay_width);
+    content.list_size.apply(monitor_height);
 
-    // Position the card before the first frame using its natural size...
-    let (_, natural_width, _, _) = card.measure(Orientation::Horizontal, -1);
-    let (_, natural_height, _, _) = card.measure(Orientation::Vertical, natural_width);
-    place_card(
-        &card,
-        x,
-        y,
-        natural_width.max(overlay_width),
-        natural_height.max(overlay_height),
-        monitor_width,
-        monitor_height,
-    );
-
-    // ...then clamp again with the real allocation, which also covers the
-    // case where the output size was unknown up front.
     let card_target = Rc::new(Cell::new((x, y)));
+    place_card(&card, x, y, monitor_width, monitor_height);
+    let reposition = {
+        let window = window.downgrade();
+        let card = card.downgrade();
+        let target = card_target.clone();
+        move || {
+            if let (Some(window), Some(card)) = (window.upgrade(), card.upgrade()) {
+                let (x, y) = target.get();
+                place_card(&card, x, y, window.width(), window.height());
+            }
+        }
+    };
+    content
+        .list_size
+        .connect_apply(&config_path(), reposition.clone());
+    // A short list can be smaller than the open settings panel.
+    content.menu_revealer.connect_child_revealed_notify({
+        let reposition = reposition.clone();
+        move |_| reposition()
+    });
+    content.list_size.error.connect_visible_notify({
+        let reposition = reposition.clone();
+        move |_| reposition()
+    });
+    content.search_entry.connect_visible_notify({
+        let size = Rc::downgrade(&content.list_size);
+        let window = window.downgrade();
+        let reposition = reposition.clone();
+        move |_| {
+            if let (Some(size), Some(window)) = (size.upgrade(), window.upgrade())
+                && window.is_mapped()
+            {
+                size.apply(window.height());
+                reposition();
+            }
+        }
+    });
     window.connect_map({
-        let card = card.clone();
-        let card_target = card_target.clone();
-        move |mapped_window| {
-            let mapped_window = mapped_window.clone();
-            let card = card.clone();
-            let (x, y) = card_target.get();
+        let size = content.list_size.clone();
+        move |window| {
+            let window = window.clone();
+            let size = size.clone();
+            let reposition = reposition.clone();
             gtk4::glib::idle_add_local_once(move || {
-                place_card(
-                    &card,
-                    x,
-                    y,
-                    card.width().max(overlay_width),
-                    card.height().max(overlay_height),
-                    mapped_window.width(),
-                    mapped_window.height(),
-                );
+                size.apply(window.height());
+                reposition();
             });
         }
     });
@@ -485,14 +505,12 @@ fn create_layer_shell_window(
     OverlayUi {
         window,
         card,
-        list_width: content.list_width,
+        list_size: content.list_size,
         list_box: content.list_box,
         history_state: content.history_state,
         search_entry: content.search_entry,
         menu_revealer: content.menu_revealer,
         card_target,
-        overlay_width,
-        overlay_height,
     }
 }
 
@@ -531,7 +549,7 @@ fn show_resident_overlay() {
         };
         let ui = &resident.ui;
         if let Some(config) = overlay_config(&config_path()) {
-            ui.list_width.apply(config.width, ui.overlay_width);
+            ui.list_size.set_requested(config.width, config.height);
         }
 
         match FrontendClient::new().and_then(|mut client| client.get_history()) {
@@ -559,14 +577,11 @@ fn show_resident_overlay() {
                 ui.window.set_monitor(Some(&gdk_monitor));
             }
             ui.card_target.set((location.x, location.y));
-            // The cached allocation can still describe the previous config.
-            let (_, width, _, _) = ui.card.measure(Orientation::Horizontal, -1);
+            ui.list_size.apply(location.monitor_height);
             place_card(
                 &ui.card,
                 location.x,
                 location.y,
-                (width - ui.card.margin_start() - ui.card.margin_end()).max(ui.overlay_width),
-                ui.card.height().max(ui.overlay_height),
                 location.monitor_width,
                 location.monitor_height,
             );
@@ -588,42 +603,125 @@ fn find_gdk_monitor(connector: &str) -> Option<gtk4::gdk::Monitor> {
 /// Default width of the history list, in logical pixels (`width` in config.toml).
 const DEFAULT_LIST_WIDTH: i32 = 350;
 
-struct ListWidth {
-    header: adw::HeaderBar,
-    scrolled: gtk4::ScrolledWindow,
-    last_request: Cell<Option<i32>>,
+const DEFAULT_LIST_HEIGHT: i32 = 400;
+
+fn dimension_entry(label: &str, value: i32) -> gtk4::Entry {
+    let entry = gtk4::Entry::builder()
+        .width_chars(4)
+        .max_width_chars(5)
+        .placeholder_text(label)
+        .input_purpose(gtk4::InputPurpose::Digits)
+        .text(value.to_string())
+        .build();
+    entry.set_tooltip_text(Some(label));
+    entry
 }
 
-impl ListWidth {
-    fn apply(&self, requested: i32, overlay_min: i32) {
-        // Measure after parenting so GTK uses the active theme and font size.
+struct ListSize {
+    header: adw::HeaderBar,
+    scrolled: gtk4::ScrolledWindow,
+    overlay_min_width: i32,
+    width_entry: gtk4::Entry,
+    height_entry: gtk4::Entry,
+    apply_button: Button,
+    error: Label,
+    requested: Cell<(i32, i32)>,
+    last_width: Cell<Option<i32>>,
+}
+
+impl ListSize {
+    fn set_requested(&self, width: i32, height: i32) {
+        self.requested.set((width, height));
+        self.width_entry.set_text(&width.to_string());
+        self.height_entry.set_text(&height.to_string());
+        self.error.set_visible(false);
+    }
+
+    fn apply(&self, area_height: i32) {
+        let (requested_width, requested_height) = self.requested.get();
         let (header_min, _, _, _) = self.header.measure(Orientation::Horizontal, -1);
-        let minimum = header_min.max(overlay_min);
-        let width = requested.min(1200).max(minimum);
-        if self.last_request.replace(Some(requested)) == Some(requested)
-            && self.scrolled.min_content_width() == width
+        let minimum = header_min.max(self.overlay_min_width);
+        let width = requested_width.min(1200).max(minimum);
+        if requested_width < minimum
+            && (self.last_width.get() != Some(requested_width)
+                || self.scrolled.min_content_width() != width)
         {
-            return;
-        }
-        if requested < minimum {
             eprintln!(
-                "cursor-clip: configured width {requested} is too small (header minimum: {header_min} logical pixels). Using the minimum viable width of {minimum} logical pixels."
+                "cursor-clip: configured width {requested_width} is too small (header minimum: {header_min} logical pixels). Using the minimum viable width of {minimum} logical pixels."
             );
         }
+        self.last_width.set(Some(requested_width));
         self.scrolled.set_min_content_width(width);
+        // The vertical box also contains the header and optional search field.
+        let chrome_height = self.scrolled.parent().map_or(0, |parent| {
+            parent.measure(Orientation::Vertical, width).1
+                - self.scrolled.measure(Orientation::Vertical, width).1
+        });
+        let max_height = if area_height > 0 {
+            // Two 5px positioning margins and the card's two 1px borders.
+            (area_height - chrome_height - 12).max(1)
+        } else {
+            DEFAULT_LIST_HEIGHT
+        };
+        self.scrolled
+            .set_min_content_height(requested_height.clamp(1, max_height));
+    }
+
+    fn connect_apply(self: &Rc<Self>, path: &Path, reposition: impl Fn() + 'static) {
+        for entry in [&self.width_entry, &self.height_entry] {
+            let button = self.apply_button.downgrade();
+            entry.connect_activate(move |_| {
+                if let Some(button) = button.upgrade() {
+                    button.emit_clicked();
+                }
+            });
+        }
+        let size = Rc::downgrade(self);
+        let path = path.to_owned();
+        self.apply_button.connect_clicked(move |_| {
+            let Some(size) = size.upgrade() else { return };
+            let positive =
+                |entry: &gtk4::Entry| entry.text().trim().parse::<i32>().ok().filter(|n| *n > 0);
+            let (Some(width), Some(height)) =
+                (positive(&size.width_entry), positive(&size.height_entry))
+            else {
+                size.error
+                    .set_label("Enter a positive whole number for each dimension.");
+                size.error.set_visible(true);
+                return;
+            };
+            if let Err(e) = update_config(&path, |cfg| {
+                cfg.width = width;
+                cfg.height = height;
+            }) {
+                eprintln!(
+                    "cursor-clip: could not save size to {}: {e}",
+                    path.display()
+                );
+                size.error
+                    .set_label("Could not save the size. Check config.toml.");
+                size.error.set_visible(true);
+                return;
+            }
+            size.set_requested(width, height);
+            let height = size
+                .scrolled
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                .map_or(0, |window| window.height());
+            size.apply(height);
+            reposition();
+        });
     }
 }
 
 /// Keep the card at the pointer but fully on screen.
-fn place_card(
-    card: &Overlay,
-    x: f64,
-    y: f64,
-    card_width: i32,
-    card_height: i32,
-    area_width: i32,
-    area_height: i32,
-) {
+fn place_card(card: &Overlay, x: f64, y: f64, area_width: i32, area_height: i32) {
+    // Measurements include the current margins, which describe the old position.
+    let (_, width, _, _) = card.measure(Orientation::Horizontal, -1);
+    let card_width = width - card.margin_start() - card.margin_end();
+    let (_, height, _, _) = card.measure(Orientation::Vertical, width);
+    let card_height = height - card.margin_top() - card.margin_bottom();
     let (left, top) = if area_width > 0 && area_height > 0 {
         let margin = 5.0;
         let max_x = (area_width as f64 - card_width as f64 - margin).max(margin);
@@ -641,7 +739,7 @@ fn place_card(
 fn generate_overlay_content(
     mut prefetched_items: Vec<ClipboardItemPreview>,
     config: Option<UserConfig>,
-    overlay_height: i32,
+    overlay_min_width: i32,
 ) -> OverlayContent {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
@@ -762,6 +860,22 @@ fn generate_overlay_content(
     instant_paste_toggle_row.append(&instant_paste_toggle_check);
     menu_box.append(&instant_paste_toggle_row);
 
+    let size_row = Box::new(Orientation::Horizontal, 6);
+    let width_entry = dimension_entry("Width", config.width);
+    let height_entry = dimension_entry("Height", config.height);
+    let apply_button = Button::with_label("Apply");
+    size_row.append(&width_entry);
+    size_row.append(&Label::new(Some("×")));
+    size_row.append(&height_entry);
+    size_row.append(&apply_button);
+    menu_box.append(&size_row);
+    let size_error = Label::new(None);
+    size_error.add_css_class("error");
+    size_error.set_halign(Align::Start);
+    size_error.set_wrap(true);
+    size_error.set_max_width_chars(30);
+    size_error.set_visible(false);
+    menu_box.append(&size_error);
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&close_button);
     header_bar.pack_end(&header_action_group);
@@ -801,7 +915,6 @@ fn generate_overlay_content(
     let scrolled_window = gtk4::ScrolledWindow::new();
     // External hides the horizontal scrollbar without letting row widths size the card.
     scrolled_window.set_policy(gtk4::PolicyType::External, gtk4::PolicyType::Automatic);
-    scrolled_window.set_min_content_height(overlay_height);
 
     // Create list box for clipboard items
     let list_box = gtk4::ListBox::new();
@@ -1040,14 +1153,21 @@ fn generate_overlay_content(
     let overlay = Overlay::new();
     overlay.set_child(Some(&main_box));
     overlay.add_overlay(&menu_revealer);
+    overlay.set_measure_overlay(&menu_revealer, true);
 
     OverlayContent {
         overlay,
-        list_width: ListWidth {
+        list_size: Rc::new(ListSize {
             header: header_bar,
             scrolled: scrolled_window,
-            last_request: Cell::new(None),
-        },
+            overlay_min_width,
+            width_entry,
+            height_entry,
+            apply_button,
+            error: size_error,
+            requested: Cell::new((config.width, config.height)),
+            last_width: Cell::new(None),
+        }),
         list_box,
         history_state,
         search_entry,
@@ -1092,6 +1212,17 @@ fn generate_key_controller(
             return gtk4::glib::Propagation::Stop;
         }
 
+        // Dimension editors own typing, navigation and Enter while focused.
+        let focused = controller
+            .widget()
+            .and_then(|w| w.root())
+            .and_then(|root| root.focus());
+        if focused.as_ref().is_some_and(|focus| {
+            focus.ancestor(gtk4::Entry::static_type()).is_some() || focus.is::<gtk4::Entry>()
+        }) {
+            return gtk4::glib::Propagation::Proceed;
+        }
+
         // Letters now go to the search field, so vim-style navigation moves
         // to Ctrl+J/Ctrl+K and works from the search field as well.
         if state.contains(ModifierType::CONTROL_MASK) && matches!(key, Key::j | Key::J) {
@@ -1113,10 +1244,6 @@ fn generate_key_controller(
 
         // Row shortcuts apply when a row itself is focused, not one of its
         // inline delete/pin buttons (those keep Enter/Space for activation).
-        let focused = controller
-            .widget()
-            .and_then(|widget| widget.root())
-            .and_then(|root| root.focus());
         let focus_on_row = has_focus_within(&list_box_for_keys)
             && focused.is_none_or(|widget| {
                 widget.is::<gtk4::ListBoxRow>() || widget.is::<gtk4::ListBox>()
@@ -2128,7 +2255,7 @@ fn format_timestamp(timestamp: u64) -> String {
 }
 
 #[cfg(test)]
-mod width_tests {
+mod size_tests {
     use super::*;
 
     #[test]
@@ -2142,6 +2269,8 @@ mod width_tests {
         );
         for invalid in [
             "width = [",
+            "height = 0",
+            "height = \"400\"",
             "persistence_enabled = true\nwidth = \"700\"\n",
             "widht = 700\n",
         ] {
@@ -2154,19 +2283,24 @@ mod width_tests {
         update_config(&path, |cfg| cfg.show_pin = false).unwrap();
         let config = load_or_create_config(&path).unwrap();
         assert!(config.persistence_enabled && !config.show_pin);
-        assert_eq!(config.width, 700);
+        assert_eq!((config.width, config.height), (700, DEFAULT_LIST_HEIGHT));
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     #[ignore = "requires a GTK display"]
-    fn allocated_width_follows_config_and_header_minimum() {
+    fn size_fields_apply_save_and_reload_both_dimensions() {
         adw::init().unwrap();
         let config = UserConfig {
             width: 700,
+            height: 350,
             ..Default::default()
         };
-        let requested = config.width;
+        let dir =
+            std::env::temp_dir().join(format!("cursor-clip-size-{:x}", rand::random::<u64>()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
         let item = ClipboardItemPreview {
             item_id: 1,
             content_preview: "long".repeat(300),
@@ -2181,42 +2315,91 @@ mod width_tests {
             .default_height(550)
             .build();
         apply_custom_styling(&window);
-        let content = generate_overlay_content(vec![item], Some(config), 300);
+        let content = generate_overlay_content(vec![item], Some(config), 200);
         content.overlay.add_css_class("cursor-clip-card");
         content.overlay.set_halign(Align::Start);
+        content.overlay.set_valign(Align::Start);
         let root = Box::new(Orientation::Vertical, 0);
         root.append(&content.overlay);
         window.set_content(Some(&root));
-        let header_min = content
-            .list_width
-            .header
-            .measure(Orientation::Horizontal, -1)
-            .0;
-        let minimum = header_min.max(200);
-        let wait_for_width = |expected| {
+        let size = &content.list_size;
+        let minimum = size.header.measure(Orientation::Horizontal, -1).0.max(200);
+        let wait_for_size = |width, height| {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            while content.list_width.scrolled.width() != expected {
+            while (size.scrolled.width(), size.scrolled.height()) != (width, height) {
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "expected {expected}, allocated {}",
-                    content.list_width.scrolled.width()
+                    "expected {width} × {height}, allocated {} × {}",
+                    size.scrolled.width(),
+                    size.scrolled.height()
                 );
                 gtk4::glib::MainContext::default().iteration(false);
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         };
-        content.list_width.apply(requested, 200);
+        let keys = generate_key_controller(
+            &content.list_box,
+            &content.history_state,
+            &content.search_entry,
+        );
+        window.add_controller(keys.clone());
+        size.connect_apply(&path, {
+            let card = content.overlay.downgrade();
+            move || place_card(&card.upgrade().unwrap(), 990.0, 540.0, 1000, 550)
+        });
+        size.apply(550);
         window.present();
-        wait_for_width(requested.max(minimum));
+        wait_for_size(700.max(minimum), 350);
+
+        content.menu_revealer.set_visible(true);
+        content.menu_revealer.set_reveal_child(true);
+        assert!(size.width_entry.grab_focus());
+        let consumed = keys.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &gtk4::gdk::Key::_6,
+                &0u32,
+                &gtk4::gdk::ModifierType::empty(),
+            ],
+        );
+        assert!(!consumed && !content.search_entry.get_visible());
+        size.width_entry.set_text("600");
+        size.height_entry.set_text("280");
+        size.height_entry.emit_activate();
+        wait_for_size(600.max(minimum), 280);
+        assert!(content.overlay.margin_start() + content.overlay.width() <= 1000);
+        assert!(content.overlay.margin_top() + content.overlay.height() <= 550);
+        let saved = load_or_create_config(&path).unwrap();
+        assert_eq!((saved.width, saved.height), (600, 280));
+
+        size.height_entry.set_text("");
+        size.apply_button.emit_clicked();
+        assert!(size.error.get_visible());
+        assert_eq!(load_or_create_config(&path).unwrap().height, 280);
+
         window.set_visible(false);
+        content.menu_revealer.set_visible(false);
         content.search_entry.set_visible(true);
         *content.history_state.search_query.borrow_mut() = "no matches".into();
         apply_search_filter(&content.list_box, &content.history_state);
-        content.list_width.apply(1, 200);
+        update_config(&path, |cfg| {
+            cfg.width = 1;
+            cfg.height = 190;
+        })
+        .unwrap();
+        let cfg = load_or_create_config(&path).unwrap();
+        size.set_requested(cfg.width, cfg.height);
+        size.apply(550);
+        assert_eq!(size.width_entry.text(), "1");
+        assert_eq!(size.height_entry.text(), "190");
         window.present();
-        wait_for_width(minimum);
-        content.list_width.apply(600, 200);
-        wait_for_width(600.max(minimum));
+        wait_for_size(minimum, 190);
+        fs::write(&path, "height = [").unwrap();
+        size.height_entry.set_text("300");
+        size.apply_button.emit_clicked();
+        assert!(size.error.get_visible());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "height = [");
         window.close();
+        fs::remove_dir_all(dir).unwrap();
     }
 }
