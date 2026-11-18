@@ -130,7 +130,22 @@ fn handle_data_offer(state: &mut BackendState, offer_id: wayland_client::backend
     state.mime_type_offers.insert(offer_id, Vec::new());
 }
 
-/// Register an offered MIME type for the given offer object, filtering out video types.
+/// Process-private clipboard payloads can become invalid when ownership changes.
+pub(super) fn is_internal_mime_type(mime_type: &str) -> bool {
+    let media_type = mime_type
+        .split_once(';')
+        .map_or(mime_type, |(name, _)| name);
+    let subtype = media_type
+        .split_once('/')
+        .map_or(media_type, |(_, subtype)| subtype)
+        .trim()
+        .to_ascii_lowercase();
+
+    // Match both x-<app>-internal-* and x-internal-*.
+    subtype.starts_with("x-") && subtype.contains("-internal-")
+}
+
+/// Register an offered MIME type unless it contains video or process-private data.
 fn handle_offer_mime(
     state: &mut BackendState,
     offer_id: wayland_client::backend::ObjectId,
@@ -139,6 +154,7 @@ fn handle_offer_mime(
     debug!("Offer event: MIME type offered: {mime_type}");
     if let Some(mime_list) = state.mime_type_offers.get_mut(&offer_id)
         && !mime_type.starts_with("video")
+        && !is_internal_mime_type(&mime_type)
     {
         mime_list.push(mime_type);
     }
@@ -613,4 +629,32 @@ fn read_all_data_formats<O: DataOfferReceive>(
     }
 
     mime_map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_internal_mime_subtypes_and_bare_formats() {
+        for mime in [
+            "application/x-krita-node-internal-pointer",
+            "chromium/x-internal-source-rfh-token",
+            "x-example-internal-clipboard-data",
+            "application/X-Example-INTERNAL-Data; version=1",
+        ] {
+            assert!(is_internal_mime_type(mime), "{mime}");
+        }
+
+        for mime in [
+            "image/png",
+            "application/x-krita-node-external",
+            "application/vnd.example-internal-data",
+            "text/plain; name=application/x-example-internal-data",
+            "UTF8_STRING",
+            PASSWORD_HINT_MIME,
+        ] {
+            assert!(!is_internal_mime_type(mime), "{mime}");
+        }
+    }
 }
