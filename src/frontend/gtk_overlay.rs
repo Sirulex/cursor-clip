@@ -11,8 +11,9 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::fs;
+use std::io::{self, Write};
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +46,7 @@ thread_local! {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct UserConfig {
     show_trash: bool,
     show_pin: bool,
@@ -71,6 +72,7 @@ struct HistoryListState {
 
 struct OverlayContent {
     overlay: Overlay,
+    list_width: ListWidth,
     list_box: gtk4::ListBox,
     history_state: HistoryListState,
     search_entry: SearchEntry,
@@ -81,6 +83,7 @@ struct OverlayContent {
 struct OverlayUi {
     window: adw::ApplicationWindow,
     card: Overlay,
+    list_width: ListWidth,
     list_box: gtk4::ListBox,
     history_state: HistoryListState,
     search_entry: SearchEntry,
@@ -118,35 +121,61 @@ fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
-fn load_or_create_config() -> UserConfig {
-    let path = config_path();
-    if let Some(parent) = path.parent()
-        && let Err(e) = fs::create_dir_all(parent)
-    {
-        warn!("Failed to create config directory: {}", e);
-    }
-
-    if let Ok(contents) = fs::read_to_string(&path)
-        && let Ok(config) = toml::from_str::<UserConfig>(&contents)
-    {
-        return config;
-    }
-
-    let config = UserConfig::default();
-    if let Err(e) = save_config(&config) {
-        warn!("Failed to write default config: {}", e);
-    }
-    config
+fn load_or_create_config(path: &Path) -> io::Result<UserConfig> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let config = UserConfig::default();
+            let contents = toml::to_string_pretty(&config).map_err(io::Error::other)?;
+            match fs::File::create_new(path) {
+                Ok(mut file) => {
+                    file.write_all(contents.as_bytes())?;
+                    return Ok(config);
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => fs::read_to_string(path)?,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(e) => return Err(e),
+    };
+    toml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-fn save_config(config: &UserConfig) -> Result<(), std::io::Error> {
-    let path = config_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+fn overlay_config(path: &Path) -> Option<UserConfig> {
+    match load_or_create_config(path) {
+        Ok(config) => Some(config),
+        Err(e) => {
+            eprintln!(
+                "cursor-clip: cannot load {}. Using temporary display settings until the file is corrected.\n{e}",
+                path.display()
+            );
+            None
+        }
     }
-    let contents = toml::to_string_pretty(config)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+}
+
+fn update_config(path: &Path, change: impl FnOnce(&mut UserConfig)) -> io::Result<()> {
+    // A resident overlay may outlive manual edits. Read and validate the file
+    // again before saving a preference so a bad edit cannot be overwritten.
+    let mut config = load_or_create_config(path)?;
+    change(&mut config);
+    let contents = toml::to_string_pretty(&config).map_err(io::Error::other)?;
     fs::write(path, contents)
+}
+
+fn save_preference(change: impl FnOnce(&mut UserConfig)) -> bool {
+    let path = config_path();
+    if let Err(e) = update_config(&path, change) {
+        eprintln!(
+            "cursor-clip: could not save preference to {}: {e}",
+            path.display()
+        );
+        return false;
+    }
+    true
 }
 
 pub fn is_close_requested() -> bool {
@@ -346,7 +375,15 @@ fn create_layer_shell_window(
     apply_custom_styling(&window);
 
     // Create and set content (also obtain list_box for navigation)
-    let content = generate_overlay_content(prefetched_items, overlay_width, overlay_height);
+    let config = overlay_config(&config_path());
+    if let Some(config) = &config
+        && let Ok(mut client) = FrontendClient::new()
+        && let Err(e) = client.set_persistence_enabled(config.persistence_enabled)
+    {
+        warn!("Failed to sync persistence setting with backend: {e}");
+    }
+    let requested_width = config.as_ref().map_or(DEFAULT_LIST_WIDTH, |cfg| cfg.width);
+    let content = generate_overlay_content(prefetched_items, config, overlay_height);
     let card = content.overlay.clone();
     card.add_css_class("cursor-clip-card");
     card.set_overflow(gtk4::Overflow::Hidden);
@@ -358,6 +395,7 @@ fn create_layer_shell_window(
     root.set_vexpand(true);
     root.append(&card);
     window.set_content(Some(&root));
+    content.list_width.apply(requested_width, overlay_width);
 
     // Position the card before the first frame using its natural size...
     let (_, natural_width, _, _) = card.measure(Orientation::Horizontal, -1);
@@ -447,6 +485,7 @@ fn create_layer_shell_window(
     OverlayUi {
         window,
         card,
+        list_width: content.list_width,
         list_box: content.list_box,
         history_state: content.history_state,
         search_entry: content.search_entry,
@@ -491,6 +530,9 @@ fn show_resident_overlay() {
             return;
         };
         let ui = &resident.ui;
+        if let Some(config) = overlay_config(&config_path()) {
+            ui.list_width.apply(config.width, ui.overlay_width);
+        }
 
         match FrontendClient::new().and_then(|mut client| client.get_history()) {
             Ok(items) => *ui.history_state.all_items.borrow_mut() = items,
@@ -517,11 +559,13 @@ fn show_resident_overlay() {
                 ui.window.set_monitor(Some(&gdk_monitor));
             }
             ui.card_target.set((location.x, location.y));
+            // The cached allocation can still describe the previous config.
+            let (_, width, _, _) = ui.card.measure(Orientation::Horizontal, -1);
             place_card(
                 &ui.card,
                 location.x,
                 location.y,
-                ui.card.width().max(ui.overlay_width),
+                (width - ui.card.margin_start() - ui.card.margin_end()).max(ui.overlay_width),
                 ui.card.height().max(ui.overlay_height),
                 location.monitor_width,
                 location.monitor_height,
@@ -542,7 +586,33 @@ fn find_gdk_monitor(connector: &str) -> Option<gtk4::gdk::Monitor> {
 }
 
 /// Default width of the history list, in logical pixels (`width` in config.toml).
-const DEFAULT_LIST_WIDTH: i32 = 320;
+const DEFAULT_LIST_WIDTH: i32 = 350;
+
+struct ListWidth {
+    header: adw::HeaderBar,
+    scrolled: gtk4::ScrolledWindow,
+    last_request: Cell<Option<i32>>,
+}
+
+impl ListWidth {
+    fn apply(&self, requested: i32, overlay_min: i32) {
+        // Measure after parenting so GTK uses the active theme and font size.
+        let (header_min, _, _, _) = self.header.measure(Orientation::Horizontal, -1);
+        let minimum = header_min.max(overlay_min);
+        let width = requested.min(1200).max(minimum);
+        if self.last_request.replace(Some(requested)) == Some(requested)
+            && self.scrolled.min_content_width() == width
+        {
+            return;
+        }
+        if requested < minimum {
+            eprintln!(
+                "cursor-clip: configured width {requested} is too small (header minimum: {header_min} logical pixels). Using the minimum viable width of {minimum} logical pixels."
+            );
+        }
+        self.scrolled.set_min_content_width(width);
+    }
+}
 
 /// Keep the card at the pointer but fully on screen.
 fn place_card(
@@ -570,7 +640,7 @@ fn place_card(
 /// Falls back to a lazy on-demand fetch only if the provided vector is empty.
 fn generate_overlay_content(
     mut prefetched_items: Vec<ClipboardItemPreview>,
-    overlay_width: i32,
+    config: Option<UserConfig>,
     overlay_height: i32,
 ) -> OverlayContent {
     // Main container with standard libadwaita spacing
@@ -588,19 +658,14 @@ fn generate_overlay_content(
     header_bar.set_show_end_title_buttons(false);
     header_bar.set_show_start_title_buttons(false);
 
-    let config_state = Rc::new(RefCell::new(load_or_create_config()));
-    let show_trash_default = config_state.borrow().show_trash;
-    let show_pin_default = config_state.borrow().show_pin;
-    let persistence_enabled_default = config_state.borrow().persistence_enabled;
-    let instant_paste_default = config_state.borrow().instant_paste;
+    let valid_config = config.is_some();
+    let config = config.unwrap_or_default();
+    let show_trash_default = config.show_trash;
+    let show_pin_default = config.show_pin;
+    let persistence_enabled_default = config.persistence_enabled;
+    let instant_paste_state = Rc::new(Cell::new(config.instant_paste));
     let show_trash_state = Rc::new(RefCell::new(show_trash_default));
     let show_pin_state = Rc::new(RefCell::new(show_pin_default));
-
-    if let Ok(mut client) = FrontendClient::new()
-        && let Err(e) = client.set_persistence_enabled(persistence_enabled_default)
-    {
-        warn!("Failed to sync persistence setting with backend: {}", e);
-    }
 
     // Search and clear are on the left; options and close are on the right.
     let search_button = Button::builder().icon_name("edit-find-symbolic").build();
@@ -682,6 +747,7 @@ fn generate_overlay_content(
     persistence_toggle_label.set_hexpand(true);
     let persistence_toggle_check = CheckButton::new();
     persistence_toggle_check.set_active(persistence_enabled_default);
+    persistence_toggle_check.set_inconsistent(!valid_config);
     persistence_toggle_row.append(&persistence_toggle_label);
     persistence_toggle_row.append(&persistence_toggle_check);
     menu_box.append(&persistence_toggle_row);
@@ -691,7 +757,7 @@ fn generate_overlay_content(
     instant_paste_toggle_label.set_halign(Align::Start);
     instant_paste_toggle_label.set_hexpand(true);
     let instant_paste_toggle_check = CheckButton::new();
-    instant_paste_toggle_check.set_active(instant_paste_default);
+    instant_paste_toggle_check.set_active(instant_paste_state.get());
     instant_paste_toggle_row.append(&instant_paste_toggle_label);
     instant_paste_toggle_row.append(&instant_paste_toggle_check);
     menu_box.append(&instant_paste_toggle_row);
@@ -733,12 +799,8 @@ fn generate_overlay_content(
 
     // Create scrolled window for the clipboard list
     let scrolled_window = gtk4::ScrolledWindow::new();
-    scrolled_window.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-    // Fixed list width (config `width`): the card must not resize while rows fill in
-    // or while search filters them. Natural width is not propagated from the rows.
-    let list_width = config_state.borrow().width.clamp(overlay_width, 1200);
-    scrolled_window.set_min_content_width(list_width);
-    scrolled_window.set_max_content_width(list_width);
+    // External hides the horizontal scrollbar without letting row widths size the card.
+    scrolled_window.set_policy(gtk4::PolicyType::External, gtk4::PolicyType::Automatic);
     scrolled_window.set_min_content_height(overlay_height);
 
     // Create list box for clipboard items
@@ -803,14 +865,14 @@ fn generate_overlay_content(
 
     // Handle item activation (Enter/Space/double-click) instead of mere selection
     let history_state_for_activation = history_state.clone();
-    let config_for_activation = config_state.clone();
+    let instant_paste_for_activation = instant_paste_state.clone();
     list_box.connect_row_activated(move |_, row| {
         let Some(item_id) = row_item_id(row) else {
             return;
         };
         let items = history_state_for_activation.all_items.borrow();
         if let Some(item) = items.iter().find(|item| item.item_id == item_id) {
-            let instant_paste = config_for_activation.borrow().instant_paste;
+            let instant_paste = instant_paste_for_activation.get();
             debug!(
                 "Activated clipboard item ID {}: {}",
                 item.item_id, item.content_preview
@@ -839,47 +901,35 @@ fn generate_overlay_content(
     set_pin_icons_visible(&list_box, show_pin_default);
 
     let list_box_for_toggle = list_box.clone();
-    let config_for_toggle = config_state.clone();
     let history_state_for_toggle = history_state.clone();
     toggle_check.connect_toggled(move |check| {
         let state = check.is_active();
-        {
-            let mut config = config_for_toggle.borrow_mut();
-            config.show_trash = state;
-            if let Err(e) = save_config(&config) {
-                warn!("Failed to save config: {}", e);
-            }
-        }
+        save_preference(|cfg| cfg.show_trash = state);
         *history_state_for_toggle.show_trash.borrow_mut() = state;
         set_delete_buttons_visible(&list_box_for_toggle, state);
     });
 
     let list_box_for_pin_toggle = list_box.clone();
-    let config_for_pin_toggle = config_state.clone();
     let history_state_for_pin_toggle = history_state.clone();
     pin_toggle_check.connect_toggled(move |check| {
         let state = check.is_active();
-        {
-            let mut config = config_for_pin_toggle.borrow_mut();
-            config.show_pin = state;
-            if let Err(e) = save_config(&config) {
-                warn!("Failed to save config: {}", e);
-            }
-        }
+        save_preference(|cfg| cfg.show_pin = state);
         *history_state_for_pin_toggle.show_pin.borrow_mut() = state;
         set_pin_icons_visible(&list_box_for_pin_toggle, state);
     });
 
-    let config_for_persistence_toggle = config_state.clone();
+    let previous_persistence = Cell::new(persistence_enabled_default);
     persistence_toggle_check.connect_toggled(move |check| {
         let state = check.is_active();
-        {
-            let mut config = config_for_persistence_toggle.borrow_mut();
-            config.persistence_enabled = state;
-            if let Err(e) = save_config(&config) {
-                warn!("Failed to save config: {}", e);
-            }
+        if state == previous_persistence.get() {
+            return;
         }
+        if !save_preference(|cfg| cfg.persistence_enabled = state) {
+            check.set_active(previous_persistence.get());
+            return;
+        }
+        previous_persistence.set(state);
+        check.set_inconsistent(false);
 
         match FrontendClient::new() {
             Ok(mut client) => {
@@ -893,14 +943,10 @@ fn generate_overlay_content(
         }
     });
 
-    let config_for_instant_paste_toggle = config_state.clone();
     instant_paste_toggle_check.connect_toggled(move |check| {
         let state = check.is_active();
-        let mut config = config_for_instant_paste_toggle.borrow_mut();
-        config.instant_paste = state;
-        if let Err(e) = save_config(&config) {
-            warn!("Failed to save config: {}", e);
-        }
+        instant_paste_state.set(state);
+        save_preference(|cfg| cfg.instant_paste = state);
     });
 
     let list_box_for_search = list_box.clone();
@@ -997,6 +1043,11 @@ fn generate_overlay_content(
 
     OverlayContent {
         overlay,
+        list_width: ListWidth {
+            header: header_bar,
+            scrolled: scrolled_window,
+            last_request: Cell::new(None),
+        },
         list_box,
         history_state,
         search_entry,
@@ -2073,5 +2124,99 @@ fn format_timestamp(timestamp: u64) -> String {
     } else {
         let days = diff / 86400;
         format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_config_survives_loading_and_preference_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("cursor-clip-config-{:x}", rand::random::<u64>()));
+        let path = dir.join("config.toml");
+        assert_eq!(
+            load_or_create_config(&path).unwrap().width,
+            DEFAULT_LIST_WIDTH
+        );
+        for invalid in [
+            "width = [",
+            "persistence_enabled = true\nwidth = \"700\"\n",
+            "widht = 700\n",
+        ] {
+            fs::write(&path, invalid).unwrap();
+            assert!(overlay_config(&path).is_none());
+            assert!(update_config(&path, |cfg| cfg.show_pin = false).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
+        fs::write(&path, "width = 700\npersistent_history = true\n").unwrap();
+        update_config(&path, |cfg| cfg.show_pin = false).unwrap();
+        let config = load_or_create_config(&path).unwrap();
+        assert!(config.persistence_enabled && !config.show_pin);
+        assert_eq!(config.width, 700);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display"]
+    fn allocated_width_follows_config_and_header_minimum() {
+        adw::init().unwrap();
+        let config = UserConfig {
+            width: 700,
+            ..Default::default()
+        };
+        let requested = config.width;
+        let item = ClipboardItemPreview {
+            item_id: 1,
+            content_preview: "long".repeat(300),
+            content_type: ClipboardContentType::Text,
+            timestamp: 1,
+            pinned: false,
+            thumbnail: None,
+            expires_at: None,
+        };
+        let window = adw::ApplicationWindow::builder()
+            .default_width(1000)
+            .default_height(550)
+            .build();
+        apply_custom_styling(&window);
+        let content = generate_overlay_content(vec![item], Some(config), 300);
+        content.overlay.add_css_class("cursor-clip-card");
+        content.overlay.set_halign(Align::Start);
+        let root = Box::new(Orientation::Vertical, 0);
+        root.append(&content.overlay);
+        window.set_content(Some(&root));
+        let header_min = content
+            .list_width
+            .header
+            .measure(Orientation::Horizontal, -1)
+            .0;
+        let minimum = header_min.max(200);
+        let wait_for_width = |expected| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while content.list_width.scrolled.width() != expected {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "expected {expected}, allocated {}",
+                    content.list_width.scrolled.width()
+                );
+                gtk4::glib::MainContext::default().iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        content.list_width.apply(requested, 200);
+        window.present();
+        wait_for_width(requested.max(minimum));
+        window.set_visible(false);
+        content.search_entry.set_visible(true);
+        *content.history_state.search_query.borrow_mut() = "no matches".into();
+        apply_search_filter(&content.list_box, &content.history_state);
+        content.list_width.apply(1, 200);
+        window.present();
+        wait_for_width(minimum);
+        content.list_width.apply(600, 200);
+        wait_for_width(600.max(minimum));
+        window.close();
     }
 }
