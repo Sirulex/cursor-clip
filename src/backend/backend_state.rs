@@ -4,7 +4,7 @@ use crate::backend::persistence::{
 };
 use crate::backend::store::{ClipboardStore, OpenBlob};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
-use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
+use crate::backend::wayland_clipboard::{MutexBackendState, is_internal_mime_type};
 use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
@@ -502,6 +502,18 @@ impl BackendState {
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
+        // History created before internal types were filtered may still contain them.
+        let mut mimes = item
+            .mime_blobs
+            .keys()
+            .filter(|mime| !is_internal_mime_type(mime))
+            .peekable();
+        if mimes.peek().is_none() {
+            return Err(format!(
+                "Clipboard item {entry_id} has no shareable MIME types"
+            ));
+        }
+
         info!("Setting clipboard content by ID {entry_id}");
 
         let (Some(manager), Some(device), Some(qh)) = (
@@ -518,7 +530,7 @@ impl BackendState {
         }
 
         let source = manager.create_data_source(qh);
-        for mime in item.mime_blobs.keys() {
+        for mime in mimes {
             source.offer(mime.clone());
         }
         device.set_selection(Some(&source));
@@ -680,6 +692,9 @@ impl BackendState {
     /// Open the payload of one MIME type of a history item. Reading and
     /// decrypting the opened blob can then happen without the backend lock.
     pub fn open_item_payload(&self, entry_id: u64, mime_type: &str) -> Result<OpenBlob, String> {
+        if is_internal_mime_type(mime_type) {
+            return Err(format!("Cannot serve internal MIME type {mime_type}"));
+        }
         let item = self
             .history
             .iter()
@@ -1033,6 +1048,25 @@ mod tests {
         );
         assert!(state.set_clipboard_by_id(id, false).is_err());
         assert!(state.get_history().is_empty());
+        state.store.destroy().unwrap();
+    }
+
+    #[test]
+    fn internal_mime_payloads_from_old_history_cannot_be_served() {
+        let mut state = test_state(false);
+        let internal_mime = "application/x-krita-node-internal-pointer";
+        let id = state
+            .add_clipboard_item_from_mime_map(IndexMap::from([(
+                internal_mime.to_string(),
+                Bytes::from_static(b"private data"),
+            )]))
+            .unwrap();
+
+        assert_eq!(
+            state.set_clipboard_by_id(id, false).unwrap_err(),
+            format!("Clipboard item {id} has no shareable MIME types"),
+        );
+        assert!(state.open_item_payload(id, internal_mime).is_err());
         state.store.destroy().unwrap();
     }
 
