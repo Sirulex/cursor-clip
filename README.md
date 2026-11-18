@@ -249,6 +249,32 @@ History saved by older versions in `~/.config/cursor-clip/history.stoolap.db` is
 ## Instant paste note:
 On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
 
+## niri specific fix: Overlay waits for mouse movement
+
+With `cursor { hide-when-typing }` configured in niri, launching Cursor Clip from
+a keybind or terminal can leave the frontend waiting until you move the mouse.
+The keypress hides the pointer, and niri withholds pointer focus from the new
+capture layer. Moving the mouse restores focus so Cursor Clip can receive the
+Wayland `wl_pointer.enter` event and open the overlay at the cursor. See
+[niri's pointer-hiding change](https://github.com/niri-wm/niri/pull/1426).
+
+To keep `hide-when-typing` enabled, save this wrapper as `cursor-clip-niri`,
+make it executable, and point your keybind at it, for example
+`Mod+V { spawn "/path/to/cursor-clip-niri"; }`. The wrapper uses `wlrctl` to
+nudge the pointer one pixel in each direction during launch.
+
+```bash
+#!/usr/bin/env bash
+# Requires wlrctl
+wlrctl pointer move 1 0 &
+wlrctl pointer move -1 0 &
+exec cursor-clip "$@"
+```
+
+Other tools that generate relative mouse movement can also be used, such as
+[ydotool](https://github.com/ReimuNotMoe/ydotool). Disabling/not using `hide-when-typing`
+in niri also avoids this behavior.
+
 ```
 ┌─────────────────────────────────────────────────┐
 │                 Cursor Clip                     │
