@@ -52,6 +52,7 @@ struct UserConfig {
     #[serde(alias = "persistent_history")]
     persistence_enabled: bool,
     instant_paste: bool,
+    type_in: bool,
 }
 
 #[derive(Clone)]
@@ -103,6 +104,7 @@ impl Default for UserConfig {
             show_pin: true,
             persistence_enabled: false,
             instant_paste: true,
+            type_in: false,
         }
     }
 }
@@ -587,6 +589,7 @@ fn generate_overlay_content(
     let show_pin_default = config_state.borrow().show_pin;
     let persistence_enabled_default = config_state.borrow().persistence_enabled;
     let instant_paste_default = config_state.borrow().instant_paste;
+    let type_in_default = config_state.borrow().type_in;
     let show_trash_state = Rc::new(RefCell::new(show_trash_default));
     let show_pin_state = Rc::new(RefCell::new(show_pin_default));
 
@@ -689,6 +692,16 @@ fn generate_overlay_content(
     instant_paste_toggle_row.append(&instant_paste_toggle_label);
     instant_paste_toggle_row.append(&instant_paste_toggle_check);
     menu_box.append(&instant_paste_toggle_row);
+
+    let type_in_toggle_row = Box::new(Orientation::Horizontal, 8);
+    let type_in_toggle_label = Label::new(Some("Type in"));
+    type_in_toggle_label.set_halign(Align::Start);
+    type_in_toggle_label.set_hexpand(true);
+    let type_in_toggle_check = CheckButton::new();
+    type_in_toggle_check.set_active(type_in_default);
+    type_in_toggle_row.append(&type_in_toggle_label);
+    type_in_toggle_row.append(&type_in_toggle_check);
+    menu_box.append(&type_in_toggle_row);
 
     menu_revealer.set_child(Some(&menu_box));
     header_bar.pack_end(&close_button);
@@ -800,7 +813,10 @@ fn generate_overlay_content(
         };
         let items = history_state_for_activation.all_items.borrow();
         if let Some(item) = items.iter().find(|item| item.item_id == item_id) {
-            let instant_paste = config_for_activation.borrow().instant_paste;
+            let (instant_paste, type_in) = {
+                let config = config_for_activation.borrow();
+                (config.instant_paste, config.type_in)
+            };
             debug!(
                 "Activated clipboard item ID {}: {}",
                 item.item_id, item.content_preview
@@ -808,7 +824,8 @@ fn generate_overlay_content(
 
             match FrontendClient::new() {
                 Ok(mut client) => {
-                    if let Err(e) = client.set_clipboard_by_id(item.item_id, instant_paste) {
+                    if let Err(e) = client.set_clipboard_by_id(item.item_id, instant_paste, type_in)
+                    {
                         error!("Error setting clipboard by ID: {}", e);
                     } else {
                         info!("Clipboard set by ID: {}", item.item_id);
@@ -888,6 +905,16 @@ fn generate_overlay_content(
         let state = check.is_active();
         let mut config = config_for_instant_paste_toggle.borrow_mut();
         config.instant_paste = state;
+        if let Err(e) = save_config(&config) {
+            warn!("Failed to save config: {}", e);
+        }
+    });
+
+    let config_for_type_in_toggle = config_state.clone();
+    type_in_toggle_check.connect_toggled(move |check| {
+        let state = check.is_active();
+        let mut config = config_for_type_in_toggle.borrow_mut();
+        config.type_in = state;
         if let Err(e) = save_config(&config) {
             warn!("Failed to save config: {}", e);
         }

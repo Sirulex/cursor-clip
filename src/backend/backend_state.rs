@@ -3,7 +3,9 @@ use crate::backend::persistence::{
     migrate_legacy_history, read_db_password_from_keyring_once, warn_persistence_sync_error,
 };
 use crate::backend::store::{ClipboardStore, OpenBlob};
-use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
+use crate::backend::virtual_keyboard::{
+    paste_via_virtual_keyboard_shortcut, type_text_via_virtual_keyboard,
+};
 use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
@@ -489,6 +491,7 @@ impl BackendState {
         &mut self,
         entry_id: u64,
         instant_paste: bool,
+        type_in: bool,
     ) -> Result<(), String> {
         let item = self
             .get_item_by_id(entry_id)
@@ -526,7 +529,17 @@ impl BackendState {
         }
         debug!("Created clipboard source and set selection (id {entry_id})");
 
-        if instant_paste {
+        let typed_text = if type_in { self.item_text(&item) } else { None };
+        if let Some(text) = typed_text {
+            info!("Typing in clipboard item ID {entry_id} via virtual keyboard");
+            std::thread::spawn(move || {
+                // Give the overlay a brief moment to close so typing targets the previous app.
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                if let Err(e) = type_text_via_virtual_keyboard(&text) {
+                    warn!("Type in failed: {e}");
+                }
+            });
+        } else if instant_paste {
             info!("Instant paste via virtual keyboard shortcut for ID {entry_id}");
             std::thread::spawn(move || {
                 // Give the overlay a brief moment to close so shortcut targets the previous app.
@@ -538,6 +551,27 @@ impl BackendState {
         }
 
         Ok(())
+    }
+
+    /// Plain text payload of an item, if it has one.
+    fn item_text(&self, item: &ClipboardItem) -> Option<String> {
+        const TEXT_MIMES: [&str; 5] = [
+            "text/plain;charset=utf-8",
+            "UTF8_STRING",
+            "text/plain",
+            "STRING",
+            "TEXT",
+        ];
+        let blob = TEXT_MIMES
+            .iter()
+            .find_map(|mime| item.mime_blobs.get(*mime))?;
+        match self.store.get_blob(blob) {
+            Ok(data) => Some(String::from_utf8_lossy(&data).into_owned()),
+            Err(e) => {
+                warn!("Failed to read text for type in: {e}");
+                None
+            }
+        }
     }
 
     pub fn set_pinned(&mut self, entry_id: u64, pinned: bool) -> Result<(), String> {
@@ -958,7 +992,7 @@ mod tests {
                 .open_item_payload(id, "text/plain;charset=utf-8")
                 .is_err()
         );
-        assert!(state.set_clipboard_by_id(id, false).is_err());
+        assert!(state.set_clipboard_by_id(id, false, false).is_err());
         assert!(state.get_history().is_empty());
         state.store.destroy().unwrap();
     }

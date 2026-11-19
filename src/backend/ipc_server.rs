@@ -81,9 +81,13 @@ async fn handle_client(
                     items: state.get_history(),
                 }
             }
-            FrontendMessage::SetClipboardById { id, instant_paste } => {
+            FrontendMessage::SetClipboardById {
+                id,
+                instant_paste,
+                type_in,
+            } => {
                 let mut state = state.lock().unwrap();
-                match state.set_clipboard_by_id(id, instant_paste) {
+                match state.set_clipboard_by_id(id, instant_paste, type_in) {
                     Ok(()) => BackendMessage::ClipboardSet,
                     Err(e) => BackendMessage::Error { message: e },
                 }

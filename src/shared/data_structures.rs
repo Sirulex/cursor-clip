@@ -92,6 +92,8 @@ pub enum FrontendMessage {
         id: u64,
         #[serde(default)]
         instant_paste: bool,
+        #[serde(default)]
+        type_in: bool,
     },
     /// Set pinned state by ID
     SetPinned { id: u64, pinned: bool },
