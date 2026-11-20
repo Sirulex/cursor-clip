@@ -35,7 +35,6 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 glib = "0.22.10"
 image = "0.25.10"
 fast_image_resize = "6"
-stoolap = "0.4.2"
 keyring = "4.2.0"
 aes-gcm = "0.11.1"
 base64 = "0.23.1"

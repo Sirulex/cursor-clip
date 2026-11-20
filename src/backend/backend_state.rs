@@ -1,6 +1,5 @@
 use crate::backend::persistence::{
-    db_has_persisted_items, generate_and_store_db_password, migrate_legacy_history,
-    read_db_password_from_keyring_once, warn_persistence_sync_error,
+    generate_and_store_db_password, read_db_password_from_keyring_once, warn_persistence_sync_error,
 };
 use crate::backend::store::{ClipboardStore, OpenBlob};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard;
@@ -624,9 +623,9 @@ impl BackendState {
 
         let (store, history) = if enabled {
             if self.db_password.is_none() {
-                if db_has_persisted_items()? {
+                if ClipboardStore::persistent_index_exists() {
                     return Err(
-                        "Persistent DB already contains data but no password was found in keyring. \
+                        "Persistent history already exists but no password was found in keyring. \
                          Refusing to generate a new password because it would make existing encrypted history unreadable."
                             .to_string(),
                     );
@@ -643,10 +642,7 @@ impl BackendState {
             // Always read what is already on disk first. If that fails we
             // return before writing anything, so existing history is never
             // replaced by an index that does not contain it.
-            let original = match migrate_legacy_history(password, &persistent)? {
-                Some(migrated) => migrated,
-                None => persistent.load_index()?,
-            };
+            let original = persistent.load_index()?;
             let had_index = ClipboardStore::persistent_index_exists();
             let mut existing = original.clone();
             prepare_restored_history(&mut existing, unix_timestamp());

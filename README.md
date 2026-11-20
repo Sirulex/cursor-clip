@@ -256,8 +256,6 @@ If persistent history is enabled, clipboard history is stored encrypted on disk 
 
 Clipboard contents are kept out of memory either way: every payload is written once as an AES-GCM encrypted, content-addressed file and only read back when an application pastes it. The daemon keeps just the history index (previews and small thumbnails) in memory. Without persistent history the files live in `$XDG_CACHE_HOME/cursor-clip/session`, encrypted with a key that only exists in memory, and are removed on the next start. Turning persistent history off deletes the persistent store.
 
-History saved by older versions in `~/.config/cursor-clip/history.stoolap.db` is migrated automatically on first start; the old database is kept as `history.stoolap.db.migrated` and can be deleted afterwards.
-
 ## Instant paste
 
 With **Instant paste** enabled, turn on **Type in** in the overlay’s three-dot menu to type selected text into the focused window. You can also set `type_instead_of_paste = true` in `~/.config/cursor-clip/config.toml`. This works in terminals where Ctrl+V has another meaning. Tabs and line breaks send Tab and Enter keypresses, so a line break can submit a shell command. Images and copied files still use Ctrl+V. The option defaults to `false`.
@@ -328,7 +326,6 @@ in niri also avoids this behavior.
 - **fast_image_resize**: Efficient image resizing for previews
 - **keyring**: Secure storage for encryption keys
 - **aes-gcm**: Encryption of the on-disk clipboard store
-- **stoolap**: Reading history saved by older versions (one-time migration)
 - **env_logger**: Logging framework
 ---
 
