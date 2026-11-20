@@ -92,18 +92,14 @@ flatpak run --command=flathub-build \
   io.github.sirulex.cursor-clip.yml
 ```
 
-Run the clipboard monitor and overlay with:
+**Daemon autostart is required to record clipboard history from login.** Add this command to your compositor's autostart configuration:
 
 ```bash
-flatpak run io.github.sirulex.cursor-clip --daemon
-flatpak run io.github.sirulex.cursor-clip
+flatpak run --command=cursor-clip-daemon io.github.sirulex.cursor-clip
 ```
 
-The default launcher starts the monitor automatically if it is not already
-running. For a complete workflow, add the daemon command to your compositor's
-autostart configuration and bind the second command to a shortcut such as
-Super+V. To run the monitor without taking clipboard ownership, append
-`--monitor-only` to the daemon command.
+Append `--monitor-only` to that command to leave clipboard ownership with the source application.
+Open **Cursor Clip** from the application menu or bind `flatpak run io.github.sirulex.cursor-clip` to a shortcut such as Super+V to toggle the overlay.
 
 
 ## Manual Building
@@ -217,7 +213,7 @@ cargo run --bin cursor-clip-toggle
 Running the application requires a supported Wayland session (see Compositor Support).
 
 ## Usage
-1. **Start Background Daemon**: Run `cursor-clip-daemon` at login to record clipboard history. Use `cursor-clip-daemon --monitor-only` to leave newly copied selections under the source application's ownership.
+1. **Autostart the daemon (required).** Add `cursor-clip-daemon` to your compositor's autostart configuration. The daemon must be running to record clipboard history and serve it to the overlay. Use `cursor-clip-daemon --monitor-only` to leave newly copied selections under the source application's ownership.
 2. **Toggle Overlay**: Bind `cursor-clip-toggle` to a shortcut such as Super+V. It opens the overlay on first use and signals it on subsequent invocations.
 3. **View History**: The clipboard history window opens at your cursor by default, showing:
    - **Recent clipboard items** with content previews

@@ -2,7 +2,7 @@ id: io.github.sirulex.cursor-clip
 runtime: org.gnome.Platform
 runtime-version: '50'
 sdk: org.gnome.Sdk
-command: cursor-clip-launch
+command: cursor-clip-toggle
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 
@@ -56,10 +56,11 @@ modules:
     build-commands:
       - install -Dm644 cargo/config .cargo/config.toml
       - cargo --offline --frozen build --release
-      - install -Dm755 target/release/cursor-clip-daemon /app/bin/cursor-clip-daemon
-      - install -Dm755 target/release/cursor-clip-toggle /app/bin/cursor-clip-toggle
-      - install -Dm755 flatpak/cursor-clip-launch /app/bin/cursor-clip-launch
-      - install -Dm644 flatpak/io.github.sirulex.cursor-clip.desktop /app/share/applications/io.github.sirulex.cursor-clip.desktop
+      - install -Dm755 target/release/cursor-clip-daemon /app/libexec/cursor-clip-daemon
+      - install -Dm755 target/release/cursor-clip-toggle /app/libexec/cursor-clip-toggle
+      - install -Dm755 flatpak/with-wayland-display /app/bin/cursor-clip-daemon
+      - install -Dm755 flatpak/with-wayland-display /app/bin/cursor-clip-toggle
+      - install -Dm644 assets/io.github.sirulex.cursor-clip.desktop /app/share/applications/io.github.sirulex.cursor-clip.desktop
       - install -Dm644 flatpak/io.github.sirulex.cursor-clip.metainfo.xml /app/share/metainfo/io.github.sirulex.cursor-clip.metainfo.xml
       - install -Dm644 assets/io.github.sirulex.cursor-clip.svg /app/share/icons/hicolor/scalable/apps/io.github.sirulex.cursor-clip.svg
       - install -Dm644 LICENSE /app/share/licenses/io.github.sirulex.cursor-clip/LICENSE

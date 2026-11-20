@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+# Installed under each binary's name so the same command works inside Flatpak.
+binary="/app/libexec/${0##*/}"
+if [ -z "${WAYLAND_DISPLAY+x}" ] && [ -z "${WAYLAND_SOCKET+x}" ]; then
+    # CLI help and version are available outside a graphical session.
+    for arg do
+        case "$arg" in
+            -h|--help|-V|--version) exec "$binary" "$@" ;;
+        esac
+    done
+
+    # Flatpak exposes these compositor sockets through the manifest.
+    for display in wayland-0 wayland-1; do
+        if [ -S "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/$display" ]; then
+            export WAYLAND_DISPLAY="$display"
+            break
+        fi
+    done
+    : "${WAYLAND_DISPLAY:?no exposed Wayland compositor socket found}"
+fi
+
+exec "$binary" "$@"

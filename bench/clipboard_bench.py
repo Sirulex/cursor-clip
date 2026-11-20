@@ -16,7 +16,7 @@ repeatedly and grabs the keyboard while open, and the clipboard is
 overwritten; do not use the machine while it runs.
 
 Usage:
-  bench/clipboard_bench.py --label upstream --bin /usr/bin/cursor-clip \
+  bench/clipboard_bench.py --label upstream --bin /usr/bin/cursor-clip-daemon \
       --sizes 0 10 100 --out upstream.json
   bench/clipboard_bench.py --label fork --bin target/release/cursor-clip-daemon \
       --out fork.json
@@ -128,14 +128,14 @@ def wait_for(predicate, timeout: float, interval: float = 0.003) -> float | None
 
 
 class Daemon:
-    def __init__(self, command: list[str], env: dict):
-        self.command = command
+    def __init__(self, binary: Path, env: dict):
+        self.binary = binary
         self.env = env
         self.proc = None
 
     def start(self):
         self.proc = subprocess.Popen(
-            self.command,
+            [self.binary],
             env=self.env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -250,7 +250,7 @@ def disk_usage_kib(path: Path) -> int:
 
 
 def run(
-    daemon_cmd: list[str],
+    daemon_binary: Path,
     open_cmd: str,
     size: int,
     runs: int,
@@ -275,7 +275,7 @@ def run(
         XDG_CACHE_HOME=str(home / ".cache"),
         RUST_LOG="error",
     )
-    daemon = Daemon(daemon_cmd, env)
+    daemon = Daemon(daemon_binary, env)
     try:
         daemon.start()
         copy_latencies, missed_copies = fill_history(size, images)
@@ -310,7 +310,7 @@ def run(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", required=True)
-    parser.add_argument("--bin", required=True, help="daemon binary or legacy cursor-clip binary")
+    parser.add_argument("--bin", required=True, help="path to cursor-clip-daemon")
     parser.add_argument(
         "--open-cmd", help="overlay command (defaults to the frontend from the same build)"
     )
@@ -328,11 +328,7 @@ def main():
     )
     args = parser.parse_args()
     binary = Path(shutil.which(args.bin) or args.bin).absolute()
-    daemon_cmd = [str(binary)]
     overlay = binary.with_name("cursor-clip-toggle")
-    if binary.name == "cursor-clip":
-        daemon_cmd.append("--daemon")
-        overlay = binary
 
     if SOCKET.exists():
         try:
@@ -346,7 +342,7 @@ def main():
     for size in args.sizes:
         print(f"[{args.label}] {size} items...", flush=True)
         result = run(
-            daemon_cmd,
+            binary,
             args.open_cmd or str(overlay),
             size,
             args.runs,

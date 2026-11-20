@@ -22,9 +22,8 @@
       it does not provide the required protocols.
     </p>
     <p>
-      Launching Cursor Clip starts its clipboard monitor for the current
-      session. For clipboard monitoring immediately after login, configure
-      <code>flatpak run io.github.sirulex.cursor-clip --daemon</code> in your
+      To record clipboard history, configure
+      <code>flatpak run --command=cursor-clip-daemon io.github.sirulex.cursor-clip</code> in your
       compositor's autostart settings. Bind
       <code>flatpak run io.github.sirulex.cursor-clip</code> to a shortcut such
       as Super+V to open the history overlay.
