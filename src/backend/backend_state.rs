@@ -1,130 +1,26 @@
+use super::selection::SelectionOwner;
 use crate::backend::persistence::{
     generate_and_store_db_password, read_db_password_from_keyring_once, warn_persistence_sync_error,
 };
 use crate::backend::store::{ClipboardStore, OpenBlob};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard;
-use crate::backend::wayland_clipboard::{MutexBackendState, is_internal_mime_type};
+use crate::backend::wayland_clipboard::is_internal_mime_type;
 use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
+use crate::shared::{
+    ClipboardContentType, ClipboardItem, ClipboardItemPreview, PASSWORD_HINT_MIME,
+};
+use bytes::Bytes;
 use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 use gtk4::glib;
 use image::{ImageFormat, RgbaImage};
+use indexmap::IndexMap;
+use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
-use wayland_client::Proxy;
 use wayland_client::backend::ObjectId;
-use wayland_client::protocol::wl_seat;
-use wayland_client::{Connection, QueueHandle};
-use wayland_protocols::ext::data_control::v1::client::{
-    ext_data_control_device_v1::ExtDataControlDeviceV1,
-    ext_data_control_manager_v1::ExtDataControlManagerV1,
-    ext_data_control_source_v1::ExtDataControlSourceV1,
-};
-use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
-    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
-    zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
-};
-
-use crate::shared::{
-    ClipboardContentType, ClipboardItem, ClipboardItemPreview, PASSWORD_HINT_MIME,
-};
-use bytes::Bytes;
-use indexmap::IndexMap;
-use log::{debug, info, warn};
-
-#[derive(Debug, Clone)]
-pub enum DataControlManager {
-    Wlr(ZwlrDataControlManagerV1),
-    Ext(ExtDataControlManagerV1),
-}
-
-#[derive(Debug, Clone)]
-pub enum DataControlDevice {
-    Wlr(ZwlrDataControlDeviceV1),
-    Ext(ExtDataControlDeviceV1),
-}
-
-#[derive(Debug, Clone)]
-pub enum DataControlSource {
-    Wlr(ZwlrDataControlSourceV1),
-    Ext(ExtDataControlSourceV1),
-}
-
-impl DataControlManager {
-    pub fn destroy(self) {
-        match self {
-            Self::Wlr(manager) => manager.destroy(),
-            Self::Ext(manager) => manager.destroy(),
-        }
-    }
-
-    pub fn create_data_source(&self, qh: &QueueHandle<MutexBackendState>) -> DataControlSource {
-        match self {
-            Self::Wlr(manager) => DataControlSource::Wlr(manager.create_data_source(qh, ())),
-            Self::Ext(manager) => DataControlSource::Ext(manager.create_data_source(qh, ())),
-        }
-    }
-
-    pub fn get_data_device(
-        &self,
-        seat: &wl_seat::WlSeat,
-        qh: &QueueHandle<MutexBackendState>,
-    ) -> DataControlDevice {
-        match self {
-            Self::Wlr(manager) => DataControlDevice::Wlr(manager.get_data_device(seat, qh, ())),
-            Self::Ext(manager) => DataControlDevice::Ext(manager.get_data_device(seat, qh, ())),
-        }
-    }
-}
-
-impl DataControlDevice {
-    pub fn destroy(self) {
-        match self {
-            Self::Wlr(device) => device.destroy(),
-            Self::Ext(device) => device.destroy(),
-        }
-    }
-
-    pub fn set_selection(&self, source: Option<&DataControlSource>) {
-        match (self, source) {
-            (Self::Wlr(device), Some(DataControlSource::Wlr(source))) => {
-                device.set_selection(Some(source))
-            }
-            (Self::Wlr(device), None) => device.set_selection(None),
-            (Self::Ext(device), Some(DataControlSource::Ext(source))) => {
-                device.set_selection(Some(source))
-            }
-            (Self::Ext(device), None) => device.set_selection(None),
-            _ => warn!("Mismatched data control protocol between device and source"),
-        }
-    }
-}
-
-impl DataControlSource {
-    pub fn destroy(self) {
-        match self {
-            Self::Wlr(source) => source.destroy(),
-            Self::Ext(source) => source.destroy(),
-        }
-    }
-
-    pub fn offer(&self, mime_type: String) {
-        match self {
-            Self::Wlr(source) => source.offer(mime_type),
-            Self::Ext(source) => source.offer(mime_type),
-        }
-    }
-
-    pub fn id(&self) -> ObjectId {
-        match self {
-            Self::Wlr(source) => source.id(),
-            Self::Ext(source) => source.id(),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct BackendState {
@@ -132,27 +28,12 @@ pub struct BackendState {
     pub history: Vec<ClipboardItem>,
     pub id_for_next_entry: u64,
 
-    // Wayland objects for clipboard operations
-    pub data_control_manager: Option<DataControlManager>,
-    pub data_control_device: Option<DataControlDevice>,
-    pub qh: Option<QueueHandle<MutexBackendState>>,
-    pub seat: Option<wl_seat::WlSeat>,
-    pub connection: Option<Connection>,
-
     // Current clipboard data
     // Mapping of offer ObjectId -> list of MIME types provided by that offer
     pub mime_type_offers: HashMap<ObjectId, Vec<String>>,
     // Currently selected offer id (if any)
     pub current_data_offer: Option<ObjectId>,
-    pub current_source_object: Option<DataControlSource>,
-    pub current_source_entry_id: Option<u64>,
-    // When we programmatically set the selection, the compositor will echo it
-    // back as a new offer/selection. If we immediately try to read that offer
-    // inside the dispatch callback, we deadlock because the Send event for our
-    // own ZwlrDataControlSourceV1 cannot be processed until we return to the
-    // event loop. This flag suppresses reading the very next selection so we
-    // avoid blocking on our own source.
-    pub suppress_next_selection_read: bool,
+    pub(super) selection: Option<SelectionOwner>,
     // If true, we only monitor external selections and DO NOT immediately
     // re-set (take ownership of) the newly received selection.
     // If false (default), after reading an external selection we immediately
@@ -197,15 +78,8 @@ impl BackendState {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
             id_for_next_entry: 1,
-            data_control_manager: None,
-            data_control_device: None,
-            seat: None,
             current_data_offer: None,
-            current_source_object: None,
-            current_source_entry_id: None,
-            qh: None,
-            suppress_next_selection_read: false,
-            connection: None,
+            selection: None,
             monitor_only,
             store,
             db_password,
@@ -387,7 +261,7 @@ impl BackendState {
 
     /// Remove expired secrets, regardless of pin state, and release our selection.
     pub fn expire_password_items(&mut self, now: u64) {
-        let expired_source = self.current_source_entry_id.is_some_and(|id| {
+        let expired_source = self.owned_entry_id().is_some_and(|id| {
             self.history
                 .iter()
                 .any(|item| item.item_id == id && item.is_expired(now))
@@ -397,24 +271,15 @@ impl BackendState {
         if self.history.len() == previous_len {
             return;
         }
-        if expired_source {
-            if self.current_source_object.is_some()
-                && let Some(device) = &self.data_control_device
-            {
-                device.set_selection(None);
-            }
-            if let Some(source) = self.current_source_object.take() {
-                source.destroy();
-            }
-            self.current_source_entry_id = None;
-            self.suppress_next_selection_read = false;
-            if let Some(connection) = &self.connection
-                && let Err(error) = connection.flush()
-            {
-                warn!("Failed to flush expired password selection: {error}");
-            }
+        if expired_source && let Some(owner) = &mut self.selection {
+            owner.revoke();
         }
         self.history_changed();
+    }
+
+    /// Ignore selection offers while we own the clipboard to avoid reading our own source.
+    pub(super) fn owned_entry_id(&self) -> Option<u64> {
+        self.selection.as_ref()?.entry_id()
     }
 
     pub fn clear_history(&mut self) {
@@ -422,11 +287,9 @@ impl BackendState {
 
         // If we clear history while owning a selection source, drop it and
         // re-enable selection reads so external copies keep being tracked.
-        if let Some(prev) = self.current_source_object.take() {
-            prev.destroy();
+        if let Some(owner) = &mut self.selection {
+            owner.clear();
         }
-        self.current_source_entry_id = None;
-        self.suppress_next_selection_read = false;
 
         self.history_changed();
     }
@@ -440,14 +303,10 @@ impl BackendState {
 
         self.history.remove(index);
 
-        if self.current_source_entry_id == Some(entry_id) {
-            if let Some(prev) = self.current_source_object.take() {
-                prev.destroy();
-            }
-            self.current_source_entry_id = None;
-            // We explicitly destroyed our own source, so the expected Cancelled
-            // event may no longer arrive to clear this flag.
-            self.suppress_next_selection_read = false;
+        if let Some(owner) = &mut self.selection
+            && owner.entry_id() == Some(entry_id)
+        {
+            owner.clear();
         }
 
         self.history_changed();
@@ -478,14 +337,6 @@ impl BackendState {
 
         info!("Setting clipboard content by ID {entry_id}");
 
-        let (Some(manager), Some(device), Some(qh)) = (
-            &self.data_control_manager,
-            &self.data_control_device,
-            &self.qh,
-        ) else {
-            return Err("Wayland clipboard objects not available yet".into());
-        };
-
         let typing_payload = if instant_paste
             && let Some((mime, charset)) = item.typing_format()
             && UserConfig::read(&config_path())
@@ -497,26 +348,10 @@ impl BackendState {
             None
         };
 
-        // Clean up any previously set source that we own
-        if let Some(prev) = self.current_source_object.take() {
-            prev.destroy();
-        }
-
-        let source = manager.create_data_source(qh);
-        for mime in mimes {
-            source.offer(mime.clone());
-        }
-        device.set_selection(Some(&source));
-        self.current_source_object = Some(source);
-        self.current_source_entry_id = Some(entry_id);
-        // Prevent reading back our own just-set selection (would deadlock due to event queue handling)
-        self.suppress_next_selection_read = true;
-        // Flush the Wayland connection so the compositor sees our selection (very important)
-        if let Some(conn) = &self.connection
-            && let Err(e) = conn.flush()
-        {
-            warn!("Failed to flush Wayland connection after setting selection: {e}");
-        }
+        self.selection
+            .as_mut()
+            .ok_or("Wayland clipboard objects not available yet")?
+            .publish(entry_id, mimes.cloned());
         debug!("Created clipboard source and set selection (id {entry_id})");
 
         if instant_paste {
@@ -897,15 +732,8 @@ mod tests {
             history: Vec::new(),
             id_for_next_entry: 1,
             mime_type_offers: HashMap::new(),
-            data_control_manager: None,
-            data_control_device: None,
-            seat: None,
             current_data_offer: None,
-            current_source_object: None,
-            current_source_entry_id: None,
-            qh: None,
-            suppress_next_selection_read: false,
-            connection: None,
+            selection: None,
             monitor_only: false,
             store: ClipboardStore::isolated_test_store(persistent),
             db_password: None,
@@ -1007,10 +835,11 @@ mod tests {
             .add_clipboard_item_from_mime_map(password_mimes("secret"))
             .unwrap();
         state.set_pinned(id, true).unwrap();
-        state.history[0].timestamp = 100;
         let blob = state.history[0].mime_blobs["text/plain;charset=utf-8"].clone();
-        state.current_source_entry_id = Some(id);
-        state.suppress_next_selection_read = true;
+        let (owner, _peer) = crate::backend::selection::tests::test_owner(true);
+        state.selection = Some(owner);
+        state.set_clipboard_by_id(id, false).unwrap();
+        state.history[0].timestamp = 100;
         state.expire_password_items(219);
         assert_eq!(state.history.len(), 1);
         assert_eq!(state.store.get_blob(&blob).unwrap(), b"secret");
@@ -1018,8 +847,7 @@ mod tests {
         assert!(state.history.is_empty());
         assert!(state.store.load_index().unwrap().is_empty());
         assert!(state.store.get_blob(&blob).is_err());
-        assert_eq!(state.current_source_entry_id, None);
-        assert!(!state.suppress_next_selection_read);
+        assert_eq!(state.owned_entry_id(), None);
         state.store.destroy().unwrap();
     }
 
@@ -1036,8 +864,9 @@ mod tests {
             Bytes::from_static(b"NotSecret!"),
         );
         let newer_id = state.add_clipboard_item_from_mime_map(mimes).unwrap();
-        state.current_source_entry_id = Some(newer_id);
-        state.suppress_next_selection_read = true;
+        let (owner, _peer) = crate::backend::selection::tests::test_owner(true);
+        state.selection = Some(owner);
+        state.set_clipboard_by_id(newer_id, false).unwrap();
         state.expire_password_items(220);
         assert_eq!(state.history.len(), 1);
         assert_eq!(state.history[0].item_id, newer_id);
@@ -1046,8 +875,7 @@ mod tests {
             ClipboardContentType::Password
         );
         assert!(state.history[0].expires_at().is_none());
-        assert_eq!(state.current_source_entry_id, Some(newer_id));
-        assert!(state.suppress_next_selection_read);
+        assert_eq!(state.owned_entry_id(), Some(newer_id));
         state.store.destroy().unwrap();
     }
 
