@@ -323,7 +323,7 @@ in niri also avoids this behavior.
 - **Tokio runtime**: Asynchronous runtime
 - **serde**: Serialization framework
 - **indexmap**: Ordered map for clipboard history
-- **fast_image_resize**: Efficient image resizing for previews
+- **image** and **fast_image_resize** generate JPEG previews from PNG clipboard images
 - **keyring**: Secure storage for encryption keys
 - **aes-gcm**: Encryption of the on-disk clipboard store
 - **env_logger**: Logging framework

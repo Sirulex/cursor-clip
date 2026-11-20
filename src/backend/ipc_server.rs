@@ -151,18 +151,18 @@ pub(super) async fn expire_passwords(state: Arc<Mutex<BackendState>>) {
 }
 
 fn acquire_instance_lock(socket_dir: &str) -> Result<std::fs::File, Box<dyn std::error::Error>> {
-    use std::os::fd::AsRawFd;
-
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(format!("{socket_dir}/daemon.lock"))?;
-    // SAFETY: flock on a valid descriptor; the lock lives as long as the file.
-    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("another cursor-clip daemon is already running".into());
+    match lock_file.try_lock() {
+        Ok(()) => Ok(lock_file),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err("another cursor-clip daemon is already running".into())
+        }
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
     }
-    Ok(lock_file)
 }
 
 #[cfg(test)]

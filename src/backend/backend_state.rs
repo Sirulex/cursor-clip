@@ -5,8 +5,8 @@ use crate::backend::store::{ClipboardStore, OpenBlob};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard;
 use crate::backend::wayland_clipboard::{MutexBackendState, is_internal_mime_type};
 use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
-use fast_image_resize as fir;
-use fast_image_resize::images::Image;
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+use gtk4::glib;
 use image::{ImageFormat, RgbaImage};
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -343,50 +343,26 @@ impl BackendState {
         Some(new_id)
     }
 
-    fn scale_image(img_bytes: &Bytes) -> Option<Bytes> {
-        let source = image::load_from_memory(img_bytes.as_ref()).ok()?.to_rgba8();
-        let (src_width, src_height) = source.dimensions();
-
-        if src_width == 0 || src_height == 0 {
-            return None;
-        }
-
-        let max_width = 300u32;
-        let max_height = 180u32;
-        let scale =
-            (max_width as f32 / src_width as f32).min(max_height as f32 / src_height as f32);
-        let dst_width = ((src_width as f32 * scale).round() as u32).max(1);
-        let dst_height = ((src_height as f32 * scale).round() as u32).max(1);
-
-        let src_image = Image::from_vec_u8(
-            src_width,
-            src_height,
-            source.into_raw(),
-            fir::PixelType::U8x4,
-        )
-        .ok()?;
-
-        let mut dst_image = Image::new(dst_width, dst_height, fir::PixelType::U8x4);
-        let mut resizer = fir::Resizer::new();
-        let options = fir::ResizeOptions::new()
-            .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Bilinear));
-
-        resizer
-            .resize(&src_image, &mut dst_image, Some(&options))
+    fn scale_image(png_bytes: &[u8]) -> Option<Bytes> {
+        let source = image::load_from_memory_with_format(png_bytes, ImageFormat::Png)
+            .ok()?
+            .into_rgba8();
+        let (width, height) = source.dimensions();
+        let scale = (300.0 / width as f64).min(180.0 / height as f64);
+        let mut thumbnail = RgbaImage::new(
+            ((width as f64 * scale).round() as u32).max(1),
+            ((height as f64 * scale).round() as u32).max(1),
+        );
+        let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+        Resizer::new()
+            .resize(&source, &mut thumbnail, &options)
             .ok()?;
 
-        let thumbnail =
-            RgbaImage::from_raw(dst_image.width(), dst_image.height(), dst_image.into_vec())?;
-
         let mut buffer = Cursor::new(Vec::new());
-        if image::DynamicImage::ImageRgba8(thumbnail)
+        image::DynamicImage::ImageRgba8(thumbnail)
             .write_to(&mut buffer, ImageFormat::Jpeg)
-            .is_ok()
-        {
-            Some(Bytes::from(buffer.into_inner()))
-        } else {
-            None
-        }
+            .ok()?;
+        Some(buffer.into_inner().into())
     }
 
     #[cfg(debug_assertions)]
@@ -842,6 +818,24 @@ fn release_freed_memory() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_previews_fit_the_bounds_and_remain_decodable_as_jpeg() {
+        for (width, height, expected) in [(640, 320, (300, 150)), (1, 3, (60, 180))] {
+            let mut png = Cursor::new(Vec::new());
+            let transparent_red = RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 0]));
+            image::DynamicImage::ImageRgba8(transparent_red)
+                .write_to(&mut png, ImageFormat::Png)
+                .unwrap();
+
+            let preview = BackendState::scale_image(png.get_ref()).unwrap();
+            let decoded = image::load_from_memory_with_format(&preview, ImageFormat::Jpeg).unwrap();
+            assert_eq!((decoded.width(), decoded.height()), expected);
+            assert_eq!(decoded.to_rgb8().get_pixel(0, 0).0, [0, 0, 0]);
+        }
+
+        assert!(BackendState::scale_image(b"invalid PNG").is_none());
+    }
 
     #[test]
     fn failed_preference_write_preserves_both_stores() {

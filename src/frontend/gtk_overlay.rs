@@ -1957,7 +1957,7 @@ fn generate_listboxrow_from_preview(
     main_box.append(&header_box);
 
     let rendered_image = item.thumbnail.as_ref().and_then(|bytes| {
-        let gbytes = glib::Bytes::from(bytes);
+        let gbytes = gtk4::glib::Bytes::from(bytes);
         gtk4::gdk::Texture::from_bytes(&gbytes).ok()
     });
 
