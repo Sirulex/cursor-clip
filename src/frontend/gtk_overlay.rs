@@ -825,6 +825,21 @@ fn create_backdrop(card: &Overlay, placement: Rc<Cell<CardPlacement>>) -> Overla
     backdrop
 }
 
+fn append_settings_toggle(menu: &Box, title: &str, active: bool) -> (Box, CheckButton) {
+    let row = Box::new(Orientation::Horizontal, 8);
+    row.add_css_class("settings-row");
+    let label = Label::new(Some(title));
+    label.set_halign(Align::Start);
+    label.set_hexpand(true);
+    let check = CheckButton::new();
+    check.set_active(active);
+    label.set_mnemonic_widget(Some(&check));
+    row.append(&label);
+    row.append(&check);
+    menu.append(&row);
+    (row, check)
+}
+
 fn generate_overlay_content(config: UserConfig) -> OverlayContent {
     // Main container with standard libadwaita spacing
     let main_box = Box::new(Orientation::Vertical, 0);
@@ -937,16 +952,14 @@ fn generate_overlay_content(config: UserConfig) -> OverlayContent {
     persistence_toggle_row.append(&persistence_toggle_check);
     menu_box.append(&persistence_toggle_row);
 
-    let instant_paste_toggle_row = Box::new(Orientation::Horizontal, 8);
-    instant_paste_toggle_row.add_css_class("settings-row");
-    let instant_paste_toggle_label = Label::new(Some("Instant paste"));
-    instant_paste_toggle_label.set_halign(Align::Start);
-    instant_paste_toggle_label.set_hexpand(true);
-    let instant_paste_toggle_check = CheckButton::new();
-    instant_paste_toggle_check.set_active(instant_paste.get());
-    instant_paste_toggle_row.append(&instant_paste_toggle_label);
-    instant_paste_toggle_row.append(&instant_paste_toggle_check);
-    menu_box.append(&instant_paste_toggle_row);
+    let (_, instant_paste_toggle_check) =
+        append_settings_toggle(&menu_box, "Instant paste", instant_paste.get());
+    let (type_in_row, type_in_check) =
+        append_settings_toggle(&menu_box, "Type in", config.type_instead_of_paste);
+    instant_paste_toggle_check
+        .bind_property("active", &type_in_row, "sensitive")
+        .sync_create()
+        .build();
 
     let size_row = Box::new(Orientation::Horizontal, 6);
     let width_entry = dimension_entry("Width", config.width);
@@ -1161,6 +1174,29 @@ fn generate_overlay_content(config: UserConfig) -> OverlayContent {
         instant_paste.set(state);
         if let Err(e) = UserConfig::update(&config_path(), |config| config.instant_paste = state) {
             warn!("Failed to save config: {}", e);
+        }
+    });
+
+    let reverting = Cell::new(false);
+    let type_in_changed = type_in_check.connect_toggled(move |check| {
+        if reverting.get() {
+            return;
+        }
+        let active = check.is_active();
+        if let Err(e) = UserConfig::update(&config_path(), |cfg| cfg.type_instead_of_paste = active)
+        {
+            warn!("Failed to save Type in setting: {e}");
+            reverting.set(true);
+            check.set_active(!active);
+            reverting.set(false);
+        }
+    });
+    // A resident overlay can outlive edits made directly to config.toml.
+    menu_box.connect_map(move |_| {
+        if let Ok(config) = UserConfig::read(&config_path()) {
+            type_in_check.block_signal(&type_in_changed);
+            type_in_check.set_active(config.type_instead_of_paste);
+            type_in_check.unblock_signal(&type_in_changed);
         }
     });
 
@@ -2402,6 +2438,41 @@ mod size_tests {
     use std::fs;
 
     #[test]
+    #[ignore = "requires a GTK display"]
+    fn type_in_toggle_persists_and_follows_instant_paste() {
+        fn check_for(widget: &gtk4::Widget, title: &str) -> Option<CheckButton> {
+            if let Some(label) = widget.downcast_ref::<Label>()
+                && label.text() == title
+            {
+                return label.mnemonic_widget()?.downcast().ok();
+            }
+            std::iter::successors(widget.first_child(), |child| child.next_sibling())
+                .find_map(|child| check_for(&child, title))
+        }
+        crate::shared::isolated_test(|| {
+            adw::init().unwrap();
+            let path = config_path();
+            UserConfig::update(&path, |cfg| cfg.type_instead_of_paste = true).unwrap();
+            let content = generate_overlay_content(UserConfig::read(&path).unwrap());
+            let menu = content.menu_revealer.upcast_ref();
+            let type_in = check_for(menu, "Type in").unwrap();
+            let instant = check_for(menu, "Instant paste").unwrap();
+            assert!(type_in.is_active());
+            instant.set_active(false);
+            assert!(!type_in.is_sensitive());
+            instant.set_active(true);
+            assert!(type_in.is_sensitive());
+            for active in [false, true] {
+                type_in.emit_activate();
+                assert_eq!(
+                    UserConfig::read(&path).unwrap().type_instead_of_paste,
+                    active
+                );
+            }
+        });
+    }
+
+    #[test]
     fn malformed_config_survives_loading_and_preference_changes() {
         let dir =
             std::env::temp_dir().join(format!("cursor-clip-config-{:x}", rand::random::<u64>()));
@@ -2430,15 +2501,21 @@ mod size_tests {
         UserConfig::update(&path, |cfg| cfg.show_pin = false).unwrap();
         let config = UserConfig::load_or_create(&path).unwrap();
         assert!(config.persistence_enabled && !config.show_pin);
+        assert!(!config.type_instead_of_paste);
         assert_eq!((config.width, config.height), (700, DEFAULT_LIST_HEIGHT));
         assert_eq!(
             (config.position, config.margin),
             (PopupPosition::Cursor, DEFAULT_MARGIN)
         );
 
-        fs::write(&path, "position = \"bottom-right\"\nmargin = 24\n").unwrap();
+        fs::write(
+            &path,
+            "position = \"bottom-right\"\nmargin = 24\ntype_instead_of_paste = true\n",
+        )
+        .unwrap();
         UserConfig::update(&path, |cfg| cfg.show_pin = false).unwrap();
         let config = UserConfig::read(&path).unwrap();
+        assert!(config.type_instead_of_paste);
         assert_eq!(
             (config.position, config.margin),
             (PopupPosition::BottomRight, 24)

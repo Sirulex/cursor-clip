@@ -19,6 +19,50 @@ pub struct ClipboardItem {
 }
 
 impl ClipboardItem {
+    /// File managers and image applications may also offer a plain-text label.
+    pub fn typing_format(&self) -> Option<(&str, &str)> {
+        if self.content_type == ClipboardContentType::Image
+            || self.mime_blobs.keys().any(|mime| {
+                let media_type = mime.split(';').next().unwrap_or(mime).trim();
+                media_type
+                    .get(..6)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("image/"))
+                    || media_type.eq_ignore_ascii_case("text/uri-list")
+                    || media_type.eq_ignore_ascii_case("x-special/gnome-copied-files")
+            })
+        {
+            return None;
+        }
+
+        self.mime_blobs
+            .keys()
+            .filter_map(|mime| {
+                let mut parts = mime.split(';');
+                let name = parts.next()?.trim();
+                let (priority, charset) = if name.eq_ignore_ascii_case("text/plain") {
+                    let charset = parts
+                        .filter_map(|part| part.split_once('='))
+                        .find(|(key, _)| key.trim().eq_ignore_ascii_case("charset"))
+                        .map(|(_, value)| value.trim().trim_matches('"'));
+                    match charset {
+                        Some(value) if value.eq_ignore_ascii_case("utf-8") => (0, "UTF-8"),
+                        None => (2, "UTF-8"),
+                        Some(value) => (3, value),
+                    }
+                } else {
+                    match name {
+                        "UTF8_STRING" => (1, "UTF-8"),
+                        "TEXT" => (4, "UTF-8"),
+                        "STRING" => (5, "ISO-8859-1"),
+                        _ => return None,
+                    }
+                };
+                Some((priority, (mime.as_str(), charset)))
+            })
+            .min_by_key(|(priority, _)| *priority)
+            .map(|(_, format)| format)
+    }
+
     pub fn expires_at(&self) -> Option<u64> {
         self.mime_blobs
             .contains_key(PASSWORD_HINT_MIME)

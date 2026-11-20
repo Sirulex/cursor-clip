@@ -3,7 +3,7 @@ use crate::backend::persistence::{
     read_db_password_from_keyring_once, warn_persistence_sync_error,
 };
 use crate::backend::store::{ClipboardStore, OpenBlob};
-use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
+use crate::backend::virtual_keyboard::paste_via_virtual_keyboard;
 use crate::backend::wayland_clipboard::{MutexBackendState, is_internal_mime_type};
 use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
 use fast_image_resize as fir;
@@ -524,6 +524,17 @@ impl BackendState {
             return Err("Wayland clipboard objects not available yet".into());
         };
 
+        let typing_payload = if instant_paste
+            && let Some((mime, charset)) = item.typing_format()
+            && UserConfig::read(&config_path())
+                .unwrap_or_default()
+                .type_instead_of_paste
+        {
+            Some((self.open_item_payload(entry_id, mime)?, charset.to_owned()))
+        } else {
+            None
+        };
+
         // Clean up any previously set source that we own
         if let Some(prev) = self.current_source_object.take() {
             prev.destroy();
@@ -547,11 +558,21 @@ impl BackendState {
         debug!("Created clipboard source and set selection (id {entry_id})");
 
         if instant_paste {
-            info!("Instant paste via virtual keyboard shortcut for ID {entry_id}");
+            let expires_at = item.expires_at();
             std::thread::spawn(move || {
-                // Give the overlay a brief moment to close so shortcut targets the previous app.
+                // Wait for focus to return to the previous app before sending any keys.
                 std::thread::sleep(std::time::Duration::from_millis(150));
-                if let Err(e) = paste_via_virtual_keyboard_shortcut() {
+                if expires_at.is_some_and(|expiry| expiry <= unix_timestamp()) {
+                    return;
+                }
+                let result = match typing_payload {
+                    Some((blob, charset)) => blob.read().and_then(|bytes| {
+                        let text = decode_typing_text(bytes, &charset);
+                        paste_via_virtual_keyboard(text.as_deref())
+                    }),
+                    None => paste_via_virtual_keyboard(None),
+                };
+                if let Err(e) = result {
                     warn!("Instant paste failed: {e}");
                 }
             });
@@ -722,6 +743,19 @@ impl BackendState {
 }
 
 const MAX_HISTORY_ITEMS: usize = 100;
+
+fn decode_typing_text(bytes: Vec<u8>, charset: &str) -> Option<String> {
+    let utf8 = if charset.eq_ignore_ascii_case("UTF-8") {
+        bytes
+    } else {
+        let (converted, consumed) = glib::convert(&bytes, "UTF-8", charset).ok()?;
+        if consumed != bytes.len() {
+            return None;
+        }
+        converted.into()
+    };
+    String::from_utf8(utf8).ok()
+}
 
 pub(super) fn unix_timestamp() -> u64 {
     SystemTime::now()
@@ -918,6 +952,46 @@ mod tests {
             ),
             (PASSWORD_HINT_MIME.to_string(), Bytes::new()),
         ])
+    }
+
+    #[test]
+    fn typing_uses_full_text_and_skips_image_and_file_offers() {
+        let mut state = test_state(false);
+        let text = "猫🙂".repeat(150);
+        let mime = "text/plain; charset=UTF-8";
+        let id = state
+            .add_clipboard_item_from_mime_map(IndexMap::from([
+                ("text/html".into(), Bytes::from_static(b"<b>preview</b>")),
+                ("STRING".into(), Bytes::from_static(b"fallback")),
+                (mime.into(), Bytes::copy_from_slice(text.as_bytes())),
+            ]))
+            .unwrap();
+        let mut item = state.get_item_by_id(id).unwrap();
+        let (format, charset) = item.typing_format().unwrap();
+        assert_eq!(format, mime);
+        let bytes = state.open_item_payload(id, format).unwrap().read().unwrap();
+        assert_eq!(decode_typing_text(bytes, charset), Some(text));
+
+        for non_text in [
+            "image/png",
+            "image/jpeg",
+            "text/uri-list",
+            "x-special/gnome-copied-files",
+        ] {
+            item.mime_blobs.insert(non_text.into(), String::new());
+            assert_eq!(item.typing_format(), None);
+            item.mime_blobs.shift_remove(non_text);
+        }
+        item.mime_blobs.shift_remove(mime);
+        let (format, charset) = item.typing_format().unwrap();
+        assert_eq!(format, "STRING");
+        assert_eq!(
+            decode_typing_text(vec![0xe9], charset).as_deref(),
+            Some("é")
+        );
+        item.mime_blobs.shift_remove("STRING");
+        assert_eq!(item.typing_format(), None);
+        state.store.destroy().unwrap();
     }
 
     #[test]

@@ -258,7 +258,10 @@ Clipboard contents are kept out of memory either way: every payload is written o
 
 History saved by older versions in `~/.config/cursor-clip/history.stoolap.db` is migrated automatically on first start; the old database is kept as `history.stoolap.db.migrated` and can be deleted afterwards.
 
-## Instant paste note:
+## Instant paste
+
+With **Instant paste** enabled, turn on **Type in** in the overlay’s three-dot menu to type selected text into the focused window. You can also set `type_instead_of_paste = true` in `~/.config/cursor-clip/config.toml`. This works in terminals where Ctrl+V has another meaning. Tabs and line breaks send Tab and Enter keypresses, so a line break can submit a shell command. Images and copied files still use Ctrl+V. The option defaults to `false`.
+
 On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
 
 ## niri specific fix: Overlay waits for mouse movement
