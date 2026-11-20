@@ -1,8 +1,6 @@
 use super::selection::SelectionOwner;
-use crate::backend::persistence::{
-    generate_and_store_db_password, read_db_password_from_keyring_once, warn_persistence_sync_error,
-};
-use crate::backend::store::{ClipboardStore, OpenBlob};
+use crate::backend::persistence::{open_persistent_store, read_db_password_from_keyring_once};
+use crate::backend::store::{ClipboardStore, MAX_HISTORY_ITEMS, OpenBlob, next_item_id};
 use crate::backend::virtual_keyboard::paste_via_virtual_keyboard;
 use crate::backend::wayland_clipboard::is_internal_mime_type;
 use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
@@ -15,7 +13,7 @@ use gtk4::glib;
 use image::{ImageFormat, RgbaImage};
 use indexmap::IndexMap;
 use log::{debug, info, warn};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,7 +39,7 @@ pub struct BackendState {
     pub monitor_only: bool,
     // Holds every payload on disk; persistent or session-only depending on the setting.
     store: ClipboardStore,
-    pub db_password: Option<String>,
+    db_password: Option<String>,
     pub expiry_notify: Arc<Notify>,
 }
 
@@ -423,88 +421,21 @@ impl BackendState {
             return commit_preference();
         }
 
-        let (store, history) = if enabled {
-            if self.db_password.is_none() {
-                if ClipboardStore::persistent_index_exists() {
-                    return Err(
-                        "Persistent history already exists but no password was found in keyring. \
-                         Refusing to generate a new password because it would make existing encrypted history unreadable."
-                            .to_string(),
-                    );
-                }
-                self.db_password = Some(generate_and_store_db_password()?);
-            }
-
-            let password = self
-                .db_password
-                .as_deref()
-                .ok_or_else(|| "Database password unavailable".to_string())?;
-            let persistent = ClipboardStore::open_persistent(password)?;
-
-            // Always read what is already on disk first. If that fails we
-            // return before writing anything, so existing history is never
-            // replaced by an index that does not contain it.
-            let original = persistent.load_index()?;
-            let had_index = ClipboardStore::persistent_index_exists();
-            let mut existing = original.clone();
-            prepare_restored_history(&mut existing, unix_timestamp());
-            self.expire_password_items(unix_timestamp());
-            let prepare = || {
-                let session = self.store.transfer_to(&persistent, &self.history)?;
-                let merged = merge_histories(session, existing);
-                persistent.save_index(&merged)?;
-                commit_preference()?;
-                Ok::<_, String>(merged)
-            };
-            let merged = match prepare() {
-                Ok(merged) => merged,
-                Err(error) => {
-                    // A rejected enable must not leave session entries on disk.
-                    if had_index {
-                        persistent.save_index(&original).map_err(|restore| {
-                            format!("{error}. Restoring previous index failed: {restore}")
-                        })?;
-                        persistent.collect_garbage(&original);
-                    } else {
-                        persistent.destroy().map_err(|cleanup| {
-                            format!("{error}. Removing incomplete store failed: {cleanup}")
-                        })?;
-                    }
-                    return Err(error);
-                }
-            };
-            persistent.collect_garbage(&merged);
-            (persistent, merged)
+        let target = if enabled {
+            open_persistent_store(&mut self.db_password)?
         } else {
-            let ephemeral = ClipboardStore::open_ephemeral()?;
-            let history = self
-                .store
-                .transfer_to(&ephemeral, &self.history)
-                .and_then(|history| {
-                    commit_preference()?;
-                    Ok(history)
-                });
-            match history {
-                Ok(history) => (ephemeral, history),
-                Err(error) => {
-                    ephemeral.destroy()?;
-                    return Err(error);
-                }
-            }
+            ClipboardStore::open_ephemeral()?
         };
-        self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&history));
-        self.history = history;
-        self.replace_store(store);
+        let now = unix_timestamp();
+        if enabled {
+            self.expire_password_items(now);
+        }
+        self.store
+            .migrate_to(target, &mut self.history, now, commit_preference)?;
+        self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&self.history));
         release_freed_memory();
         self.expiry_notify.notify_one();
         Ok(())
-    }
-
-    fn replace_store(&mut self, store: ClipboardStore) {
-        let previous = std::mem::replace(&mut self.store, store);
-        if let Err(e) = previous.destroy() {
-            warn!("Failed to remove previous clipboard store: {e}");
-        }
     }
 
     /// Open the payload of one MIME type of a history item. Reading and
@@ -534,12 +465,10 @@ impl BackendState {
         // otherwise a crash would leave the old index pointing at nothing.
         match self.store.save_index(&self.history) {
             Ok(()) => self.store.collect_garbage(&self.history),
-            Err(e) => warn_persistence_sync_error("save", &e),
+            Err(e) => warn!("Persistence save failed: {e}"),
         }
     }
 }
-
-const MAX_HISTORY_ITEMS: usize = 100;
 
 fn decode_typing_text(bytes: Vec<u8>, charset: &str) -> Option<String> {
     let utf8 = if charset.eq_ignore_ascii_case("UTF-8") {
@@ -559,66 +488,6 @@ pub(super) fn unix_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn prepare_restored_history(history: &mut Vec<ClipboardItem>, now: u64) {
-    history.retain(|item| {
-        let hint_only =
-            item.mime_blobs.len() == 1 && item.mime_blobs.contains_key(PASSWORD_HINT_MIME);
-        !(item.is_expired(now) || hint_only)
-    });
-    for item in history {
-        if item.mime_blobs.contains_key(PASSWORD_HINT_MIME) {
-            item.content_type = ClipboardContentType::Password;
-            item.thumbnail = None;
-        }
-    }
-}
-
-/// Combine the session history with history found on disk: session items
-/// first (they are newer), older copies of the same content dropped, pinned
-/// items on top, ids kept unique.
-fn merge_histories(
-    session: Vec<ClipboardItem>,
-    existing: Vec<ClipboardItem>,
-) -> Vec<ClipboardItem> {
-    let mut merged = session;
-    let mut by_content: HashMap<String, usize> = merged
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| Some((item.primary_blob()?.to_owned(), index)))
-        .collect();
-    let mut used_ids: HashSet<u64> = merged.iter().map(|item| item.item_id).collect();
-    let mut next_id = next_item_id(&merged).max(next_item_id(&existing));
-
-    for mut item in existing {
-        if let Some(primary) = item.primary_blob() {
-            if let Some(&index) = by_content.get(primary) {
-                merged[index].inherit_duplicate_metadata(&item);
-                continue;
-            }
-            by_content.insert(primary.to_owned(), merged.len());
-        }
-        if !used_ids.insert(item.item_id) {
-            item.item_id = next_id;
-            used_ids.insert(next_id);
-            next_id += 1;
-        }
-        merged.push(item);
-    }
-
-    merged.sort_by_key(|item| !item.pinned);
-    merged.truncate(MAX_HISTORY_ITEMS);
-    merged
-}
-
-fn next_item_id(history: &[ClipboardItem]) -> u64 {
-    history
-        .iter()
-        .map(|item| item.item_id)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
 }
 
 /// Large clipboard payloads pass through the heap only briefly; hand the freed
@@ -939,98 +808,5 @@ mod tests {
         );
         assert!(state.open_item_payload(id, internal_mime).is_err());
         state.store.destroy().unwrap();
-    }
-
-    #[test]
-    fn restoring_history_drops_expired_and_hint_only_items_and_corrects_types() {
-        let mut expired = item(1, "expired", true);
-        expired.timestamp = 100;
-        expired
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let mut fresh = item(2, "fresh", false);
-        fresh.timestamp = 200;
-        fresh
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let mut hint_only = item(3, "hint", false);
-        hint_only.timestamp = 200;
-        hint_only.mime_blobs.clear();
-        hint_only
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let ordinary = item(4, "ordinary", false);
-        let mut history = vec![expired, fresh, hint_only, ordinary];
-        prepare_restored_history(&mut history, 220);
-        assert_eq!(
-            history.iter().map(|item| item.item_id).collect::<Vec<_>>(),
-            [2, 4]
-        );
-        assert_eq!(history[0].content_type, ClipboardContentType::Password);
-        assert_eq!(
-            ClipboardItemPreview::from(&history[0]).expires_at,
-            Some(320)
-        );
-    }
-
-    fn item(id: u64, blob: &str, pinned: bool) -> ClipboardItem {
-        let mut mime_blobs = IndexMap::new();
-        mime_blobs.insert("text/plain".to_string(), blob.to_string());
-        ClipboardItem {
-            item_id: id,
-            content_preview: blob.to_string(),
-            content_type: ClipboardContentType::Text,
-            timestamp: id,
-            pinned,
-            mime_blobs,
-            thumbnail: None,
-        }
-    }
-
-    #[test]
-    fn merge_keeps_disk_history_dedupes_and_keeps_ids_unique() {
-        let session = vec![item(1, "new", false), item(2, "same", false)];
-        let existing = vec![
-            item(1, "old", false),
-            item(7, "same", true),
-            item(8, "pinned", true),
-        ];
-
-        let merged = merge_histories(session, existing);
-        let blobs: Vec<_> = merged.iter().map(|i| i.content_preview.as_str()).collect();
-        assert_eq!(blobs, ["same", "pinned", "new", "old"]);
-        assert!(merged[0].pinned);
-        assert_eq!(merged[0].item_id, 2);
-
-        let mut ids: Vec<_> = merged.iter().map(|i| i.item_id).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), merged.len());
-        assert!(next_item_id(&merged) > 8);
-    }
-
-    #[test]
-    fn merge_truncates_to_history_limit() {
-        let existing = (1..=150)
-            .map(|id| item(id, &format!("b{id}"), false))
-            .collect();
-        assert_eq!(
-            merge_histories(Vec::new(), existing).len(),
-            MAX_HISTORY_ITEMS
-        );
-    }
-
-    #[test]
-    fn merge_preserves_password_marker_on_unmarked_session_duplicate() {
-        let mut sensitive = item(1, "same", false);
-        sensitive.timestamp = 200;
-        sensitive
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let merged = merge_histories(vec![item(2, "same", false)], vec![sensitive]);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].item_id, 2);
-        assert_eq!(merged[0].content_type, ClipboardContentType::Password);
-        assert_eq!(merged[0].expires_at(), Some(320));
     }
 }

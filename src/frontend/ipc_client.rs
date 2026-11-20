@@ -112,7 +112,10 @@ impl FrontendClient {
     pub fn set_pinned(&mut self, id: u64, pinned: bool) -> Result<(), Box<dyn std::error::Error>> {
         let response = self.send_message(FrontendMessage::SetPinned { id, pinned })?;
         match response {
-            BackendMessage::ItemPinned { .. } => Ok(()),
+            BackendMessage::ItemPinned {
+                id: confirmed_id,
+                pinned: confirmed_pin,
+            } if confirmed_id == id && confirmed_pin == pinned => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),
             _ => Err("Unexpected response".into()),
         }
@@ -152,7 +155,7 @@ impl FrontendClient {
     pub fn delete_item_by_id(&mut self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
         let response = self.send_message(FrontendMessage::DeleteItemById { id })?;
         match response {
-            BackendMessage::ItemDeleted { .. } => Ok(()),
+            BackendMessage::ItemDeleted { id: confirmed_id } if confirmed_id == id => Ok(()),
             BackendMessage::Error { message } => Err(message.into()),
             _ => Err("Unexpected response".into()),
         }

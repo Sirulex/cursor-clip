@@ -1397,11 +1397,15 @@ fn generate_key_controller(
 
         match key {
             Key::Delete | Key::KP_Delete if focus_on_row => {
-                delete_selected_item(&list_box_for_keys, &history_state_for_keys);
+                if let Some(id) = selected_item_id(&list_box_for_keys) {
+                    delete_item(&list_box_for_keys, &history_state_for_keys, id);
+                }
                 gtk4::glib::Propagation::Stop
             }
             Key::p | Key::P if focus_on_row && state.contains(ModifierType::CONTROL_MASK) => {
-                toggle_pin_selected_item(&list_box_for_keys, &history_state_for_keys);
+                if let Some(id) = selected_item_id(&list_box_for_keys) {
+                    toggle_item_pin(&list_box_for_keys, &history_state_for_keys, id);
+                }
                 gtk4::glib::Propagation::Stop
             }
             Key::Up | Key::KP_Up if focus_on_row => {
@@ -1466,65 +1470,44 @@ fn selected_item_id(list_box: &gtk4::ListBox) -> Option<u64> {
     row_item_id(&list_box.selected_row()?)
 }
 
-fn delete_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+fn delete_item(list_box: &gtk4::ListBox, history_state: &HistoryListState, item_id: u64) {
     if !history_state.can_act_on_rows() {
         return;
     }
-    let Some(item_id) = selected_item_id(list_box) else {
-        return;
-    };
 
-    match FrontendClient::new() {
-        Ok(mut client) => {
-            if let Err(e) = client.delete_item_by_id(item_id) {
-                error!("Error deleting clipboard item by ID: {}", e);
-                return;
-            }
-        }
-        Err(e) => {
-            error!("Error creating frontend client: {}", e);
-            return;
-        }
-    }
-
+    if let Err(error) =
+        FrontendClient::new().and_then(|mut client| client.delete_item_by_id(item_id))
     {
-        let mut items = history_state.all_items.borrow_mut();
-        if let Some(index) = items.iter().position(|item| item.item_id == item_id) {
-            items.remove(index);
-        }
+        error!("Could not delete clipboard item {item_id}: {error}");
+        return;
     }
+    history_state
+        .all_items
+        .borrow_mut()
+        .retain(|item| item.item_id != item_id);
 
     rebuild_list(list_box, history_state);
     select_first_row(list_box);
 }
 
-fn toggle_pin_selected_item(list_box: &gtk4::ListBox, history_state: &HistoryListState) {
+fn toggle_item_pin(list_box: &gtk4::ListBox, history_state: &HistoryListState, item_id: u64) {
     if !history_state.can_act_on_rows() {
         return;
     }
-    let Some(item_id) = selected_item_id(list_box) else {
-        return;
-    };
     let Some(pinned) = next_pinned_state(history_state, item_id) else {
         return;
     };
 
-    match FrontendClient::new() {
-        Ok(mut client) => {
-            if let Err(e) = client.set_pinned(item_id, pinned) {
-                error!("Error updating pinned state: {}", e);
-                return;
-            }
-        }
-        Err(e) => {
-            error!("Error creating frontend client: {}", e);
-            return;
-        }
+    if let Err(error) =
+        FrontendClient::new().and_then(|mut client| client.set_pinned(item_id, pinned))
+    {
+        error!("Could not update pinned state for clipboard item {item_id}: {error}");
+        return;
     }
 
     apply_pinned_state(history_state, item_id, pinned);
     rebuild_list(list_box, history_state);
-    select_row_by_item_id(list_box, history_state, item_id);
+    select_row_by_item_id(list_box, item_id);
     debug!("Updated pinned state for clipboard item ID {}", item_id);
 }
 
@@ -1998,65 +1981,24 @@ fn generate_listboxrow_from_preview(
 
     row.set_child(Some(&main_box));
 
-    let list_box = list_box.clone();
-    let history_state = history_state.clone();
     let item_id = item.item_id;
-    let list_box_for_delete = list_box.clone();
-    let history_state_for_delete = history_state.clone();
-    delete_button.connect_clicked(move |_| {
-        if !history_state_for_delete.can_act_on_rows() {
-            return;
-        }
-        match FrontendClient::new() {
-            Ok(mut client) => {
-                if let Err(e) = client.delete_item_by_id(item_id) {
-                    error!("Error deleting clipboard item by ID: {}", e);
-                    return;
-                }
-            }
-            Err(e) => {
-                error!("Error creating frontend client: {}", e);
-                return;
+    delete_button.connect_clicked({
+        let list = list_box.downgrade();
+        let state = history_state.clone();
+        move |_| {
+            if let Some(list) = list.upgrade() {
+                delete_item(&list, &state, item_id);
             }
         }
-
-        {
-            let mut items = history_state_for_delete.all_items.borrow_mut();
-            if let Some(index) = items.iter().position(|entry| entry.item_id == item_id) {
-                items.remove(index);
-            }
-        }
-
-        rebuild_list(&list_box_for_delete, &history_state_for_delete);
-        select_first_row(&list_box_for_delete);
     });
-    let list_box_for_pin = list_box.clone();
-    let history_state_for_pin = history_state.clone();
-    pin_button.connect_clicked(move |_| {
-        if !history_state_for_pin.can_act_on_rows() {
-            return;
-        }
-        let Some(pinned) = next_pinned_state(&history_state_for_pin, item_id) else {
-            return;
-        };
-
-        match FrontendClient::new() {
-            Ok(mut client) => {
-                if let Err(e) = client.set_pinned(item_id, pinned) {
-                    error!("Error updating pinned state: {}", e);
-                    return;
-                }
-            }
-            Err(e) => {
-                error!("Error creating frontend client: {}", e);
-                return;
+    pin_button.connect_clicked({
+        let list = list_box.downgrade();
+        let state = history_state.clone();
+        move |_| {
+            if let Some(list) = list.upgrade() {
+                toggle_item_pin(&list, &state, item_id);
             }
         }
-
-        apply_pinned_state(&history_state_for_pin, item_id, pinned);
-        rebuild_list(&list_box_for_pin, &history_state_for_pin);
-        select_row_by_item_id(&list_box_for_pin, &history_state_for_pin, item_id);
-        debug!("Updated pinned state for clipboard item ID {}", item_id);
     });
     row
 }
@@ -2312,11 +2254,7 @@ fn select_previous_row(list_box: &gtk4::ListBox, wrap_to_first: bool) -> bool {
     select_adjacent_row(list_box, -1, wrap_to_first)
 }
 
-fn select_row_by_item_id(
-    list_box: &gtk4::ListBox,
-    _history_state: &HistoryListState,
-    item_id: u64,
-) {
+fn select_row_by_item_id(list_box: &gtk4::ListBox, item_id: u64) {
     match list_rows(list_box)
         .into_iter()
         .find(|row| row_item_id(row) == Some(item_id) && is_row_shown(row))
@@ -2800,6 +2738,113 @@ mod tests {
                 thumbnail: None,
             }],
         }
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display"]
+    fn row_actions_use_the_target_id_and_wait_for_acknowledgement() {
+        crate::shared::isolated_test(|| {
+            adw::init().unwrap();
+            let dir = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
+                .join("cursor-clip");
+            std::fs::create_dir(&dir).unwrap();
+            let listener = UnixListener::bind(dir.join("cursor-clip.sock")).unwrap();
+            let server = std::thread::spawn(move || {
+                for (expected, response) in [
+                    (
+                        FrontendMessage::SetPinned {
+                            id: 2,
+                            pinned: true,
+                        },
+                        BackendMessage::ItemPinned {
+                            id: 2,
+                            pinned: true,
+                        },
+                    ),
+                    (
+                        FrontendMessage::SetPinned {
+                            id: 2,
+                            pinned: false,
+                        },
+                        BackendMessage::ItemPinned {
+                            id: 2,
+                            pinned: false,
+                        },
+                    ),
+                    (
+                        FrontendMessage::DeleteItemById { id: 2 },
+                        BackendMessage::Error {
+                            message: "rejected".into(),
+                        },
+                    ),
+                    (
+                        FrontendMessage::DeleteItemById { id: 2 },
+                        BackendMessage::ItemDeleted { id: 1 },
+                    ),
+                    (
+                        FrontendMessage::DeleteItemById { id: 2 },
+                        BackendMessage::ItemDeleted { id: 2 },
+                    ),
+                ] {
+                    let (stream, _) = listener.accept().unwrap();
+                    let mut line = String::new();
+                    BufReader::new(&stream).read_line(&mut line).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&line).unwrap(),
+                        serde_json::to_value(expected).unwrap()
+                    );
+                    reply(stream, response);
+                }
+            });
+
+            let content = generate_overlay_content(UserConfig::default());
+            let list = &content.list_box;
+            let state = &content.history_state;
+            let window = adw::ApplicationWindow::builder().build();
+            window.set_content(Some(&content.overlay));
+            let keys = generate_key_controller(list, state, &content.search_entry);
+            window.add_controller(keys.clone());
+            window.present();
+            let BackendMessage::History { mut items } = history() else {
+                unreachable!()
+            };
+            items.push(ClipboardItemPreview {
+                item_id: 2,
+                ..items[0].clone()
+            });
+            apply_history(list, state, items);
+            let click = |id, class| {
+                let row = list_rows(list)
+                    .into_iter()
+                    .find(|row| row_item_id(row) == Some(id))
+                    .unwrap();
+                find_button_in_row(&row, class).unwrap().emit_clicked();
+            };
+            let press = |key: gtk4::gdk::Key, modifiers: gtk4::gdk::ModifierType| {
+                assert!(keys.emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers]));
+            };
+
+            // Cached rows are visible but cannot act before the first current snapshot.
+            click(2, "clipboard-delete");
+            state.current_snapshot.set(true);
+            select_first_row(list);
+            assert_eq!(selected_item_id(list), Some(1));
+            click(2, "clipboard-pin");
+            assert!(state.all_items.borrow()[0].pinned);
+            assert_eq!(selected_item_id(list), Some(2));
+            press(gtk4::gdk::Key::p, gtk4::gdk::ModifierType::CONTROL_MASK);
+            assert!(!state.all_items.borrow()[0].pinned);
+            press(gtk4::gdk::Key::Delete, gtk4::gdk::ModifierType::empty());
+            assert_eq!(state.all_items.borrow().len(), 2);
+            select_row_by_item_id(list, 1);
+            click(2, "clipboard-delete");
+            assert_eq!(state.all_items.borrow().len(), 2);
+            click(2, "clipboard-delete");
+            assert_eq!(state.all_items.borrow().len(), 1);
+            assert_eq!(selected_item_id(list), Some(1));
+            window.close();
+            server.join().unwrap();
+        });
     }
 
     #[test]

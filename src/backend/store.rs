@@ -10,6 +10,9 @@
 //! ephemeral store with a random in-memory key is used instead, so payloads
 //! are still never kept in RAM and become unreadable once the daemon exits.
 
+mod migration;
+pub(super) use migration::{MAX_HISTORY_ITEMS, next_item_id};
+
 use crate::shared::write_atomic;
 use crate::shared::{ClipboardContentType, ClipboardItem};
 use aes_gcm::aead::{Aead, KeyInit};
@@ -83,8 +86,10 @@ impl ClipboardStore {
     }
 
     /// True if a persistent store with a history index exists on disk.
-    pub fn persistent_index_exists() -> bool {
-        Self::persistent_dir().join(INDEX_FILE).exists()
+    pub(super) fn persistent_index_exists() -> Result<bool, String> {
+        let path = Self::persistent_dir().join(INDEX_FILE);
+        path.try_exists()
+            .map_err(|e| format!("Cannot check {}: {e}", path.display()))
     }
 
     pub fn open_persistent(password: &str) -> Result<Self, String> {
@@ -200,17 +205,29 @@ impl ClipboardStore {
         write_atomic(&self.dir.join(INDEX_FILE), &sealed)
     }
 
-    pub fn load_index(&self) -> Result<Vec<ClipboardItem>, String> {
+    fn read_index(&self) -> Result<Option<Vec<u8>>, String> {
         let path = self.dir.join(INDEX_FILE);
-        let sealed = match fs::read(&path) {
-            Ok(sealed) => sealed,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(format!("Failed to read history index: {e}")),
-        };
-        let json = self.open(&sealed)?;
-        let stored: Vec<StoredItem> = serde_json::from_slice(&json)
-            .map_err(|e| format!("Failed to parse history index: {e}"))?;
+        match fs::read(&path) {
+            Ok(sealed) => Ok(Some(sealed)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("Failed to read history index: {e}")),
+        }
+    }
 
+    #[cfg(test)]
+    pub(super) fn load_index(&self) -> Result<Vec<ClipboardItem>, String> {
+        match self.read_index()? {
+            Some(sealed) => Ok(self.restore_items(self.decode_index(&sealed)?)),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn decode_index(&self, sealed: &[u8]) -> Result<Vec<StoredItem>, String> {
+        let json = self.open(sealed)?;
+        serde_json::from_slice(&json).map_err(|e| format!("Failed to parse history index: {e}"))
+    }
+
+    fn restore_items(&self, stored: Vec<StoredItem>) -> Vec<ClipboardItem> {
         let mut items = Vec::with_capacity(stored.len());
         for entry in stored {
             let missing = entry
@@ -243,12 +260,12 @@ impl ClipboardStore {
             });
         }
 
-        Ok(items)
+        items
     }
 
     /// Copy the blobs referenced by `history` into `target`, returning the
     /// history rewritten to the target's blob ids.
-    pub fn transfer_to(
+    fn transfer_to(
         &self,
         target: &Self,
         history: &[ClipboardItem],
@@ -283,6 +300,10 @@ impl ClipboardStore {
             );
         }
 
+        self.remove_unreferenced_blobs(&referenced);
+    }
+
+    fn remove_unreferenced_blobs(&self, referenced: &HashSet<String>) {
         let Ok(entries) = fs::read_dir(self.dir.join(BLOB_DIR)) else {
             return;
         };
