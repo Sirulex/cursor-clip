@@ -14,10 +14,10 @@ use crate::frontend::toggle::ToggleServer;
 use crate::frontend::{frontend_state::State, gtk_overlay, hyprland};
 use crate::shared::config::{PopupPosition, UserConfig, config_path};
 use log::{debug, error, info, warn};
-use memmap2::{MmapMut, MmapOptions};
-use std::fs::OpenOptions;
+use rustix::fs::{MemfdFlags, memfd_create};
+use std::fs::File;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd};
 
 use super::OverlayLocation;
 
@@ -163,7 +163,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initialize Wayland for layer shell capture
-    let mut state = State::new();
+    let mut state = State::default();
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (GlobalList, EventQueue<State>) =
         registry_queue_init::<State>(&conn)?;
@@ -323,56 +323,19 @@ fn create_transparent_buffer(
         return Ok(());
     }
 
-    // Fallback: wl_shm 1x1 ARGB8888 buffer backed by a temporary file + memmap
     let shm = state
         .shm
         .as_ref()
         .ok_or_else(|| std::io::Error::other("wl_shm not available for fallback"))?;
 
-    // 1x1 pixel ARGB8888 (4 bytes)
-    let size: i32 = 4;
-
-    // Create a unique temp file (unlinked after creation) to back the SHM pool
-    let mut path = std::env::temp_dir();
-    let unique = format!(
-        "cursor-clip-shm-{}-{}.bin",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
-    );
-    path.push(unique);
-
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    file.set_len(size as u64)?;
-
-    // Map and zero the file to ensure transparent pixel content
-    let mut mmap: MmapMut = unsafe { MmapOptions::new().len(size as usize).map_mut(&file)? };
-    mmap.fill(0);
-    mmap.flush()?;
-
-    // We can unlink the file path now; the file remains alive via the handle
-    let _ = std::fs::remove_file(&path);
-
-    // Create wl_shm_pool using a borrowed fd from the File
-    let borrow_fd: BorrowedFd<'_> = unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) };
-    let pool = shm.create_pool(borrow_fd, size, &queue.handle(), ());
-    let buffer = pool.create_buffer(
-        0, // offset
-        1,
-        1, // width, height
-        4, // stride (bytes per row)
-        wl_shm::Format::Argb8888,
-        &queue.handle(),
-        (),
-    );
-    // Keep pool and file alive for the lifetime of the buffer
-    state.shm_file = Some(file);
-    state.shm_pool = Some(pool);
+    // Extending a new memfd yields four zero bytes, one transparent ARGB8888 pixel.
+    let file = File::from(memfd_create(c"cursor-clip-pixel", MemfdFlags::CLOEXEC)?);
+    file.set_len(4)?;
+    let qh = queue.handle();
+    let pool = shm.create_pool(file.as_fd(), 4, &qh, ());
+    let buffer = pool.create_buffer(0, 1, 1, 4, wl_shm::Format::Argb8888, &qh, ());
+    // wl_buffer retains the backing storage after the pool is destroyed.
+    pool.destroy();
     state.transparent_buffer = Some(buffer);
     Ok(())
 }

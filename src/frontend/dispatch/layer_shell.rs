@@ -135,16 +135,6 @@ pub fn cleanup_capture_layer(state: &mut State) {
         debug!("Transparent buffer destroyed");
     }
 
-    // Destroy SHM pool if it was used (after buffer is gone)
-    if let Some(pool) = state.shm_pool.take() {
-        pool.destroy();
-        debug!("SHM pool destroyed");
-    }
-    // Drop SHM file handle if present
-    if state.shm_file.take().is_some() {
-        debug!("SHM file dropped");
-    }
-
     state.capture_layer_clicked = false;
 }
 

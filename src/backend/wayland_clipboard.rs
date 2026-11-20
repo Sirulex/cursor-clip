@@ -1,5 +1,4 @@
 use crate::backend::backend_state::{BackendState, DataControlManager};
-use std::sync::Arc as StdArc; // for event_created_child return type clarity
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
@@ -385,7 +384,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
     fn event_created_child(
         opcode: u16,
         qhandle: &QueueHandle<Self>,
-    ) -> StdArc<dyn wayland_client::backend::ObjectData> {
+    ) -> Arc<dyn wayland_client::backend::ObjectData> {
         match opcode {
             0 => qhandle.make_data::<ZwlrDataControlOfferV1, ()>(()),
             _ => panic!("Unknown child object for opcode {opcode}"),
@@ -472,7 +471,7 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for MutexBackendState {
     fn event_created_child(
         opcode: u16,
         qhandle: &QueueHandle<Self>,
-    ) -> StdArc<dyn wayland_client::backend::ObjectData> {
+    ) -> Arc<dyn wayland_client::backend::ObjectData> {
         match opcode {
             0 => qhandle.make_data::<ExtDataControlOfferV1, ()>(()),
             _ => panic!("Unknown child object for opcode {opcode}"),
@@ -543,33 +542,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState
 
 // ================= Helper functions =================
 
-/// Create a pipe, returning `OwnedFd` handles for the read and write ends.
-fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dyn std::error::Error>>
-{
-    use std::os::fd::FromRawFd;
-    let mut fds = [0; 2];
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    let reader = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[0]) };
-    let writer = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[1]) };
-    Ok((reader, writer))
-}
-
-/// Select the MIME types to actually read from the available list.
-/// When image types are present, keep only PNG image data and all non-image variants.
-fn select_target_mimes(available_mimes: &[String]) -> Vec<String> {
-    if available_mimes.iter().any(|m| m.starts_with("image/")) {
-        return available_mimes
-            .iter()
-            .filter(|m| m.as_str() == "image/png" || !m.starts_with("image/"))
-            .cloned()
-            .collect();
-    }
-
-    available_mimes.to_vec()
-}
-
 /// Trait abstracting over offer types that can receive data via a pipe fd.
 trait DataOfferReceive {
     fn receive_mime(&self, mime_type: String, fd: std::os::fd::BorrowedFd<'_>);
@@ -598,12 +570,12 @@ fn read_all_data_formats<O: DataOfferReceive>(
 
     let mut mime_map: IndexMap<String, Bytes> = IndexMap::new();
 
-    if mime_types.is_empty() {
-        return mime_map;
-    }
-
-    for mime in select_target_mimes(&mime_types) {
-        let (reader_fd, writer_fd) = match create_pipes() {
+    // Keep every non-image format, but only request PNG for images.
+    for mime in mime_types
+        .into_iter()
+        .filter(|mime| mime == "image/png" || !mime.starts_with("image/"))
+    {
+        let (mut reader, writer) = match std::io::pipe() {
             Ok(pair) => pair,
             Err(err) => {
                 warn!("Could not open pipe to read data for {mime}: {err:?}");
@@ -611,15 +583,14 @@ fn read_all_data_formats<O: DataOfferReceive>(
             }
         };
         debug!("Requesting {mime} content...");
-        data_offer.receive_mime(mime.clone(), writer_fd.as_fd());
-        // Drop the write end so the provider gets EOF after writing.
-        drop(writer_fd);
+        data_offer.receive_mime(mime.clone(), writer.as_fd());
+        // Let the reader see EOF once the provider closes its copy.
+        drop(writer);
         if let Err(e) = conn.flush() {
             warn!("Flush failed: {e}");
         }
-        let mut reader_file = std::fs::File::from(reader_fd);
         let mut buf = Vec::new();
-        match reader_file.read_to_end(&mut buf) {
+        match reader.read_to_end(&mut buf) {
             Ok(_) if !buf.is_empty() => {
                 mime_map.insert(mime, Bytes::from(buf));
             }
