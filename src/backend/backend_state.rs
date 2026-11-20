@@ -158,9 +158,8 @@ pub struct BackendState {
     // If false (default), after reading an external selection we immediately
     // set it ourselves so it persists even if the source app exits.
     pub monitor_only: bool,
-    pub persistence_enabled: bool,
     // Holds every payload on disk; persistent or session-only depending on the setting.
-    pub store: ClipboardStore,
+    store: ClipboardStore,
     pub db_password: Option<String>,
     pub expiry_notify: Arc<Notify>,
 }
@@ -208,7 +207,6 @@ impl BackendState {
             suppress_next_selection_read: false,
             connection: None,
             monitor_only,
-            persistence_enabled: false,
             store,
             db_password,
             expiry_notify: Arc::new(Notify::new()),
@@ -307,19 +305,8 @@ impl BackendState {
         let primary = item.primary_blob().map(str::to_owned);
         self.history.retain(|existing| {
             let duplicate = existing.primary_blob() == primary.as_deref();
-            if duplicate && existing.pinned {
-                item.pinned = true;
-            }
-            // Re-copying without metadata must not strip a secret's expiry.
-            if duplicate
-                && !password_hint
-                && let Some(hint) = existing.mime_blobs.get(PASSWORD_HINT_MIME)
-            {
-                item.mime_blobs
-                    .insert(PASSWORD_HINT_MIME.to_string(), hint.clone());
-                item.content_type = ClipboardContentType::Password;
-                item.thumbnail = None;
-                item.timestamp = existing.timestamp;
+            if duplicate {
+                item.inherit_duplicate_metadata(existing);
             }
             !duplicate
         });
@@ -580,6 +567,10 @@ impl BackendState {
         Ok(())
     }
 
+    pub fn persistence_enabled(&self) -> bool {
+        self.store.is_persistent()
+    }
+
     pub fn set_persistence_enabled(&mut self, enabled: bool) -> Result<(), String> {
         self.transition_persistence(enabled, || {
             UserConfig::update(&config_path(), |config| {
@@ -593,7 +584,7 @@ impl BackendState {
         enabled: bool,
         commit_preference: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
-        if enabled == self.persistence_enabled && enabled == self.store.is_persistent() {
+        if enabled == self.persistence_enabled() {
             return commit_preference();
         }
 
@@ -669,7 +660,6 @@ impl BackendState {
         self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&history));
         self.history = history;
         self.replace_store(store);
-        self.persistence_enabled = enabled;
         release_freed_memory();
         self.expiry_notify.notify_one();
         Ok(())
@@ -700,7 +690,7 @@ impl BackendState {
             .mime_blobs
             .get(mime_type)
             .ok_or_else(|| format!("No data stored for MIME {mime_type} (id {entry_id})"))?;
-        self.store.reader().open(blob)
+        self.store.open_blob(blob)
     }
 
     fn history_changed(&self) {
@@ -758,31 +748,21 @@ fn merge_histories(
     existing: Vec<ClipboardItem>,
 ) -> Vec<ClipboardItem> {
     let mut merged = session;
-    let mut seen_content: HashSet<String> = merged
+    let mut by_content: HashMap<String, usize> = merged
         .iter()
-        .filter_map(|item| item.primary_blob().map(str::to_owned))
+        .enumerate()
+        .filter_map(|(index, item)| Some((item.primary_blob()?.to_owned(), index)))
         .collect();
     let mut used_ids: HashSet<u64> = merged.iter().map(|item| item.item_id).collect();
     let mut next_id = next_item_id(&merged).max(next_item_id(&existing));
 
     for mut item in existing {
-        if let Some(primary) = item.primary_blob()
-            && !seen_content.insert(primary.to_owned())
-        {
-            if let Some(hint) = item.mime_blobs.get(PASSWORD_HINT_MIME)
-                && let Some(duplicate) = merged.iter_mut().find(|candidate| {
-                    candidate.primary_blob() == Some(primary)
-                        && !candidate.mime_blobs.contains_key(PASSWORD_HINT_MIME)
-                })
-            {
-                duplicate
-                    .mime_blobs
-                    .insert(PASSWORD_HINT_MIME.to_string(), hint.clone());
-                duplicate.content_type = ClipboardContentType::Password;
-                duplicate.thumbnail = None;
-                duplicate.timestamp = item.timestamp;
+        if let Some(primary) = item.primary_blob() {
+            if let Some(&index) = by_content.get(primary) {
+                merged[index].inherit_duplicate_metadata(&item);
+                continue;
             }
-            continue;
+            by_content.insert(primary.to_owned(), merged.len());
         }
         if !used_ids.insert(item.item_id) {
             item.item_id = next_id;
@@ -851,7 +831,7 @@ mod tests {
             session.add_clipboard_item_from_text("session entry");
             std::fs::write(config_path(), "invalid TOML [").unwrap();
             assert!(session.set_persistence_enabled(true).is_err());
-            assert!(!session.persistence_enabled);
+            assert!(!session.persistence_enabled());
             assert_eq!(session.get_history()[0].content_preview, "session entry");
             let disk = ClipboardStore::open_persistent("test key")
                 .unwrap()
@@ -927,7 +907,6 @@ mod tests {
             suppress_next_selection_read: false,
             connection: None,
             monitor_only: false,
-            persistence_enabled: persistent,
             store: ClipboardStore::isolated_test_store(persistent),
             db_password: None,
             expiry_notify: Arc::new(Notify::new()),
@@ -1185,13 +1164,15 @@ mod tests {
         let session = vec![item(1, "new", false), item(2, "same", false)];
         let existing = vec![
             item(1, "old", false),
-            item(7, "same", false),
+            item(7, "same", true),
             item(8, "pinned", true),
         ];
 
         let merged = merge_histories(session, existing);
         let blobs: Vec<_> = merged.iter().map(|i| i.content_preview.as_str()).collect();
-        assert_eq!(blobs, ["pinned", "new", "same", "old"]);
+        assert_eq!(blobs, ["same", "pinned", "new", "old"]);
+        assert!(merged[0].pinned);
+        assert_eq!(merged[0].item_id, 2);
 
         let mut ids: Vec<_> = merged.iter().map(|i| i.item_id).collect();
         ids.sort_unstable();

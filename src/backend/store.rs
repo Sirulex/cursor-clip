@@ -154,15 +154,21 @@ impl ClipboardStore {
     }
 
     pub fn get_blob(&self, id: &str) -> Result<Vec<u8>, String> {
-        self.reader().read(id)
+        self.open_blob(id)?.read()
     }
 
-    /// Detached handle for reading blobs without holding the backend lock.
-    pub fn reader(&self) -> BlobReader {
-        BlobReader {
-            blob_dir: self.dir.join(BLOB_DIR),
-            cipher: self.cipher.clone(),
+    /// The open file stays readable after garbage collection or a store switch.
+    pub fn open_blob(&self, id: &str) -> Result<OpenBlob, String> {
+        if !is_blob_id(id) {
+            return Err(format!("Invalid blob id: {id}"));
         }
+        let file = fs::File::open(self.blob_path(id))
+            .map_err(|e| format!("Failed to open blob {id}: {e}"))?;
+        Ok(OpenBlob {
+            file,
+            cipher: self.cipher.clone(),
+            id: id.to_owned(),
+        })
     }
 
     /// Persist the history index. No-op for ephemeral stores.
@@ -338,35 +344,6 @@ impl ClipboardStore {
     }
 }
 
-/// Reads blobs of one store. A blob removed concurrently (garbage collection,
-/// store switch) simply fails to read.
-#[derive(Clone)]
-pub struct BlobReader {
-    blob_dir: PathBuf,
-    cipher: Aes256Gcm,
-}
-
-impl BlobReader {
-    pub fn read(&self, id: &str) -> Result<Vec<u8>, String> {
-        self.open(id)?.read()
-    }
-
-    /// Open a blob now and read it later. The open file stays readable even
-    /// if the blob is deleted in between (garbage collection, store switch).
-    pub fn open(&self, id: &str) -> Result<OpenBlob, String> {
-        if !is_blob_id(id) {
-            return Err(format!("Invalid blob id: {id}"));
-        }
-        let file = fs::File::open(self.blob_dir.join(id))
-            .map_err(|e| format!("Failed to open blob {id}: {e}"))?;
-        Ok(OpenBlob {
-            file,
-            cipher: self.cipher.clone(),
-            id: id.to_string(),
-        })
-    }
-}
-
 pub struct OpenBlob {
     file: fs::File,
     cipher: Aes256Gcm,
@@ -469,7 +446,7 @@ mod tests {
     fn opened_blob_survives_garbage_collection() {
         let store = test_store(false);
         let id = store.put_blob(b"pasting this").unwrap();
-        let opened = store.reader().open(&id).unwrap();
+        let opened = store.open_blob(&id).unwrap();
 
         store.collect_garbage(&[]);
         assert!(!store.blob_path(&id).exists());

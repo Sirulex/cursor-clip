@@ -101,13 +101,13 @@ async fn handle_client(
                 BackendMessage::HistoryCleared
             }
             FrontendMessage::GetHistoryPersistence => BackendMessage::PersistenceState {
-                enabled: state.lock().unwrap().persistence_enabled,
+                enabled: state.lock().unwrap().persistence_enabled(),
             },
             FrontendMessage::SetHistoryPersistence { enabled } => {
                 let mut state = state.lock().unwrap();
                 match state.set_persistence_enabled(enabled) {
                     Ok(()) => BackendMessage::PersistenceState {
-                        enabled: state.persistence_enabled,
+                        enabled: state.persistence_enabled(),
                     },
                     Err(e) => BackendMessage::Error { message: e },
                 }
@@ -214,7 +214,7 @@ mod tests {
                 );
                 server.await.unwrap();
                 let mut restarted = BackendState::with_password(false, key);
-                assert!(restarted.persistence_enabled);
+                assert!(restarted.persistence_enabled());
                 assert_eq!(
                     restarted.get_history()[0].content_preview,
                     "keep this entry"
