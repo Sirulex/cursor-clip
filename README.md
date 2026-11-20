@@ -23,6 +23,8 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Search and filter**: Live search through clipboard history
 - **Pin or delete items**: Manage your history with ease
 - **Instant paste**: Option to immediately paste the selected item into the active application
+- **Configurable overlay placement**: Position the overlay at the cursor, center, or any corner of the screen
+- **Resizable overlay**: Adjust the width and height of the history window to your preference
 - **Persistent history**: Option to store clipboard history across sessions with automatic encryption
 - **Password-manager expiry**: Entries marked with `x-kde-passwordManagerHint` expire after two minutes.
 
@@ -258,7 +260,7 @@ Clipboard contents are kept out of memory either way: every payload is written o
 
 ## Instant paste
 
-With **Instant paste** enabled, turn on **Type in** in the overlay’s three-dot menu to type selected text into the focused window. You can also set `type_instead_of_paste = true` in `~/.config/cursor-clip/config.toml`. This works in terminals where Ctrl+V has another meaning. Tabs and line breaks send Tab and Enter keypresses, so a line break can submit a shell command. Images and copied files still use Ctrl+V. The option defaults to `false`.
+With **Instant paste** enabled, turn on **Type in** in the overlay’s three-dot menu to type selected text into the focused window. This can fix issues e.g. in terminals where Ctrl+V has another meaning. Tabs and line breaks send Tab and Enter keypresses, so a line break can submit a shell command. Images and copied files still use Ctrl+V. The option defaults to `false`.
 
 On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
 
