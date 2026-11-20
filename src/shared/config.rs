@@ -30,6 +30,7 @@ pub struct UserConfig {
     #[serde(alias = "persistent_history")]
     pub persistence_enabled: bool,
     pub instant_paste: bool,
+    pub type_instead_of_paste: bool,
     pub width: i32,
     pub height: i32,
     pub position: PopupPosition,
@@ -43,6 +44,7 @@ impl Default for UserConfig {
             show_pin: true,
             persistence_enabled: false,
             instant_paste: true,
+            type_instead_of_paste: false,
             width: DEFAULT_LIST_WIDTH,
             height: DEFAULT_LIST_HEIGHT,
             position: PopupPosition::Cursor,
