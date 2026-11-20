@@ -9,7 +9,6 @@ use crate::shared::{
 };
 use bytes::Bytes;
 use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
-use gtk4::glib;
 use image::{ImageFormat, RgbaImage};
 use indexmap::IndexMap;
 use log::{debug, info, warn};
@@ -224,7 +223,7 @@ impl BackendState {
         Some(buffer.into_inner().into())
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     pub fn add_clipboard_item_from_text(&mut self, text: &str) -> Option<u64> {
         let mut mime_content = IndexMap::new();
         mime_content.insert(
@@ -523,7 +522,7 @@ mod tests {
 
     #[test]
     fn failed_preference_write_preserves_both_stores() {
-        crate::shared::isolated_test(|| {
+        crate::test_support::isolated_test(|| {
             let mut old = BackendState::with_password(false, Some("test key".into()));
             old.add_clipboard_item_from_text("saved entry");
             old.set_persistence_enabled(true).unwrap();

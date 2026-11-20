@@ -83,7 +83,7 @@ yay -S cursor-clip-git
 
 ## Building and Installing the Flatpak
 Flathub release is in the works, but you can build and install the Flatpak locally from the manifest file.
-The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from source (requires flatpak-builder):
+The Flatpak manifest builds Cursor Clip from this checkout and all non-runtime dependencies from source (requires flatpak-builder):
 
 ```bash
 flatpak run --command=flathub-build \
@@ -102,7 +102,8 @@ flatpak run io.github.sirulex.cursor-clip
 The default launcher starts the monitor automatically if it is not already
 running. For a complete workflow, add the daemon command to your compositor's
 autostart configuration and bind the second command to a shortcut such as
-Super+V.
+Super+V. To run the monitor without taking clipboard ownership, append
+`--monitor-only` to the daemon command.
 
 
 ## Manual Building
@@ -141,7 +142,7 @@ sudo make install
 ```
 
 The desktop launcher appears as **Cursor Clip** with the application logo and
-runs `cursor-clip-toggle`. Keep `cursor-clip --daemon` in your compositor's
+runs `cursor-clip-toggle`. Put `cursor-clip-daemon` in your compositor's
 autostart configuration to record clipboard history.
 
 For a user-only installation, run `make install PREFIX="$HOME/.local"` instead
@@ -166,7 +167,7 @@ docker rm cursor-clip-temp
 
 # Update library cache and run
 sudo ldconfig
-cursor-clip --daemon
+cursor-clip-daemon
 ```
 
 ## Building with Nix Flake
@@ -208,17 +209,16 @@ Inside the shell:
 cargo check
 cargo fmt
 cargo clippy
-cargo run -- --daemon
+cargo run --bin cursor-clip-daemon
 # In another terminal using the same development shell:
-cargo run
+cargo run --bin cursor-clip-toggle
 ```
 
 Running the application requires a supported Wayland session (see Compositor Support).
 
 ## Usage
-1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Toggle Overlay**: Run `cursor-clip-toggle` to open and close it (ideally bind it to a hotkey, e.g., Super+V). It is a tiny launcher that signals a running overlay and otherwise starts `cursor-clip`; running `cursor-clip` without arguments directly works too, it just starts slower because it loads GTK the old way (still kept for existing workflows). This backwards compatibility will be removed in a future version.
-   - On Hyprland the overlay stays alive in the background after closing, with its rows already laid out, so later opens take a few milliseconds instead of a full GTK start.
+1. **Start Background Daemon**: Run `cursor-clip-daemon` at login to record clipboard history. Use `cursor-clip-daemon --monitor-only` to leave newly copied selections under the source application's ownership.
+2. **Toggle Overlay**: Bind `cursor-clip-toggle` to a shortcut such as Super+V. It opens the overlay on first use and signals it on subsequent invocations.
 3. **View History**: The clipboard history window opens at your cursor by default, showing:
    - **Recent clipboard items** with content previews
    - **Content type icons** (text, URL, code, password, file)
@@ -282,7 +282,7 @@ nudge the pointer one pixel in each direction during launch.
 # Requires wlrctl
 wlrctl pointer move 1 0 &
 wlrctl pointer move -1 0 &
-exec cursor-clip "$@"
+exec cursor-clip-toggle "$@"
 ```
 
 Other tools that generate relative mouse movement can also be used, such as

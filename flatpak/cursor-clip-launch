@@ -24,20 +24,22 @@ fi
 
 runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/cursor-clip"
 socket_path="${runtime_dir}/cursor-clip.sock"
-lock_path="${runtime_dir}/daemon.lock"
+# The daemon takes its own exclusive lock on daemon.lock during startup.
+lock_path="${runtime_dir}/launcher.lock"
 mkdir -p "${runtime_dir}"
 
 exec 9>"${lock_path}"
 
 if [ "${1:-}" = "--daemon" ]; then
+    shift
     if flock -n 9; then
-        exec cursor-clip "$@"
+        exec cursor-clip-daemon "$@"
     fi
     exit 0
 fi
 
 if flock -n 9; then
-    cursor-clip --daemon &
+    cursor-clip-daemon &
     exec 9>&-
 fi
 
@@ -48,4 +50,4 @@ while [ ! -S "${socket_path}" ] && [ "${attempt}" -lt 100 ]; do
     attempt=$((attempt + 1))
 done
 
-exec cursor-clip "$@"
+exec cursor-clip-toggle "$@"

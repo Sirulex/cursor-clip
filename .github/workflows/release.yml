@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BINARY_NAME: cursor-clip
+  PACKAGE_NAME: cursor-clip
 
 jobs:
   create-release:
@@ -55,7 +55,7 @@ jobs:
 
           cargo_version="$(
             cargo metadata --no-deps --format-version 1 |
-              jq -r --arg name "$BINARY_NAME" '.packages[] | select(.name == $name) | .version'
+              jq -r --arg name "$PACKAGE_NAME" '.packages[] | select(.name == $name) | .version'
           )"
 
           if [[ "$cargo_version" != "${VERSION#v}" ]]; then
@@ -120,22 +120,23 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: Build release binaries
         run: cargo build --locked --release --target "${{ matrix.target }}"
 
-      - name: Verify binary version
+      - name: Verify binary versions
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          actual="$("target/$TARGET/release/$BINARY_NAME" --version)"
-          expected="$BINARY_NAME ${VERSION#v}"
-
-          if [[ "$actual" != "$expected" ]]; then
-            echo "Binary reports '$actual', expected '$expected'" >&2
-            exit 1
-          fi
+          for binary in cursor-clip-daemon cursor-clip-toggle; do
+            actual="$("target/$TARGET/release/$binary" --version)"
+            expected="$binary ${VERSION#v}"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Binary reports '$actual', expected '$expected'" >&2
+              exit 1
+            fi
+          done
 
       - name: Package release archive
         id: package
@@ -144,11 +145,11 @@ jobs:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          archive="$BINARY_NAME-$VERSION-$TARGET"
+          archive="$PACKAGE_NAME-$VERSION-$TARGET"
           staging="dist/$archive"
 
-          install -Dm755 "target/$TARGET/release/$BINARY_NAME" "$staging/$BINARY_NAME"
-          install -Dm755 "target/$TARGET/release/$BINARY_NAME-toggle" "$staging/$BINARY_NAME-toggle"
+          install -Dm755 "target/$TARGET/release/cursor-clip-daemon" "$staging/cursor-clip-daemon"
+          install -Dm755 "target/$TARGET/release/cursor-clip-toggle" "$staging/cursor-clip-toggle"
           install -Dm644 LICENSE "$staging/LICENSE"
           install -Dm644 README.md "$staging/README.md"
           install -Dm644 Makefile "$staging/Makefile"

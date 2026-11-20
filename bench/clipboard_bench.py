@@ -18,8 +18,8 @@ overwritten; do not use the machine while it runs.
 Usage:
   bench/clipboard_bench.py --label upstream --bin /usr/bin/cursor-clip \
       --sizes 0 10 100 --out upstream.json
-  bench/clipboard_bench.py --label fork --bin target/release/cursor-clip \
-      --open-cmd target/release/cursor-clip-toggle --out fork.json
+  bench/clipboard_bench.py --label fork --bin target/release/cursor-clip-daemon \
+      --out fork.json
 """
 
 import argparse
@@ -128,14 +128,14 @@ def wait_for(predicate, timeout: float, interval: float = 0.003) -> float | None
 
 
 class Daemon:
-    def __init__(self, binary: str, env: dict):
-        self.binary = binary
+    def __init__(self, command: list[str], env: dict):
+        self.command = command
         self.env = env
         self.proc = None
 
     def start(self):
         self.proc = subprocess.Popen(
-            [self.binary, "--daemon"],
+            self.command,
             env=self.env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -215,8 +215,8 @@ def measure_overlay(open_cmd: str, env: dict, runs: int) -> dict:
         time.sleep(0.4)
         close_with_toggle()
         time.sleep(0.3)
-        resident = find_resident_overlay(open_cmd)
-        if resident:
+        if proc.poll() is None:
+            resident = proc
             break
     if resident:
         # The first cold open is representative; the rest are warm re-opens.
@@ -232,25 +232,10 @@ def measure_overlay(open_cmd: str, env: dict, runs: int) -> dict:
     result = {"cold_ms": [round(v * 1000, 1) for v in cold]}
     if resident:
         result["warm_ms"] = [round(v * 1000, 1) for v in warm]
-        result["overlay_rss_kib"] = rss_kib(resident)
-        os.kill(resident, 15)
-        wait_for(lambda: not Path(f"/proc/{resident}").exists(), 10)
+        result["overlay_rss_kib"] = rss_kib(resident.pid)
+        resident.terminate()
+        resident.wait(timeout=10)
     return result
-
-
-def find_resident_overlay(open_cmd: str) -> int | None:
-    """PID of an overlay process that kept running after being closed."""
-    binary = str(Path(open_cmd).resolve().parent / "cursor-clip")
-    for proc in Path("/proc").iterdir():
-        if not proc.name.isdigit():
-            continue
-        try:
-            argv = (proc / "cmdline").read_bytes().split(b"\0")
-        except OSError:
-            continue
-        if argv and argv[0].decode(errors="ignore") == binary and b"--daemon" not in argv:
-            return int(proc.name)
-    return None
 
 
 def disk_usage_kib(path: Path) -> int:
@@ -265,7 +250,7 @@ def disk_usage_kib(path: Path) -> int:
 
 
 def run(
-    binary: str,
+    daemon_cmd: list[str],
     open_cmd: str,
     size: int,
     runs: int,
@@ -290,7 +275,7 @@ def run(
         XDG_CACHE_HOME=str(home / ".cache"),
         RUST_LOG="error",
     )
-    daemon = Daemon(binary, env)
+    daemon = Daemon(daemon_cmd, env)
     try:
         daemon.start()
         copy_latencies, missed_copies = fill_history(size, images)
@@ -325,9 +310,9 @@ def run(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", required=True)
-    parser.add_argument("--bin", required=True, help="cursor-clip binary (daemon and overlay)")
+    parser.add_argument("--bin", required=True, help="daemon binary or legacy cursor-clip binary")
     parser.add_argument(
-        "--open-cmd", help="command bound to the shortcut (default: --bin)"
+        "--open-cmd", help="overlay command (defaults to the frontend from the same build)"
     )
     parser.add_argument("--sizes", type=int, nargs="+", default=[0, 10, 100])
     parser.add_argument("--runs", type=int, default=5)
@@ -342,6 +327,12 @@ def main():
         help="where the isolated HOME directories are created (disk-backed)",
     )
     args = parser.parse_args()
+    binary = Path(shutil.which(args.bin) or args.bin).absolute()
+    daemon_cmd = [str(binary)]
+    overlay = binary.with_name("cursor-clip-toggle")
+    if binary.name == "cursor-clip":
+        daemon_cmd.append("--daemon")
+        overlay = binary
 
     if SOCKET.exists():
         try:
@@ -355,8 +346,8 @@ def main():
     for size in args.sizes:
         print(f"[{args.label}] {size} items...", flush=True)
         result = run(
-            args.bin,
-            args.open_cmd or args.bin,
+            daemon_cmd,
+            args.open_cmd or str(overlay),
             size,
             args.runs,
             images,

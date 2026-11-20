@@ -169,10 +169,10 @@ mod tests {
 
     #[test]
     fn gtk_context_runs_during_requests_and_distinguishes_bad_replies() {
-        use gtk4::glib::{ControlFlow, MainContext, Priority};
+        use glib::{ControlFlow, MainContext, Priority};
         use std::os::unix::net::UnixListener;
         use std::sync::mpsc;
-        crate::shared::isolated_test(|| {
+        crate::test_support::isolated_test(|| {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let _enter = runtime.enter();
             let context = MainContext::new();
@@ -195,11 +195,10 @@ mod tests {
                         FrontendMessage::SetHistoryPersistence { enabled: true }
                     ));
                     let (tx, rx) = mpsc::channel();
-                    let heartbeat =
-                        gtk4::glib::idle_source_new(None, Priority::DEFAULT, move || {
-                            tx.send(()).unwrap();
-                            ControlFlow::Break
-                        });
+                    let heartbeat = glib::idle_source_new(None, Priority::DEFAULT, move || {
+                        tx.send(()).unwrap();
+                        ControlFlow::Break
+                    });
                     heartbeat.attach(Some(&server_context));
                     rx.recv_timeout(Duration::from_secs(2))
                         .expect("GTK blocked waiting for the daemon");

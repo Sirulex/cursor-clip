@@ -3,12 +3,7 @@ pub mod data_structures;
 
 pub use data_structures::*;
 
-#[cfg(test)]
-mod test_support;
-#[cfg(test)]
-pub(crate) use test_support::isolated_test;
-
-pub(crate) fn write_atomic(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
+pub fn write_atomic(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
     use rand::Rng;
     use std::fs;
     use std::io::Write;
