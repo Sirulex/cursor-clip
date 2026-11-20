@@ -45,6 +45,15 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.1.0" date="2026-11-20">
+      <url type="details">https://github.com/Sirulex/cursor-clip/releases/tag/v1.1.0</url>
+      <description>
+        <p>
+          Major internal refactoring and code cleanup. Added custom sizing
+          and positioning options, as well as a type-in option.
+        </p>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-10-10">
       <url type="details">https://github.com/Sirulex/cursor-clip/releases/tag/v1.0.3</url>
       <description>
