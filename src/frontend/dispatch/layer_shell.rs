@@ -23,17 +23,14 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
                 layer_surface.ack_configure(serial);
                 debug!("Layer surface configured: {}x{}", width, height);
 
-                if width > 0 && height > 0 {
-                    state.monitor_width = width as i32;
-                    state.monitor_height = height as i32;
-                    debug!(
-                        "Updated monitor dimensions: {}x{}",
-                        state.monitor_width, state.monitor_height
-                    );
-                }
-
                 // Check if this is the capture layer surface
                 if Some(layer_surface) == state.capture_layer_surface.as_ref() {
+                    if width > 0 {
+                        state.monitor_width = width as i32;
+                    }
+                    if height > 0 {
+                        state.monitor_height = height as i32;
+                    }
                     let Some(capture_surface) = &state.capture_surface else {
                         return;
                     };
@@ -136,16 +133,6 @@ pub fn cleanup_capture_layer(state: &mut State) {
     if let Some(buffer) = state.transparent_buffer.take() {
         buffer.destroy();
         debug!("Transparent buffer destroyed");
-    }
-
-    // Destroy SHM pool if it was used (after buffer is gone)
-    if let Some(pool) = state.shm_pool.take() {
-        pool.destroy();
-        debug!("SHM pool destroyed");
-    }
-    // Drop SHM file handle if present
-    if state.shm_file.take().is_some() {
-        debug!("SHM file dropped");
     }
 
     state.capture_layer_clicked = false;

@@ -1,6 +1,5 @@
-use std::fs::File;
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_pointer, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_pointer, wl_seat, wl_shm, wl_surface,
 };
 
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -10,8 +9,7 @@ use wayland_protocols::wp::{
     viewporter::client::{wp_viewport, wp_viewporter},
 };
 
-use crate::shared::ClipboardItemPreview;
-
+#[derive(Default)]
 pub struct State {
     pub compositor: Option<wl_compositor::WlCompositor>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
@@ -21,8 +19,6 @@ pub struct State {
         Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
     pub shm: Option<wl_shm::WlShm>,
-    pub shm_pool: Option<wl_shm_pool::WlShmPool>,
-    pub shm_file: Option<File>,
     pub coords_received: bool,
     pub received_x: f64,
     pub received_y: f64,
@@ -37,50 +33,6 @@ pub struct State {
     pub update_frame_callback: Option<wl_callback::WlCallback>,
     pub capture_viewport: Option<wp_viewport::WpViewport>,
     pub update_viewport: Option<wp_viewport::WpViewport>,
-    pub overlay_width: i32,
-    pub overlay_height: i32,
     pub monitor_width: i32,
     pub monitor_height: i32,
-    pub clipboard_history: Vec<ClipboardItemPreview>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl State {
-    pub fn new() -> Self {
-        Self {
-            compositor: None,
-            layer_shell: None,
-            pointer: None,
-            seat: None,
-            single_pixel_buffer_manager: None,
-            viewporter: None,
-            shm: None,
-            shm_pool: None,
-            shm_file: None,
-            coords_received: false,
-            received_x: 0.0,
-            received_y: 0.0,
-            capture_layer_clicked: false,
-            capture_layer_ready: false,
-            capture_surface: None,
-            transparent_buffer: None,
-            capture_layer_surface: None,
-            capture_frame_callback: None,
-            update_surface: None,
-            update_layer_surface: None,
-            update_frame_callback: None,
-            capture_viewport: None,
-            update_viewport: None,
-            overlay_width: 200,
-            overlay_height: 400,
-            monitor_width: 0,
-            monitor_height: 0,
-            clipboard_history: Vec::new(),
-        }
-    }
 }

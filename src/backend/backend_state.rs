@@ -1,130 +1,23 @@
-use crate::backend::persistence::{
-    db_has_persisted_items, generate_and_store_db_password, load_persistence_enabled_from_config,
-    migrate_legacy_history, read_db_password_from_keyring_once, warn_persistence_sync_error,
-};
-use crate::backend::store::{ClipboardStore, OpenBlob};
-use crate::backend::virtual_keyboard::paste_via_virtual_keyboard_shortcut;
-use crate::backend::wayland_clipboard::MutexBackendState; // for QueueHandle type
-use fast_image_resize as fir;
-use fast_image_resize::images::Image;
-use image::{ImageFormat, RgbaImage};
-use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Notify;
-use wayland_client::Proxy;
-use wayland_client::backend::ObjectId;
-use wayland_client::protocol::wl_seat;
-use wayland_client::{Connection, QueueHandle};
-use wayland_protocols::ext::data_control::v1::client::{
-    ext_data_control_device_v1::ExtDataControlDeviceV1,
-    ext_data_control_manager_v1::ExtDataControlManagerV1,
-    ext_data_control_source_v1::ExtDataControlSourceV1,
-};
-use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
-    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
-    zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
-};
-
+use super::selection::SelectionOwner;
+use crate::backend::persistence::{open_persistent_store, read_db_password_from_keyring_once};
+use crate::backend::store::{ClipboardStore, MAX_HISTORY_ITEMS, OpenBlob, next_item_id};
+use crate::backend::virtual_keyboard::paste_via_virtual_keyboard;
+use crate::backend::wayland_clipboard::is_internal_mime_type;
+use crate::shared::config::{UserConfig, config_path, read_persistence_enabled};
 use crate::shared::{
     ClipboardContentType, ClipboardItem, ClipboardItemPreview, PASSWORD_HINT_MIME,
 };
 use bytes::Bytes;
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+use image::{ImageFormat, RgbaImage};
 use indexmap::IndexMap;
 use log::{debug, info, warn};
-
-#[derive(Debug, Clone)]
-pub enum DataControlManager {
-    Wlr(ZwlrDataControlManagerV1),
-    Ext(ExtDataControlManagerV1),
-}
-
-#[derive(Debug, Clone)]
-pub enum DataControlDevice {
-    Wlr(ZwlrDataControlDeviceV1),
-    Ext(ExtDataControlDeviceV1),
-}
-
-#[derive(Debug, Clone)]
-pub enum DataControlSource {
-    Wlr(ZwlrDataControlSourceV1),
-    Ext(ExtDataControlSourceV1),
-}
-
-impl DataControlManager {
-    pub fn destroy(self) {
-        match self {
-            Self::Wlr(manager) => manager.destroy(),
-            Self::Ext(manager) => manager.destroy(),
-        }
-    }
-
-    pub fn create_data_source(&self, qh: &QueueHandle<MutexBackendState>) -> DataControlSource {
-        match self {
-            Self::Wlr(manager) => DataControlSource::Wlr(manager.create_data_source(qh, ())),
-            Self::Ext(manager) => DataControlSource::Ext(manager.create_data_source(qh, ())),
-        }
-    }
-
-    pub fn get_data_device(
-        &self,
-        seat: &wl_seat::WlSeat,
-        qh: &QueueHandle<MutexBackendState>,
-    ) -> DataControlDevice {
-        match self {
-            Self::Wlr(manager) => DataControlDevice::Wlr(manager.get_data_device(seat, qh, ())),
-            Self::Ext(manager) => DataControlDevice::Ext(manager.get_data_device(seat, qh, ())),
-        }
-    }
-}
-
-impl DataControlDevice {
-    pub fn destroy(self) {
-        match self {
-            Self::Wlr(device) => device.destroy(),
-            Self::Ext(device) => device.destroy(),
-        }
-    }
-
-    pub fn set_selection(&self, source: Option<&DataControlSource>) {
-        match (self, source) {
-            (Self::Wlr(device), Some(DataControlSource::Wlr(source))) => {
-                device.set_selection(Some(source))
-            }
-            (Self::Wlr(device), None) => device.set_selection(None),
-            (Self::Ext(device), Some(DataControlSource::Ext(source))) => {
-                device.set_selection(Some(source))
-            }
-            (Self::Ext(device), None) => device.set_selection(None),
-            _ => warn!("Mismatched data control protocol between device and source"),
-        }
-    }
-}
-
-impl DataControlSource {
-    pub fn destroy(self) {
-        match self {
-            Self::Wlr(source) => source.destroy(),
-            Self::Ext(source) => source.destroy(),
-        }
-    }
-
-    pub fn offer(&self, mime_type: String) {
-        match self {
-            Self::Wlr(source) => source.offer(mime_type),
-            Self::Ext(source) => source.offer(mime_type),
-        }
-    }
-
-    pub fn id(&self) -> ObjectId {
-        match self {
-            Self::Wlr(source) => source.id(),
-            Self::Ext(source) => source.id(),
-        }
-    }
-}
+use std::collections::HashMap;
+use std::io::Cursor;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Notify;
+use wayland_client::backend::ObjectId;
 
 #[derive(Debug)]
 pub struct BackendState {
@@ -132,36 +25,20 @@ pub struct BackendState {
     pub history: Vec<ClipboardItem>,
     pub id_for_next_entry: u64,
 
-    // Wayland objects for clipboard operations
-    pub data_control_manager: Option<DataControlManager>,
-    pub data_control_device: Option<DataControlDevice>,
-    pub qh: Option<QueueHandle<MutexBackendState>>,
-    pub seat: Option<wl_seat::WlSeat>,
-    pub connection: Option<Connection>,
-
     // Current clipboard data
     // Mapping of offer ObjectId -> list of MIME types provided by that offer
     pub mime_type_offers: HashMap<ObjectId, Vec<String>>,
     // Currently selected offer id (if any)
     pub current_data_offer: Option<ObjectId>,
-    pub current_source_object: Option<DataControlSource>,
-    pub current_source_entry_id: Option<u64>,
-    // When we programmatically set the selection, the compositor will echo it
-    // back as a new offer/selection. If we immediately try to read that offer
-    // inside the dispatch callback, we deadlock because the Send event for our
-    // own ZwlrDataControlSourceV1 cannot be processed until we return to the
-    // event loop. This flag suppresses reading the very next selection so we
-    // avoid blocking on our own source.
-    pub suppress_next_selection_read: bool,
+    pub(super) selection: Option<SelectionOwner>,
     // If true, we only monitor external selections and DO NOT immediately
     // re-set (take ownership of) the newly received selection.
     // If false (default), after reading an external selection we immediately
     // set it ourselves so it persists even if the source app exits.
     pub monitor_only: bool,
-    pub persistence_enabled: bool,
     // Holds every payload on disk; persistent or session-only depending on the setting.
-    pub store: ClipboardStore,
-    pub db_password: Option<String>,
+    store: ClipboardStore,
+    db_password: Option<String>,
     pub expiry_notify: Arc<Notify>,
 }
 
@@ -173,7 +50,6 @@ impl Default for BackendState {
 
 impl BackendState {
     pub fn new(monitor_only: bool) -> Self {
-        let persistence_enabled = load_persistence_enabled_from_config();
         let db_password = match read_db_password_from_keyring_once() {
             Ok(password) => password,
             Err(e) => {
@@ -182,6 +58,14 @@ impl BackendState {
             }
         };
 
+        Self::with_password(monitor_only, db_password)
+    }
+
+    pub(super) fn with_password(monitor_only: bool, db_password: Option<String>) -> Self {
+        let persistence_enabled = read_persistence_enabled(&config_path()).unwrap_or_else(|e| {
+            eprintln!("cursor-clip: cannot load persistence setting. Starting with session-only history.\n{e}");
+            false
+        });
         let store = match ClipboardStore::open_ephemeral() {
             Ok(store) => store,
             Err(e) => panic!("Cannot create clipboard store: {e}"),
@@ -191,23 +75,15 @@ impl BackendState {
             history: Vec::new(),
             mime_type_offers: HashMap::new(),
             id_for_next_entry: 1,
-            data_control_manager: None,
-            data_control_device: None,
-            seat: None,
             current_data_offer: None,
-            current_source_object: None,
-            current_source_entry_id: None,
-            qh: None,
-            suppress_next_selection_read: false,
-            connection: None,
+            selection: None,
             monitor_only,
-            persistence_enabled: false,
             store,
             db_password,
             expiry_notify: Arc::new(Notify::new()),
         };
 
-        if let Err(e) = state.set_persistence_enabled(persistence_enabled) {
+        if let Err(e) = state.transition_persistence(persistence_enabled, || Ok(())) {
             warn!("Failed to initialize persistence from config: {e}");
         }
 
@@ -300,19 +176,8 @@ impl BackendState {
         let primary = item.primary_blob().map(str::to_owned);
         self.history.retain(|existing| {
             let duplicate = existing.primary_blob() == primary.as_deref();
-            if duplicate && existing.pinned {
-                item.pinned = true;
-            }
-            // Re-copying without metadata must not strip a secret's expiry.
-            if duplicate
-                && !password_hint
-                && let Some(hint) = existing.mime_blobs.get(PASSWORD_HINT_MIME)
-            {
-                item.mime_blobs
-                    .insert(PASSWORD_HINT_MIME.to_string(), hint.clone());
-                item.content_type = ClipboardContentType::Password;
-                item.thumbnail = None;
-                item.timestamp = existing.timestamp;
+            if duplicate {
+                item.inherit_duplicate_metadata(existing);
             }
             !duplicate
         });
@@ -336,53 +201,29 @@ impl BackendState {
         Some(new_id)
     }
 
-    fn scale_image(img_bytes: &Bytes) -> Option<Bytes> {
-        let source = image::load_from_memory(img_bytes.as_ref()).ok()?.to_rgba8();
-        let (src_width, src_height) = source.dimensions();
-
-        if src_width == 0 || src_height == 0 {
-            return None;
-        }
-
-        let max_width = 300u32;
-        let max_height = 180u32;
-        let scale =
-            (max_width as f32 / src_width as f32).min(max_height as f32 / src_height as f32);
-        let dst_width = ((src_width as f32 * scale).round() as u32).max(1);
-        let dst_height = ((src_height as f32 * scale).round() as u32).max(1);
-
-        let src_image = Image::from_vec_u8(
-            src_width,
-            src_height,
-            source.into_raw(),
-            fir::PixelType::U8x4,
-        )
-        .ok()?;
-
-        let mut dst_image = Image::new(dst_width, dst_height, fir::PixelType::U8x4);
-        let mut resizer = fir::Resizer::new();
-        let options = fir::ResizeOptions::new()
-            .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Bilinear));
-
-        resizer
-            .resize(&src_image, &mut dst_image, Some(&options))
+    fn scale_image(png_bytes: &[u8]) -> Option<Bytes> {
+        let source = image::load_from_memory_with_format(png_bytes, ImageFormat::Png)
+            .ok()?
+            .into_rgba8();
+        let (width, height) = source.dimensions();
+        let scale = (300.0 / width as f64).min(180.0 / height as f64);
+        let mut thumbnail = RgbaImage::new(
+            ((width as f64 * scale).round() as u32).max(1),
+            ((height as f64 * scale).round() as u32).max(1),
+        );
+        let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+        Resizer::new()
+            .resize(&source, &mut thumbnail, &options)
             .ok()?;
 
-        let thumbnail =
-            RgbaImage::from_raw(dst_image.width(), dst_image.height(), dst_image.into_vec())?;
-
         let mut buffer = Cursor::new(Vec::new());
-        if image::DynamicImage::ImageRgba8(thumbnail)
+        image::DynamicImage::ImageRgba8(thumbnail)
             .write_to(&mut buffer, ImageFormat::Jpeg)
-            .is_ok()
-        {
-            Some(Bytes::from(buffer.into_inner()))
-        } else {
-            None
-        }
+            .ok()?;
+        Some(buffer.into_inner().into())
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     pub fn add_clipboard_item_from_text(&mut self, text: &str) -> Option<u64> {
         let mut mime_content = IndexMap::new();
         mime_content.insert(
@@ -417,7 +258,7 @@ impl BackendState {
 
     /// Remove expired secrets, regardless of pin state, and release our selection.
     pub fn expire_password_items(&mut self, now: u64) {
-        let expired_source = self.current_source_entry_id.is_some_and(|id| {
+        let expired_source = self.owned_entry_id().is_some_and(|id| {
             self.history
                 .iter()
                 .any(|item| item.item_id == id && item.is_expired(now))
@@ -427,24 +268,15 @@ impl BackendState {
         if self.history.len() == previous_len {
             return;
         }
-        if expired_source {
-            if self.current_source_object.is_some()
-                && let Some(device) = &self.data_control_device
-            {
-                device.set_selection(None);
-            }
-            if let Some(source) = self.current_source_object.take() {
-                source.destroy();
-            }
-            self.current_source_entry_id = None;
-            self.suppress_next_selection_read = false;
-            if let Some(connection) = &self.connection
-                && let Err(error) = connection.flush()
-            {
-                warn!("Failed to flush expired password selection: {error}");
-            }
+        if expired_source && let Some(owner) = &mut self.selection {
+            owner.revoke();
         }
         self.history_changed();
+    }
+
+    /// Ignore selection offers while we own the clipboard to avoid reading our own source.
+    pub(super) fn owned_entry_id(&self) -> Option<u64> {
+        self.selection.as_ref()?.entry_id()
     }
 
     pub fn clear_history(&mut self) {
@@ -452,11 +284,9 @@ impl BackendState {
 
         // If we clear history while owning a selection source, drop it and
         // re-enable selection reads so external copies keep being tracked.
-        if let Some(prev) = self.current_source_object.take() {
-            prev.destroy();
+        if let Some(owner) = &mut self.selection {
+            owner.clear();
         }
-        self.current_source_entry_id = None;
-        self.suppress_next_selection_read = false;
 
         self.history_changed();
     }
@@ -470,14 +300,10 @@ impl BackendState {
 
         self.history.remove(index);
 
-        if self.current_source_entry_id == Some(entry_id) {
-            if let Some(prev) = self.current_source_object.take() {
-                prev.destroy();
-            }
-            self.current_source_entry_id = None;
-            // We explicitly destroyed our own source, so the expected Cancelled
-            // event may no longer arrive to clear this flag.
-            self.suppress_next_selection_read = false;
+        if let Some(owner) = &mut self.selection
+            && owner.entry_id() == Some(entry_id)
+        {
+            owner.clear();
         }
 
         self.history_changed();
@@ -494,44 +320,53 @@ impl BackendState {
             .get_item_by_id(entry_id)
             .ok_or_else(|| format!("No clipboard item found with ID: {entry_id}"))?;
 
+        // History created before internal types were filtered may still contain them.
+        let mut mimes = item
+            .mime_blobs
+            .keys()
+            .filter(|mime| !is_internal_mime_type(mime))
+            .peekable();
+        if mimes.peek().is_none() {
+            return Err(format!(
+                "Clipboard item {entry_id} has no shareable MIME types"
+            ));
+        }
+
         info!("Setting clipboard content by ID {entry_id}");
 
-        let (Some(manager), Some(device), Some(qh)) = (
-            &self.data_control_manager,
-            &self.data_control_device,
-            &self.qh,
-        ) else {
-            return Err("Wayland clipboard objects not available yet".into());
+        let typing_payload = if instant_paste
+            && let Some((mime, charset)) = item.typing_format()
+            && UserConfig::read(&config_path())
+                .unwrap_or_default()
+                .type_instead_of_paste
+        {
+            Some((self.open_item_payload(entry_id, mime)?, charset.to_owned()))
+        } else {
+            None
         };
 
-        // Clean up any previously set source that we own
-        if let Some(prev) = self.current_source_object.take() {
-            prev.destroy();
-        }
-
-        let source = manager.create_data_source(qh);
-        for mime in item.mime_blobs.keys() {
-            source.offer(mime.clone());
-        }
-        device.set_selection(Some(&source));
-        self.current_source_object = Some(source);
-        self.current_source_entry_id = Some(entry_id);
-        // Prevent reading back our own just-set selection (would deadlock due to event queue handling)
-        self.suppress_next_selection_read = true;
-        // Flush the Wayland connection so the compositor sees our selection (very important)
-        if let Some(conn) = &self.connection
-            && let Err(e) = conn.flush()
-        {
-            warn!("Failed to flush Wayland connection after setting selection: {e}");
-        }
+        self.selection
+            .as_mut()
+            .ok_or("Wayland clipboard objects not available yet")?
+            .publish(entry_id, mimes.cloned());
         debug!("Created clipboard source and set selection (id {entry_id})");
 
         if instant_paste {
-            info!("Instant paste via virtual keyboard shortcut for ID {entry_id}");
+            let expires_at = item.expires_at();
             std::thread::spawn(move || {
-                // Give the overlay a brief moment to close so shortcut targets the previous app.
+                // Wait for focus to return to the previous app before sending any keys.
                 std::thread::sleep(std::time::Duration::from_millis(150));
-                if let Err(e) = paste_via_virtual_keyboard_shortcut() {
+                if expires_at.is_some_and(|expiry| expiry <= unix_timestamp()) {
+                    return;
+                }
+                let result = match typing_payload {
+                    Some((blob, charset)) => blob.read().and_then(|bytes| {
+                        let text = decode_typing_text(bytes, &charset);
+                        paste_via_virtual_keyboard(text.as_deref())
+                    }),
+                    None => paste_via_virtual_keyboard(None),
+                };
+                if let Err(e) = result {
                     warn!("Instant paste failed: {e}");
                 }
             });
@@ -564,74 +399,50 @@ impl BackendState {
         Ok(())
     }
 
+    pub fn persistence_enabled(&self) -> bool {
+        self.store.is_persistent()
+    }
+
     pub fn set_persistence_enabled(&mut self, enabled: bool) -> Result<(), String> {
-        // The overlay re-sends the setting on every open; keep that cheap.
-        if enabled == self.persistence_enabled && enabled == self.store.is_persistent() {
-            return Ok(());
+        self.transition_persistence(enabled, || {
+            UserConfig::update(&config_path(), |config| {
+                config.persistence_enabled = enabled
+            })
+        })
+    }
+
+    fn transition_persistence(
+        &mut self,
+        enabled: bool,
+        commit_preference: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        if enabled == self.persistence_enabled() {
+            return commit_preference();
         }
 
-        if enabled {
-            if self.db_password.is_none() {
-                if db_has_persisted_items()? {
-                    return Err(
-                        "Persistent DB already contains data but no password was found in keyring. \
-                         Refusing to generate a new password because it would make existing encrypted history unreadable."
-                            .to_string(),
-                    );
-                }
-                self.db_password = Some(generate_and_store_db_password()?);
-            }
-
-            let password = self
-                .db_password
-                .as_deref()
-                .ok_or_else(|| "Database password unavailable".to_string())?;
-            let persistent = ClipboardStore::open_persistent(password)?;
-
-            // Always read what is already on disk first. If that fails we
-            // return before writing anything, so existing history is never
-            // replaced by an index that does not contain it.
-            let mut existing = match migrate_legacy_history(password, &persistent)? {
-                Some(migrated) => migrated,
-                None => persistent.load_index()?,
-            };
-            prepare_restored_history(&mut existing, unix_timestamp());
-            self.expire_password_items(unix_timestamp());
-            let session = self.store.transfer_to(&persistent, &self.history)?;
-            let merged = merge_histories(session, existing);
-            persistent.save_index(&merged)?;
-            persistent.collect_garbage(&merged);
-
-            // Swap only after the new index is safely on disk.
-            self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&merged));
-            self.history = merged;
-            self.replace_store(persistent);
-            self.persistence_enabled = true;
+        let target = if enabled {
+            open_persistent_store(&mut self.db_password)?
         } else {
-            // Turning persistence off removes the on-disk history; the current
-            // session keeps working from a store that dies with the daemon.
-            let ephemeral = ClipboardStore::open_ephemeral()?;
-            let history = self.store.transfer_to(&ephemeral, &self.history)?;
-            self.history = history;
-            self.replace_store(ephemeral);
-            self.persistence_enabled = false;
+            ClipboardStore::open_ephemeral()?
+        };
+        let now = unix_timestamp();
+        if enabled {
+            self.expire_password_items(now);
         }
-
+        self.store
+            .migrate_to(target, &mut self.history, now, commit_preference)?;
+        self.id_for_next_entry = self.id_for_next_entry.max(next_item_id(&self.history));
         release_freed_memory();
         self.expiry_notify.notify_one();
         Ok(())
     }
 
-    fn replace_store(&mut self, store: ClipboardStore) {
-        let previous = std::mem::replace(&mut self.store, store);
-        if let Err(e) = previous.destroy() {
-            warn!("Failed to remove previous clipboard store: {e}");
-        }
-    }
-
     /// Open the payload of one MIME type of a history item. Reading and
     /// decrypting the opened blob can then happen without the backend lock.
     pub fn open_item_payload(&self, entry_id: u64, mime_type: &str) -> Result<OpenBlob, String> {
+        if is_internal_mime_type(mime_type) {
+            return Err(format!("Cannot serve internal MIME type {mime_type}"));
+        }
         let item = self
             .history
             .iter()
@@ -644,7 +455,7 @@ impl BackendState {
             .mime_blobs
             .get(mime_type)
             .ok_or_else(|| format!("No data stored for MIME {mime_type} (id {entry_id})"))?;
-        self.store.reader().open(blob)
+        self.store.open_blob(blob)
     }
 
     fn history_changed(&self) {
@@ -653,88 +464,29 @@ impl BackendState {
         // otherwise a crash would leave the old index pointing at nothing.
         match self.store.save_index(&self.history) {
             Ok(()) => self.store.collect_garbage(&self.history),
-            Err(e) => warn_persistence_sync_error("save", &e),
+            Err(e) => warn!("Persistence save failed: {e}"),
         }
     }
 }
 
-const MAX_HISTORY_ITEMS: usize = 100;
+fn decode_typing_text(bytes: Vec<u8>, charset: &str) -> Option<String> {
+    let utf8 = if charset.eq_ignore_ascii_case("UTF-8") {
+        bytes
+    } else {
+        let (converted, consumed) = glib::convert(&bytes, "UTF-8", charset).ok()?;
+        if consumed != bytes.len() {
+            return None;
+        }
+        converted.into()
+    };
+    String::from_utf8(utf8).ok()
+}
 
 pub(super) fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn prepare_restored_history(history: &mut Vec<ClipboardItem>, now: u64) {
-    history.retain(|item| {
-        let hint_only =
-            item.mime_blobs.len() == 1 && item.mime_blobs.contains_key(PASSWORD_HINT_MIME);
-        !(item.is_expired(now) || hint_only)
-    });
-    for item in history {
-        if item.mime_blobs.contains_key(PASSWORD_HINT_MIME) {
-            item.content_type = ClipboardContentType::Password;
-            item.thumbnail = None;
-        }
-    }
-}
-
-/// Combine the session history with history found on disk: session items
-/// first (they are newer), older copies of the same content dropped, pinned
-/// items on top, ids kept unique.
-fn merge_histories(
-    session: Vec<ClipboardItem>,
-    existing: Vec<ClipboardItem>,
-) -> Vec<ClipboardItem> {
-    let mut merged = session;
-    let mut seen_content: HashSet<String> = merged
-        .iter()
-        .filter_map(|item| item.primary_blob().map(str::to_owned))
-        .collect();
-    let mut used_ids: HashSet<u64> = merged.iter().map(|item| item.item_id).collect();
-    let mut next_id = next_item_id(&merged).max(next_item_id(&existing));
-
-    for mut item in existing {
-        if let Some(primary) = item.primary_blob()
-            && !seen_content.insert(primary.to_owned())
-        {
-            if let Some(hint) = item.mime_blobs.get(PASSWORD_HINT_MIME)
-                && let Some(duplicate) = merged.iter_mut().find(|candidate| {
-                    candidate.primary_blob() == Some(primary)
-                        && !candidate.mime_blobs.contains_key(PASSWORD_HINT_MIME)
-                })
-            {
-                duplicate
-                    .mime_blobs
-                    .insert(PASSWORD_HINT_MIME.to_string(), hint.clone());
-                duplicate.content_type = ClipboardContentType::Password;
-                duplicate.thumbnail = None;
-                duplicate.timestamp = item.timestamp;
-            }
-            continue;
-        }
-        if !used_ids.insert(item.item_id) {
-            item.item_id = next_id;
-            used_ids.insert(next_id);
-            next_id += 1;
-        }
-        merged.push(item);
-    }
-
-    merged.sort_by_key(|item| !item.pinned);
-    merged.truncate(MAX_HISTORY_ITEMS);
-    merged
-}
-
-fn next_item_id(history: &[ClipboardItem]) -> u64 {
-    history
-        .iter()
-        .map(|item| item.item_id)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
 }
 
 /// Large clipboard payloads pass through the heap only briefly; hand the freed
@@ -749,6 +501,49 @@ fn release_freed_memory() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_previews_fit_the_bounds_and_remain_decodable_as_jpeg() {
+        for (width, height, expected) in [(640, 320, (300, 150)), (1, 3, (60, 180))] {
+            let mut png = Cursor::new(Vec::new());
+            let transparent_red = RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 0]));
+            image::DynamicImage::ImageRgba8(transparent_red)
+                .write_to(&mut png, ImageFormat::Png)
+                .unwrap();
+
+            let preview = BackendState::scale_image(png.get_ref()).unwrap();
+            let decoded = image::load_from_memory_with_format(&preview, ImageFormat::Jpeg).unwrap();
+            assert_eq!((decoded.width(), decoded.height()), expected);
+            assert_eq!(decoded.to_rgb8().get_pixel(0, 0).0, [0, 0, 0]);
+        }
+
+        assert!(BackendState::scale_image(b"invalid PNG").is_none());
+    }
+
+    #[test]
+    fn failed_preference_write_preserves_both_stores() {
+        crate::test_support::isolated_test(|| {
+            let mut old = BackendState::with_password(false, Some("test key".into()));
+            old.add_clipboard_item_from_text("saved entry");
+            old.set_persistence_enabled(true).unwrap();
+            // Simulate an ephemeral session with a previous persistent index.
+            UserConfig::update(&config_path(), |config| config.persistence_enabled = false)
+                .unwrap();
+            drop(old);
+            let mut session = BackendState::with_password(false, Some("test key".into()));
+            session.add_clipboard_item_from_text("session entry");
+            std::fs::write(config_path(), "invalid TOML [").unwrap();
+            assert!(session.set_persistence_enabled(true).is_err());
+            assert!(!session.persistence_enabled());
+            assert_eq!(session.get_history()[0].content_preview, "session entry");
+            let disk = ClipboardStore::open_persistent("test key")
+                .unwrap()
+                .load_index()
+                .unwrap();
+            assert_eq!(disk.len(), 1);
+            assert_eq!(disk[0].content_preview, "saved entry");
+        });
+    }
 
     #[tokio::test]
     async fn expiry_timer_wakes_for_new_earlier_deadline() {
@@ -805,17 +600,9 @@ mod tests {
             history: Vec::new(),
             id_for_next_entry: 1,
             mime_type_offers: HashMap::new(),
-            data_control_manager: None,
-            data_control_device: None,
-            seat: None,
             current_data_offer: None,
-            current_source_object: None,
-            current_source_entry_id: None,
-            qh: None,
-            suppress_next_selection_read: false,
-            connection: None,
+            selection: None,
             monitor_only: false,
-            persistence_enabled: persistent,
             store: ClipboardStore::isolated_test_store(persistent),
             db_password: None,
             expiry_notify: Arc::new(Notify::new()),
@@ -830,6 +617,46 @@ mod tests {
             ),
             (PASSWORD_HINT_MIME.to_string(), Bytes::new()),
         ])
+    }
+
+    #[test]
+    fn typing_uses_full_text_and_skips_image_and_file_offers() {
+        let mut state = test_state(false);
+        let text = "猫🙂".repeat(150);
+        let mime = "text/plain; charset=UTF-8";
+        let id = state
+            .add_clipboard_item_from_mime_map(IndexMap::from([
+                ("text/html".into(), Bytes::from_static(b"<b>preview</b>")),
+                ("STRING".into(), Bytes::from_static(b"fallback")),
+                (mime.into(), Bytes::copy_from_slice(text.as_bytes())),
+            ]))
+            .unwrap();
+        let mut item = state.get_item_by_id(id).unwrap();
+        let (format, charset) = item.typing_format().unwrap();
+        assert_eq!(format, mime);
+        let bytes = state.open_item_payload(id, format).unwrap().read().unwrap();
+        assert_eq!(decode_typing_text(bytes, charset), Some(text));
+
+        for non_text in [
+            "image/png",
+            "image/jpeg",
+            "text/uri-list",
+            "x-special/gnome-copied-files",
+        ] {
+            item.mime_blobs.insert(non_text.into(), String::new());
+            assert_eq!(item.typing_format(), None);
+            item.mime_blobs.shift_remove(non_text);
+        }
+        item.mime_blobs.shift_remove(mime);
+        let (format, charset) = item.typing_format().unwrap();
+        assert_eq!(format, "STRING");
+        assert_eq!(
+            decode_typing_text(vec![0xe9], charset).as_deref(),
+            Some("é")
+        );
+        item.mime_blobs.shift_remove("STRING");
+        assert_eq!(item.typing_format(), None);
+        state.store.destroy().unwrap();
     }
 
     #[test]
@@ -876,10 +703,11 @@ mod tests {
             .add_clipboard_item_from_mime_map(password_mimes("secret"))
             .unwrap();
         state.set_pinned(id, true).unwrap();
-        state.history[0].timestamp = 100;
         let blob = state.history[0].mime_blobs["text/plain;charset=utf-8"].clone();
-        state.current_source_entry_id = Some(id);
-        state.suppress_next_selection_read = true;
+        let (owner, _peer) = crate::backend::selection::tests::test_owner(true);
+        state.selection = Some(owner);
+        state.set_clipboard_by_id(id, false).unwrap();
+        state.history[0].timestamp = 100;
         state.expire_password_items(219);
         assert_eq!(state.history.len(), 1);
         assert_eq!(state.store.get_blob(&blob).unwrap(), b"secret");
@@ -887,8 +715,7 @@ mod tests {
         assert!(state.history.is_empty());
         assert!(state.store.load_index().unwrap().is_empty());
         assert!(state.store.get_blob(&blob).is_err());
-        assert_eq!(state.current_source_entry_id, None);
-        assert!(!state.suppress_next_selection_read);
+        assert_eq!(state.owned_entry_id(), None);
         state.store.destroy().unwrap();
     }
 
@@ -905,8 +732,9 @@ mod tests {
             Bytes::from_static(b"NotSecret!"),
         );
         let newer_id = state.add_clipboard_item_from_mime_map(mimes).unwrap();
-        state.current_source_entry_id = Some(newer_id);
-        state.suppress_next_selection_read = true;
+        let (owner, _peer) = crate::backend::selection::tests::test_owner(true);
+        state.selection = Some(owner);
+        state.set_clipboard_by_id(newer_id, false).unwrap();
         state.expire_password_items(220);
         assert_eq!(state.history.len(), 1);
         assert_eq!(state.history[0].item_id, newer_id);
@@ -915,8 +743,7 @@ mod tests {
             ClipboardContentType::Password
         );
         assert!(state.history[0].expires_at().is_none());
-        assert_eq!(state.current_source_entry_id, Some(newer_id));
-        assert!(state.suppress_next_selection_read);
+        assert_eq!(state.owned_entry_id(), Some(newer_id));
         state.store.destroy().unwrap();
     }
 
@@ -964,93 +791,21 @@ mod tests {
     }
 
     #[test]
-    fn restoring_history_drops_expired_and_hint_only_items_and_corrects_types() {
-        let mut expired = item(1, "expired", true);
-        expired.timestamp = 100;
-        expired
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let mut fresh = item(2, "fresh", false);
-        fresh.timestamp = 200;
-        fresh
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let mut hint_only = item(3, "hint", false);
-        hint_only.timestamp = 200;
-        hint_only.mime_blobs.clear();
-        hint_only
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let ordinary = item(4, "ordinary", false);
-        let mut history = vec![expired, fresh, hint_only, ordinary];
-        prepare_restored_history(&mut history, 220);
+    fn internal_mime_payloads_from_old_history_cannot_be_served() {
+        let mut state = test_state(false);
+        let internal_mime = "application/x-krita-node-internal-pointer";
+        let id = state
+            .add_clipboard_item_from_mime_map(IndexMap::from([(
+                internal_mime.to_string(),
+                Bytes::from_static(b"private data"),
+            )]))
+            .unwrap();
+
         assert_eq!(
-            history.iter().map(|item| item.item_id).collect::<Vec<_>>(),
-            [2, 4]
+            state.set_clipboard_by_id(id, false).unwrap_err(),
+            format!("Clipboard item {id} has no shareable MIME types"),
         );
-        assert_eq!(history[0].content_type, ClipboardContentType::Password);
-        assert_eq!(
-            ClipboardItemPreview::from(&history[0]).expires_at,
-            Some(320)
-        );
-    }
-
-    fn item(id: u64, blob: &str, pinned: bool) -> ClipboardItem {
-        let mut mime_blobs = IndexMap::new();
-        mime_blobs.insert("text/plain".to_string(), blob.to_string());
-        ClipboardItem {
-            item_id: id,
-            content_preview: blob.to_string(),
-            content_type: ClipboardContentType::Text,
-            timestamp: id,
-            pinned,
-            mime_blobs,
-            thumbnail: None,
-        }
-    }
-
-    #[test]
-    fn merge_keeps_disk_history_dedupes_and_keeps_ids_unique() {
-        let session = vec![item(1, "new", false), item(2, "same", false)];
-        let existing = vec![
-            item(1, "old", false),
-            item(7, "same", false),
-            item(8, "pinned", true),
-        ];
-
-        let merged = merge_histories(session, existing);
-        let blobs: Vec<_> = merged.iter().map(|i| i.content_preview.as_str()).collect();
-        assert_eq!(blobs, ["pinned", "new", "same", "old"]);
-
-        let mut ids: Vec<_> = merged.iter().map(|i| i.item_id).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), merged.len());
-        assert!(next_item_id(&merged) > 8);
-    }
-
-    #[test]
-    fn merge_truncates_to_history_limit() {
-        let existing = (1..=150)
-            .map(|id| item(id, &format!("b{id}"), false))
-            .collect();
-        assert_eq!(
-            merge_histories(Vec::new(), existing).len(),
-            MAX_HISTORY_ITEMS
-        );
-    }
-
-    #[test]
-    fn merge_preserves_password_marker_on_unmarked_session_duplicate() {
-        let mut sensitive = item(1, "same", false);
-        sensitive.timestamp = 200;
-        sensitive
-            .mime_blobs
-            .insert(PASSWORD_HINT_MIME.to_string(), "hint".to_string());
-        let merged = merge_histories(vec![item(2, "same", false)], vec![sensitive]);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].item_id, 2);
-        assert_eq!(merged[0].content_type, ClipboardContentType::Password);
-        assert_eq!(merged[0].expires_at(), Some(320));
+        assert!(state.open_item_payload(id, internal_mime).is_err());
+        state.store.destroy().unwrap();
     }
 }

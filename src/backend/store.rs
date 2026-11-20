@@ -10,6 +10,10 @@
 //! ephemeral store with a random in-memory key is used instead, so payloads
 //! are still never kept in RAM and become unreadable once the daemon exits.
 
+mod migration;
+pub(super) use migration::{MAX_HISTORY_ITEMS, next_item_id};
+
+use crate::shared::write_atomic;
 use crate::shared::{ClipboardContentType, ClipboardItem};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -21,8 +25,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 const BLOB_MAGIC: &[u8; 4] = b"CCB1";
@@ -83,8 +86,10 @@ impl ClipboardStore {
     }
 
     /// True if a persistent store with a history index exists on disk.
-    pub fn persistent_index_exists() -> bool {
-        Self::persistent_dir().join(INDEX_FILE).exists()
+    pub(super) fn persistent_index_exists() -> Result<bool, String> {
+        let path = Self::persistent_dir().join(INDEX_FILE);
+        path.try_exists()
+            .map_err(|e| format!("Cannot check {}: {e}", path.display()))
     }
 
     pub fn open_persistent(password: &str) -> Result<Self, String> {
@@ -154,15 +159,21 @@ impl ClipboardStore {
     }
 
     pub fn get_blob(&self, id: &str) -> Result<Vec<u8>, String> {
-        self.reader().read(id)
+        self.open_blob(id)?.read()
     }
 
-    /// Detached handle for reading blobs without holding the backend lock.
-    pub fn reader(&self) -> BlobReader {
-        BlobReader {
-            blob_dir: self.dir.join(BLOB_DIR),
-            cipher: self.cipher.clone(),
+    /// The open file stays readable after garbage collection or a store switch.
+    pub fn open_blob(&self, id: &str) -> Result<OpenBlob, String> {
+        if !is_blob_id(id) {
+            return Err(format!("Invalid blob id: {id}"));
         }
+        let file = fs::File::open(self.blob_path(id))
+            .map_err(|e| format!("Failed to open blob {id}: {e}"))?;
+        Ok(OpenBlob {
+            file,
+            cipher: self.cipher.clone(),
+            id: id.to_owned(),
+        })
     }
 
     /// Persist the history index. No-op for ephemeral stores.
@@ -194,17 +205,29 @@ impl ClipboardStore {
         write_atomic(&self.dir.join(INDEX_FILE), &sealed)
     }
 
-    pub fn load_index(&self) -> Result<Vec<ClipboardItem>, String> {
+    fn read_index(&self) -> Result<Option<Vec<u8>>, String> {
         let path = self.dir.join(INDEX_FILE);
-        let sealed = match fs::read(&path) {
-            Ok(sealed) => sealed,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(format!("Failed to read history index: {e}")),
-        };
-        let json = self.open(&sealed)?;
-        let stored: Vec<StoredItem> = serde_json::from_slice(&json)
-            .map_err(|e| format!("Failed to parse history index: {e}"))?;
+        match fs::read(&path) {
+            Ok(sealed) => Ok(Some(sealed)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("Failed to read history index: {e}")),
+        }
+    }
 
+    #[cfg(test)]
+    pub(super) fn load_index(&self) -> Result<Vec<ClipboardItem>, String> {
+        match self.read_index()? {
+            Some(sealed) => Ok(self.restore_items(self.decode_index(&sealed)?)),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn decode_index(&self, sealed: &[u8]) -> Result<Vec<StoredItem>, String> {
+        let json = self.open(sealed)?;
+        serde_json::from_slice(&json).map_err(|e| format!("Failed to parse history index: {e}"))
+    }
+
+    fn restore_items(&self, stored: Vec<StoredItem>) -> Vec<ClipboardItem> {
         let mut items = Vec::with_capacity(stored.len());
         for entry in stored {
             let missing = entry
@@ -237,12 +260,12 @@ impl ClipboardStore {
             });
         }
 
-        Ok(items)
+        items
     }
 
     /// Copy the blobs referenced by `history` into `target`, returning the
     /// history rewritten to the target's blob ids.
-    pub fn transfer_to(
+    fn transfer_to(
         &self,
         target: &Self,
         history: &[ClipboardItem],
@@ -277,6 +300,10 @@ impl ClipboardStore {
             );
         }
 
+        self.remove_unreferenced_blobs(&referenced);
+    }
+
+    fn remove_unreferenced_blobs(&self, referenced: &HashSet<String>) {
         let Ok(entries) = fs::read_dir(self.dir.join(BLOB_DIR)) else {
             return;
         };
@@ -338,35 +365,6 @@ impl ClipboardStore {
     }
 }
 
-/// Reads blobs of one store. A blob removed concurrently (garbage collection,
-/// store switch) simply fails to read.
-#[derive(Clone)]
-pub struct BlobReader {
-    blob_dir: PathBuf,
-    cipher: Aes256Gcm,
-}
-
-impl BlobReader {
-    pub fn read(&self, id: &str) -> Result<Vec<u8>, String> {
-        self.open(id)?.read()
-    }
-
-    /// Open a blob now and read it later. The open file stays readable even
-    /// if the blob is deleted in between (garbage collection, store switch).
-    pub fn open(&self, id: &str) -> Result<OpenBlob, String> {
-        if !is_blob_id(id) {
-            return Err(format!("Invalid blob id: {id}"));
-        }
-        let file = fs::File::open(self.blob_dir.join(id))
-            .map_err(|e| format!("Failed to open blob {id}: {e}"))?;
-        Ok(OpenBlob {
-            file,
-            cipher: self.cipher.clone(),
-            id: id.to_string(),
-        })
-    }
-}
-
 pub struct OpenBlob {
     file: fs::File,
     cipher: Aes256Gcm,
@@ -410,40 +408,6 @@ fn xdg_dir(var: &str, home_fallback: &str) -> PathBuf {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             PathBuf::from(home).join(home_fallback)
         })
-}
-
-fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let mut suffix = [0u8; 8];
-    rand::rng().fill_bytes(&mut suffix);
-    let tmp_name = format!(
-        ".tmp-{}",
-        suffix
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
-    let tmp_path = path.with_file_name(tmp_name);
-
-    let result = (|| -> std::io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp_path)?;
-        file.write_all(contents)?;
-        file.sync_data()?;
-        fs::rename(&tmp_path, path)?;
-        // Make the new name durable before callers delete what it replaces.
-        if let Some(parent) = path.parent() {
-            fs::File::open(parent)?.sync_all()?;
-        }
-        Ok(())
-    })();
-
-    result.map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        format!("Failed to write {}: {e}", path.display())
-    })
 }
 
 fn remove_dir_if_exists(dir: &Path) -> Result<(), String> {
@@ -503,7 +467,7 @@ mod tests {
     fn opened_blob_survives_garbage_collection() {
         let store = test_store(false);
         let id = store.put_blob(b"pasting this").unwrap();
-        let opened = store.reader().open(&id).unwrap();
+        let opened = store.open_blob(&id).unwrap();
 
         store.collect_garbage(&[]);
         assert!(!store.blob_path(&id).exists());

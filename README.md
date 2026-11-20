@@ -6,7 +6,7 @@
 </div>
 
 A modern Wayland clipboard manager built with **Rust**, **GTK4**, **Libadwaita**, and **Wayland Layer Shell** that makes clipboard handling more reliable.
-Features a Windows 11–style clipboard history interface with native GNOME design, which is always positioned at the current mouse pointer location.
+Features a Windows 11–style clipboard history interface with native GNOME design and configurable placement.
 
 ## Features
 
@@ -23,6 +23,8 @@ Features a Windows 11–style clipboard history interface with native GNOME desi
 - **Search and filter**: Live search through clipboard history
 - **Pin or delete items**: Manage your history with ease
 - **Instant paste**: Option to immediately paste the selected item into the active application
+- **Configurable overlay placement**: Position the overlay at the cursor, center, or any corner of the screen
+- **Resizable overlay**: Adjust the width and height of the history window to your preference
 - **Persistent history**: Option to store clipboard history across sessions with automatic encryption
 - **Password-manager expiry**: Entries marked with `x-kde-passwordManagerHint` expire after two minutes.
 
@@ -83,7 +85,7 @@ yay -S cursor-clip-git
 
 ## Building and Installing the Flatpak
 Flathub release is in the works, but you can build and install the Flatpak locally from the manifest file.
-The Flatpak manifest builds Cursor Clip and all non-runtime dependencies from source (requires flatpak-builder):
+The Flatpak manifest builds Cursor Clip from this checkout and all non-runtime dependencies from source (requires flatpak-builder):
 
 ```bash
 flatpak run --command=flathub-build \
@@ -92,17 +94,14 @@ flatpak run --command=flathub-build \
   io.github.sirulex.cursor-clip.yml
 ```
 
-Run the clipboard monitor and overlay with:
+**Daemon autostart is required to record clipboard history from login.** Add this command to your compositor's autostart configuration:
 
 ```bash
-flatpak run io.github.sirulex.cursor-clip --daemon
-flatpak run io.github.sirulex.cursor-clip
+flatpak run --command=cursor-clip-daemon io.github.sirulex.cursor-clip
 ```
 
-The default launcher starts the monitor automatically if it is not already
-running. For a complete workflow, add the daemon command to your compositor's
-autostart configuration and bind the second command to a shortcut such as
-Super+V.
+Append `--monitor-only` to that command to leave clipboard ownership with the source application.
+Open **Cursor Clip** from the application menu or bind `flatpak run io.github.sirulex.cursor-clip` to a shortcut such as Super+V to toggle the overlay.
 
 
 ## Manual Building
@@ -141,7 +140,7 @@ sudo make install
 ```
 
 The desktop launcher appears as **Cursor Clip** with the application logo and
-runs `cursor-clip-toggle`. Keep `cursor-clip --daemon` in your compositor's
+runs `cursor-clip-toggle`. Put `cursor-clip-daemon` in your compositor's
 autostart configuration to record clipboard history.
 
 For a user-only installation, run `make install PREFIX="$HOME/.local"` instead
@@ -166,7 +165,7 @@ docker rm cursor-clip-temp
 
 # Update library cache and run
 sudo ldconfig
-cursor-clip --daemon
+cursor-clip-daemon
 ```
 
 ## Building with Nix Flake
@@ -208,24 +207,22 @@ Inside the shell:
 cargo check
 cargo fmt
 cargo clippy
-cargo run -- --daemon
+cargo run --bin cursor-clip-daemon
 # In another terminal using the same development shell:
-cargo run
+cargo run --bin cursor-clip-toggle
 ```
 
 Running the application requires a supported Wayland session (see Compositor Support).
 
 ## Usage
-1. **Start Background Daemon**: `cursor-clip --daemon`
-2. **Toggle Overlay**: Run `cursor-clip-toggle` to open and close it (ideally bind it to a hotkey, e.g., Super+V). It is a tiny launcher that signals a running overlay and otherwise starts `cursor-clip`; running `cursor-clip` without arguments directly works too, it just starts slower because it loads GTK the old way (still kept for existing workflows). This backwards compatibility will be removed in a future version.
-   - On Hyprland the overlay stays alive in the background after closing, with its rows already laid out, so later opens take a few milliseconds instead of a full GTK start.
-3. **Trigger**: Your mouse position is automatically captured
-4. **View History**: The clipboard history window will appear at your cursor position, showing:
+1. **Autostart the daemon (required).** Add `cursor-clip-daemon` to your compositor's autostart configuration. The daemon must be running to record clipboard history and serve it to the overlay. Use `cursor-clip-daemon --monitor-only` to leave newly copied selections under the source application's ownership.
+2. **Toggle Overlay**: Bind `cursor-clip-toggle` to a shortcut such as Super+V. It opens the overlay on first use and signals it on subsequent invocations.
+3. **View History**: The clipboard history window opens at your cursor by default, showing:
    - **Recent clipboard items** with content previews
    - **Content type icons** (text, URL, code, password, file)
    - **Timestamps** showing when items were copied
    - **Quick actions**: Clear, Delete, Pin and Close
-5. **Interact**:
+4. **Interact**:
    - **Click any item** to copy it back to the clipboard
    - **Scroll** through your clipboard history
    - **Clear icon** on the left side of the header to remove all history items after confirming; choose **Cancel** or press `Esc` to keep them
@@ -236,6 +233,20 @@ Running the application requires a supported Wayland session (see Compositor Sup
    - **Search actions**: Press `Enter` to paste the currently selected filtered result; press `Esc` to clear and hide the search (a second `Esc` closes the overlay); press `Up`/`Down` to move into the filtered results; press `Ctrl+U` to delete everything before the cursor in the search field
    - **Keyboard navigation**: Use `Arrow keys` or `Ctrl+J/K` to navigate, `Enter` to select, `Delete` to remove, `Ctrl+P` to pin
    - **Three-dot menu** on the window header allows you to toggle **Delete**/**Pin** button visibility, instant paste and persistent history (config stored permanently in `~/.config/cursor-clip/config.toml`)
+   - **History list size** defaults to **350 × 400** logical pixels. Enter **width × height** in the three-dot menu, then press Enter or click **Apply** to resize and save. You can also set the top-level integers `width` and `height` in `config.toml`.
+
+### Popup placement
+
+Set the top-level `position` and `margin` keys in `~/.config/cursor-clip/config.toml`.
+
+```toml
+position = "bottom-right"
+margin = 16
+```
+
+`position` accepts `cursor` (the default), `center`, `top-left`, `top-right`, `bottom-left`, and `bottom-right`. The center and corner positions use the active monitor selected by your compositor and open without waiting for pointer movement.
+
+`margin` is a non-negative integer in logical pixels and defaults to `5`. It sets the inset from the screen edges for corner placement and the edge clearance for cursor placement, space permitting. Center placement ignores the margin. Changes take effect the next time the popup opens.
 
 ## Persistent History Security
 
@@ -243,10 +254,38 @@ If persistent history is enabled, clipboard history is stored encrypted on disk 
 
 Clipboard contents are kept out of memory either way: every payload is written once as an AES-GCM encrypted, content-addressed file and only read back when an application pastes it. The daemon keeps just the history index (previews and small thumbnails) in memory. Without persistent history the files live in `$XDG_CACHE_HOME/cursor-clip/session`, encrypted with a key that only exists in memory, and are removed on the next start. Turning persistent history off deletes the persistent store.
 
-History saved by older versions in `~/.config/cursor-clip/history.stoolap.db` is migrated automatically on first start; the old database is kept as `history.stoolap.db.migrated` and can be deleted afterwards.
+## Instant paste
 
-## Instant paste note:
+With **Instant paste** enabled, turn on **Type in** in the overlay’s three-dot menu to type selected text into the focused window. This can fix issues e.g. in terminals where Ctrl+V has another meaning. Tabs and line breaks send Tab and Enter keypresses, so a line break can submit a shell command. Images and copied files still use Ctrl+V. The option defaults to `false`.
+
 On KDE Plasma, instant paste is currently not available because the compositor does not provide `virtual-keyboard-unstable-v1` protocol support. See compositor support details at the bottom of: https://wayland.app/protocols/virtual-keyboard-unstable-v1
+
+## niri specific fix: Overlay waits for mouse movement
+
+With `position = "cursor"` and niri's `cursor { hide-when-typing }` enabled,
+launching Cursor Clip from a keybind or terminal can leave the frontend waiting
+until you move the mouse.
+The keypress hides the pointer, and niri withholds pointer focus from the new
+capture layer. Moving the mouse restores focus so Cursor Clip can receive the
+Wayland `wl_pointer.enter` event and open the overlay at the cursor. See
+[niri's pointer-hiding change](https://github.com/niri-wm/niri/pull/1426).
+
+To keep `hide-when-typing` enabled, save this wrapper as `cursor-clip-niri`,
+make it executable, and point your keybind at it, for example
+`Mod+V { spawn "/path/to/cursor-clip-niri"; }`. The wrapper uses `wlrctl` to
+nudge the pointer one pixel in each direction during launch.
+
+```bash
+#!/usr/bin/env bash
+# Requires wlrctl
+wlrctl pointer move 1 0 &
+wlrctl pointer move -1 0 &
+exec cursor-clip-toggle "$@"
+```
+
+Other tools that generate relative mouse movement can also be used, such as
+[ydotool](https://github.com/ReimuNotMoe/ydotool). Disabling/not using `hide-when-typing`
+in niri also avoids this behavior.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -282,10 +321,9 @@ On KDE Plasma, instant paste is currently not available because the compositor d
 - **Tokio runtime**: Asynchronous runtime
 - **serde**: Serialization framework
 - **indexmap**: Ordered map for clipboard history
-- **fast_image_resize**: Efficient image resizing for previews
+- **image** and **fast_image_resize** generate JPEG previews from PNG clipboard images
 - **keyring**: Secure storage for encryption keys
 - **aes-gcm**: Encryption of the on-disk clipboard store
-- **stoolap**: Reading history saved by older versions (one-time migration)
 - **env_logger**: Logging framework
 ---
 

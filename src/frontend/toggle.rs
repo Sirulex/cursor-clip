@@ -83,15 +83,7 @@ impl ToggleServer {
     /// Accept all pending connections. Each connection represents one toggle
     /// request; the message body is deliberately irrelevant.
     pub fn take_toggle_request(&self) -> io::Result<bool> {
-        let mut requested = false;
-
-        loop {
-            match self.listener.accept() {
-                Ok((_stream, _address)) => requested = true,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(requested),
-                Err(error) => return Err(error),
-            }
-        }
+        Ok(Self::count_toggle_requests_from(&self.listener)? > 0)
     }
 
     /// Accept all pending connections and return how many there were.

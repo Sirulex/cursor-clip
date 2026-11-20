@@ -1,6 +1,6 @@
-//! Fast pointer lookup through Hyprland's IPC socket.
+//! Pointer and focused output lookup through Hyprland's IPC socket.
 //!
-//! The generic path maps a fullscreen capture layer and waits for the
+//! The generic cursor path maps a fullscreen capture layer and waits for the
 //! compositor to send `wl_pointer.enter`, which can take until the next mouse
 //! movement. Hyprland can answer the same question immediately.
 
@@ -11,17 +11,8 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
-pub struct PointerLocation {
-    /// Output connector name, e.g. "DP-2"
-    pub monitor: String,
-    /// Pointer position relative to the monitor, in logical pixels
-    pub x: f64,
-    pub y: f64,
-    /// Logical monitor size
-    pub monitor_width: i32,
-    pub monitor_height: i32,
-}
+use super::OverlayLocation;
+use crate::shared::config::PopupPosition;
 
 #[derive(Deserialize)]
 struct CursorPos {
@@ -59,27 +50,36 @@ impl Monitor {
     }
 }
 
-/// Returns `None` when not running under Hyprland or when IPC fails, so the
-/// caller can fall back to the protocol-based lookup.
-pub fn pointer_location() -> Option<PointerLocation> {
-    let socket = socket_path()?;
-    let cursor: CursorPos = serde_json::from_slice(&request(&socket, "j/cursorpos")?).ok()?;
-    let monitors: Vec<Monitor> = serde_json::from_slice(&request(&socket, "j/monitors")?).ok()?;
+fn select_monitor<'a>(monitors: &'a [Monitor], cursor: Option<&CursorPos>) -> Option<&'a Monitor> {
+    cursor
+        .and_then(|cursor| {
+            monitors
+                .iter()
+                .find(|monitor| monitor.contains(cursor.x, cursor.y))
+        })
+        .or_else(|| monitors.iter().find(|monitor| monitor.focused))
+}
 
-    let monitor = monitors
-        .iter()
-        .find(|monitor| monitor.contains(cursor.x, cursor.y))
-        .or_else(|| monitors.iter().find(|monitor| monitor.focused))?;
+pub(super) fn overlay_location(position: PopupPosition) -> Option<OverlayLocation> {
+    let socket = socket_path()?;
+    let cursor = if position == PopupPosition::Cursor {
+        Some(serde_json::from_slice(&request(&socket, "j/cursorpos")?).ok()?)
+    } else {
+        None
+    };
+    let monitors: Vec<Monitor> = serde_json::from_slice(&request(&socket, "j/monitors")?).ok()?;
+    let monitor = select_monitor(&monitors, cursor.as_ref())?;
     let (width, height) = monitor.logical_size();
 
-    let location = PointerLocation {
-        monitor: monitor.name.clone(),
-        x: cursor.x - monitor.x,
-        y: cursor.y - monitor.y,
+    let location = OverlayLocation {
+        monitor: Some(monitor.name.clone()),
+        cursor: cursor.map_or((0.0, 0.0), |cursor| {
+            (cursor.x - monitor.x, cursor.y - monitor.y)
+        }),
         monitor_width: width.round() as i32,
         monitor_height: height.round() as i32,
     };
-    debug!("Hyprland pointer location: {location:?}");
+    debug!("Hyprland overlay location: {location:?}");
     Some(location)
 }
 
@@ -135,5 +135,16 @@ mod tests {
         assert!(m.contains(4454.0, -582.0));
         assert!(!m.contains(5920.0, -582.0));
         assert!(!m.contains(3999.0, -582.0));
+    }
+
+    #[test]
+    fn fixed_positions_use_the_focused_monitor() {
+        let mut focused = monitor(1920.0, 0.0, 2.0, 0);
+        focused.focused = true;
+        let monitors = [monitor(0.0, 0.0, 2.0, 0), focused];
+        let cursor = CursorPos { x: 100.0, y: 100.0 };
+
+        assert_eq!(select_monitor(&monitors, None).unwrap().x, 1920.0);
+        assert_eq!(select_monitor(&monitors, Some(&cursor)).unwrap().x, 0.0);
     }
 }

@@ -1,5 +1,5 @@
-use crate::backend::backend_state::{BackendState, DataControlManager};
-use std::sync::Arc as StdArc; // for event_created_child return type clarity
+use super::selection::SelectionOwner;
+use crate::backend::backend_state::BackendState;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
@@ -49,40 +49,12 @@ impl WaylandClipboardMonitor {
             backend_state: self.backend_state.clone(),
         };
 
-        let qh = event_queue.handle();
-        {
-            let mut state = self.backend_state.lock().unwrap();
-            state.qh = Some(qh.clone());
-            state.connection = Some(connection);
-        }
-
-        // Bind wl_seat — required to create a data device for clipboard access.
-        match globals.bind::<wayland_client::protocol::wl_seat::WlSeat, _, _>(&qh, 1..=9, ()) {
-            Ok(seat) => self.backend_state.lock().unwrap().seat = Some(seat),
-            Err(_) => {
-                error!(
-                    "Critical Wayland interface 'wl_seat' is not available. \
-                    Your compositor did not expose an input seat, which is required \
-                    for clipboard access. Exiting."
-                );
+        let owner = SelectionOwner::bind(&globals, event_queue.handle(), connection)
+            .unwrap_or_else(|error| {
+                error!("{error}. Exiting.");
                 std::process::exit(1);
-            }
-        }
-
-        // Bind data control manager: prefer ext-data-control, fall back to wlr-data-control.
-        if let Ok(manager) = globals.bind::<ExtDataControlManagerV1, _, _>(&qh, 1..=1, ()) {
-            self.bind_data_device(DataControlManager::Ext(manager), &qh);
-            info!("Using ext_data_control_manager_v1 clipboard protocol");
-        } else if let Ok(manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
-            self.bind_data_device(DataControlManager::Wlr(manager), &qh);
-            info!("Using zwlr_data_control_manager_v1 clipboard protocol");
-        } else {
-            error!(
-                "Neither 'ext_data_control_manager_v1' nor 'zwlr_data_control_manager_v1' is \
-                available. Clipboard monitoring cannot function without one of these protocols. Exiting."
-            );
-            std::process::exit(1);
-        }
+            });
+        self.backend_state.lock().unwrap().selection = Some(owner);
 
         info!("Wayland clipboard monitor initialized, monitoring changes...");
 
@@ -92,32 +64,12 @@ impl WaylandClipboardMonitor {
                 .map_err(|e| format!("Failed to dispatch events: {e}"))?;
         }
     }
-
-    fn bind_data_device(&self, manager: DataControlManager, qh: &QueueHandle<MutexBackendState>) {
-        let mut state = self.backend_state.lock().unwrap();
-        // seat is guaranteed set before this is called
-        let device = manager.get_data_device(state.seat.as_ref().unwrap(), qh);
-        state.data_control_manager = Some(manager);
-        state.data_control_device = Some(device);
-    }
 }
 
 impl Drop for WaylandClipboardMonitor {
     fn drop(&mut self) {
         if let Ok(mut state) = self.backend_state.lock() {
-            if let Some(dev) = state.data_control_device.take() {
-                dev.destroy();
-            }
-            if let Some(src) = state.current_source_object.take() {
-                src.destroy();
-            }
-            if let Some(mgr) = state.data_control_manager.take() {
-                mgr.destroy();
-            }
-            state.seat.take(); // wl_seat proxies auto-drop; no explicit destroy
-            if let Some(conn) = &state.connection {
-                let _ = conn.flush();
-            }
+            state.selection = None;
         }
     }
 }
@@ -130,7 +82,22 @@ fn handle_data_offer(state: &mut BackendState, offer_id: wayland_client::backend
     state.mime_type_offers.insert(offer_id, Vec::new());
 }
 
-/// Register an offered MIME type for the given offer object, filtering out video types.
+/// Process-private clipboard payloads can become invalid when ownership changes.
+pub(super) fn is_internal_mime_type(mime_type: &str) -> bool {
+    let media_type = mime_type
+        .split_once(';')
+        .map_or(mime_type, |(name, _)| name);
+    let subtype = media_type
+        .split_once('/')
+        .map_or(media_type, |(_, subtype)| subtype)
+        .trim()
+        .to_ascii_lowercase();
+
+    // Match both x-<app>-internal-* and x-internal-*.
+    subtype.starts_with("x-") && subtype.contains("-internal-")
+}
+
+/// Register an offered MIME type unless it contains video or process-private data.
 fn handle_offer_mime(
     state: &mut BackendState,
     offer_id: wayland_client::backend::ObjectId,
@@ -139,6 +106,7 @@ fn handle_offer_mime(
     debug!("Offer event: MIME type offered: {mime_type}");
     if let Some(mime_list) = state.mime_type_offers.get_mut(&offer_id)
         && !mime_type.starts_with("video")
+        && !is_internal_mime_type(&mime_type)
     {
         mime_list.push(mime_type);
     }
@@ -161,11 +129,7 @@ fn handle_selection_event<F>(
             .as_ref()
             .is_some_and(|o| o == &offer_id);
         let mime_list = state.mime_type_offers.get(&offer_id).cloned();
-        (
-            mime_list,
-            already_current,
-            state.suppress_next_selection_read,
-        )
+        (mime_list, already_current, state.owned_entry_id().is_some())
     };
 
     let Some(mime_list) = mime_list else {
@@ -211,7 +175,7 @@ fn handle_selection_event<F>(
             // Let the password manager retain ownership and clear its own selection.
             && !password_hint
             && !state.monitor_only
-            && !state.suppress_next_selection_read
+            && state.owned_entry_id().is_none()
         {
             if let Err(e) = state.set_clipboard_by_id(new_id, false) {
                 warn!("Failed to take ownership of selection id {new_id}: {e}");
@@ -230,10 +194,19 @@ const MAX_ACTIVE_TRANSFERS: usize = 8;
 const TRANSFER_STALL_TIMEOUT_MS: i32 = 5_000;
 
 /// Handle a Source Send event for either Wlr or Ext source.
-fn handle_source_send(state: &BackendState, mime_type: String, fd: std::os::fd::OwnedFd) {
+fn handle_source_send(
+    state: &BackendState,
+    source_id: wayland_client::backend::ObjectId,
+    mime_type: String,
+    fd: std::os::fd::OwnedFd,
+) {
     debug!("Data source Send event for MIME type: {mime_type}");
-    let Some(item_id) = state.current_source_entry_id else {
-        warn!("No current_source_id set when Send event received");
+    let Some(item_id) = state
+        .selection
+        .as_ref()
+        .and_then(|owner| owner.entry_for_source(&source_id))
+    else {
+        debug!("Ignoring Send for inactive clipboard source {source_id:?}");
         return;
     };
     // Opened under the lock so a concurrent delete or store switch cannot
@@ -318,18 +291,6 @@ fn write_with_stall_timeout(fd: std::os::fd::OwnedFd, data: &[u8]) -> Result<(),
     Ok(())
 }
 
-/// Handle a Source Cancelled event. Re-enables selection reading if this is the active source.
-fn handle_source_cancelled(state: &mut BackendState, source_id: wayland_client::backend::ObjectId) {
-    debug!("Data source cancelled (object id {source_id:?})");
-    // If the cancelled source is still the active one, an external client took ownership — re-enable reads.
-    if state.current_source_object.as_ref().map(|s| s.id()) == Some(source_id) {
-        state.suppress_next_selection_read = false;
-        state.current_source_object = None;
-        state.current_source_entry_id = None;
-        debug!("Re-enabled selection reading (external client took over)");
-    }
-}
-
 // ================= Dispatch Implementations =================
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
@@ -369,7 +330,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
     fn event_created_child(
         opcode: u16,
         qhandle: &QueueHandle<Self>,
-    ) -> StdArc<dyn wayland_client::backend::ObjectData> {
+    ) -> Arc<dyn wayland_client::backend::ObjectData> {
         match opcode {
             0 => qhandle.make_data::<ZwlrDataControlOfferV1, ()>(()),
             _ => panic!("Unknown child object for opcode {opcode}"),
@@ -407,12 +368,17 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
     ) {
         match event {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
-                handle_source_send(&wrapper.backend_state.lock().unwrap(), mime_type, fd);
+                handle_source_send(
+                    &wrapper.backend_state.lock().unwrap(),
+                    event_source.id(),
+                    mime_type,
+                    fd,
+                );
             }
             zwlr_data_control_source_v1::Event::Cancelled => {
-                let source_id = event_source.id();
-                handle_source_cancelled(&mut wrapper.backend_state.lock().unwrap(), source_id);
-                event_source.destroy();
+                if let Some(owner) = &mut wrapper.backend_state.lock().unwrap().selection {
+                    owner.cancel(&event_source.id());
+                }
             }
             _ => {}
         }
@@ -456,7 +422,7 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for MutexBackendState {
     fn event_created_child(
         opcode: u16,
         qhandle: &QueueHandle<Self>,
-    ) -> StdArc<dyn wayland_client::backend::ObjectData> {
+    ) -> Arc<dyn wayland_client::backend::ObjectData> {
         match opcode {
             0 => qhandle.make_data::<ExtDataControlOfferV1, ()>(()),
             _ => panic!("Unknown child object for opcode {opcode}"),
@@ -494,12 +460,17 @@ impl Dispatch<ExtDataControlSourceV1, ()> for MutexBackendState {
     ) {
         match event {
             ext_data_control_source_v1::Event::Send { mime_type, fd } => {
-                handle_source_send(&wrapper.backend_state.lock().unwrap(), mime_type, fd);
+                handle_source_send(
+                    &wrapper.backend_state.lock().unwrap(),
+                    event_source.id(),
+                    mime_type,
+                    fd,
+                );
             }
             ext_data_control_source_v1::Event::Cancelled => {
-                let source_id = event_source.id();
-                handle_source_cancelled(&mut wrapper.backend_state.lock().unwrap(), source_id);
-                event_source.destroy();
+                if let Some(owner) = &mut wrapper.backend_state.lock().unwrap().selection {
+                    owner.cancel(&event_source.id());
+                }
             }
             _ => {}
         }
@@ -526,33 +497,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for MutexBackendState
 }
 
 // ================= Helper functions =================
-
-/// Create a pipe, returning `OwnedFd` handles for the read and write ends.
-fn create_pipes() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), Box<dyn std::error::Error>>
-{
-    use std::os::fd::FromRawFd;
-    let mut fds = [0; 2];
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    let reader = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[0]) };
-    let writer = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[1]) };
-    Ok((reader, writer))
-}
-
-/// Select the MIME types to actually read from the available list.
-/// When image types are present, keep only PNG image data and all non-image variants.
-fn select_target_mimes(available_mimes: &[String]) -> Vec<String> {
-    if available_mimes.iter().any(|m| m.starts_with("image/")) {
-        return available_mimes
-            .iter()
-            .filter(|m| m.as_str() == "image/png" || !m.starts_with("image/"))
-            .cloned()
-            .collect();
-    }
-
-    available_mimes.to_vec()
-}
 
 /// Trait abstracting over offer types that can receive data via a pipe fd.
 trait DataOfferReceive {
@@ -582,12 +526,12 @@ fn read_all_data_formats<O: DataOfferReceive>(
 
     let mut mime_map: IndexMap<String, Bytes> = IndexMap::new();
 
-    if mime_types.is_empty() {
-        return mime_map;
-    }
-
-    for mime in select_target_mimes(&mime_types) {
-        let (reader_fd, writer_fd) = match create_pipes() {
+    // Keep every non-image format, but only request PNG for images.
+    for mime in mime_types
+        .into_iter()
+        .filter(|mime| mime == "image/png" || !mime.starts_with("image/"))
+    {
+        let (mut reader, writer) = match std::io::pipe() {
             Ok(pair) => pair,
             Err(err) => {
                 warn!("Could not open pipe to read data for {mime}: {err:?}");
@@ -595,15 +539,14 @@ fn read_all_data_formats<O: DataOfferReceive>(
             }
         };
         debug!("Requesting {mime} content...");
-        data_offer.receive_mime(mime.clone(), writer_fd.as_fd());
-        // Drop the write end so the provider gets EOF after writing.
-        drop(writer_fd);
+        data_offer.receive_mime(mime.clone(), writer.as_fd());
+        // Let the reader see EOF once the provider closes its copy.
+        drop(writer);
         if let Err(e) = conn.flush() {
             warn!("Flush failed: {e}");
         }
-        let mut reader_file = std::fs::File::from(reader_fd);
         let mut buf = Vec::new();
-        match reader_file.read_to_end(&mut buf) {
+        match reader.read_to_end(&mut buf) {
             Ok(_) if !buf.is_empty() => {
                 mime_map.insert(mime, Bytes::from(buf));
             }
@@ -613,4 +556,32 @@ fn read_all_data_formats<O: DataOfferReceive>(
     }
 
     mime_map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_internal_mime_subtypes_and_bare_formats() {
+        for mime in [
+            "application/x-krita-node-internal-pointer",
+            "chromium/x-internal-source-rfh-token",
+            "x-example-internal-clipboard-data",
+            "application/X-Example-INTERNAL-Data; version=1",
+        ] {
+            assert!(is_internal_mime_type(mime), "{mime}");
+        }
+
+        for mime in [
+            "image/png",
+            "application/x-krita-node-external",
+            "application/vnd.example-internal-data",
+            "text/plain; name=application/x-example-internal-data",
+            "UTF8_STRING",
+            PASSWORD_HINT_MIME,
+        ] {
+            assert!(!is_internal_mime_type(mime), "{mime}");
+        }
+    }
 }

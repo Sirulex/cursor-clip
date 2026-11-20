@@ -1,7 +1,10 @@
 /target
 /.direnv
 /.flatpak-builder
+/.agents/skills/
 /build-flatpak
 /repo
+__pycache__/
 
 *.xcf
+skills-lock.json

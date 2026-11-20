@@ -10,19 +10,22 @@ use wayland_protocols::wp::{
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::frontend::dispatch::layer_shell::cleanup_capture_layer;
-use crate::frontend::ipc_client::FrontendClient;
 use crate::frontend::toggle::ToggleServer;
 use crate::frontend::{frontend_state::State, gtk_overlay, hyprland};
+use crate::shared::config::{PopupPosition, UserConfig, config_path};
 use log::{debug, error, info, warn};
-use memmap2::{MmapMut, MmapOptions};
-use std::fs::OpenOptions;
+use rustix::fs::{MemfdFlags, memfd_create};
+use std::fs::File;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd};
+
+use super::OverlayLocation;
 
 fn run_main_event_loop(
     state: &mut State,
     queue: &mut EventQueue<State>,
     toggle_server: &ToggleServer,
+    config: UserConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         // Wait for either compositor activity or another invocation. Monitoring
@@ -43,18 +46,15 @@ fn run_main_event_loop(
             queue.flush()?;
 
             show_overlay(
-                gtk_overlay::OverlayGeometry {
-                    x,
-                    y,
-                    overlay_width: state.overlay_width,
-                    overlay_height: state.overlay_height,
+                OverlayLocation {
+                    cursor: (x, y),
                     monitor_width: state.monitor_width,
                     monitor_height: state.monitor_height,
                     monitor: None,
                 },
-                std::mem::take(&mut state.clipboard_history),
                 toggle_server,
                 false,
+                config,
             )?;
             break;
         }
@@ -64,16 +64,16 @@ fn run_main_event_loop(
 }
 
 fn show_overlay(
-    geometry: gtk_overlay::OverlayGeometry,
-    history: Vec<crate::shared::ClipboardItemPreview>,
+    location: OverlayLocation,
     toggle_server: &ToggleServer,
     resident: bool,
+    config: UserConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = gtk_overlay::init_clipboard_overlay(
-        geometry,
-        history,
+        location,
         toggle_server.try_clone_listener()?,
         resident,
+        config,
     ) {
         error!("Error creating GTK overlay: {e:?}");
     }
@@ -146,51 +146,29 @@ fn dispatch_wayland_or_toggle(
 }
 
 // Frontend always uses its own Wayland connection (may change in future to support shared connection/hide feature)
-pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     let Some(toggle_server) = ToggleServer::acquire()? else {
-        info!("An overlay is already active; requested it to close");
+        info!("Requested a toggle of the active overlay");
         return Ok(());
     };
 
-    let mut state = State::new();
-    // Prefetch clipboard history for instant GTK overlay population
-    if let Ok(mut client) = FrontendClient::new() {
-        match client.get_history() {
-            Ok(items) => {
-                state.clipboard_history = items;
-                debug!(
-                    "Prefetched {} clipboard history items",
-                    state.clipboard_history.len()
-                );
-            }
-            Err(e) => warn!("Failed to prefetch clipboard history: {e}"),
-        }
-    } else {
-        warn!("Failed to connect to backend for history prefetch");
-    }
+    run_overlay(toggle_server)
+}
 
-    // Hyprland can report the pointer position directly; no capture layer needed.
-    if let Some(location) = hyprland::pointer_location() {
-        let defaults = State::new();
-        return show_overlay(
-            gtk_overlay::OverlayGeometry {
-                x: location.x,
-                y: location.y,
-                overlay_width: defaults.overlay_width,
-                overlay_height: defaults.overlay_height,
-                monitor_width: location.monitor_width,
-                monitor_height: location.monitor_height,
-                monitor: Some(location.monitor),
-            },
-            state.clipboard_history,
-            &toggle_server,
-            // Hyprland can tell us where the pointer is at any later time, so
-            // the overlay stays alive hidden and later opens skip GTK startup.
-            true,
-        );
+#[tokio::main]
+async fn run_overlay(toggle_server: ToggleServer) -> Result<(), Box<dyn std::error::Error>> {
+    let config = gtk_overlay::overlay_config(&config_path()).unwrap_or_default();
+    if let Some(location) = hyprland::overlay_location(config.position) {
+        // Hyprland can locate the overlay on every reopen without restarting GTK.
+        return show_overlay(location, &toggle_server, true, config);
+    }
+    if config.position != PopupPosition::Cursor {
+        // Layer Shell lets the compositor choose the active output.
+        return show_overlay(OverlayLocation::default(), &toggle_server, false, config);
     }
 
     // Initialize Wayland for layer shell capture
+    let mut state = State::default();
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (GlobalList, EventQueue<State>) =
         registry_queue_init::<State>(&conn)?;
@@ -204,7 +182,7 @@ pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     setup_capture_layer(&mut state, &queue);
 
     // Main event loop (reuse existing implementation)
-    run_main_event_loop(&mut state, &mut queue, &toggle_server)
+    run_main_event_loop(&mut state, &mut queue, &toggle_server, config)
 }
 
 fn init_wayland_protocols(
@@ -350,56 +328,19 @@ fn create_transparent_buffer(
         return Ok(());
     }
 
-    // Fallback: wl_shm 1x1 ARGB8888 buffer backed by a temporary file + memmap
     let shm = state
         .shm
         .as_ref()
         .ok_or_else(|| std::io::Error::other("wl_shm not available for fallback"))?;
 
-    // 1x1 pixel ARGB8888 (4 bytes)
-    let size: i32 = 4;
-
-    // Create a unique temp file (unlinked after creation) to back the SHM pool
-    let mut path = std::env::temp_dir();
-    let unique = format!(
-        "cursor-clip-shm-{}-{}.bin",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
-    );
-    path.push(unique);
-
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    file.set_len(size as u64)?;
-
-    // Map and zero the file to ensure transparent pixel content
-    let mut mmap: MmapMut = unsafe { MmapOptions::new().len(size as usize).map_mut(&file)? };
-    mmap.fill(0);
-    mmap.flush()?;
-
-    // We can unlink the file path now; the file remains alive via the handle
-    let _ = std::fs::remove_file(&path);
-
-    // Create wl_shm_pool using a borrowed fd from the File
-    let borrow_fd: BorrowedFd<'_> = unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) };
-    let pool = shm.create_pool(borrow_fd, size, &queue.handle(), ());
-    let buffer = pool.create_buffer(
-        0, // offset
-        1,
-        1, // width, height
-        4, // stride (bytes per row)
-        wl_shm::Format::Argb8888,
-        &queue.handle(),
-        (),
-    );
-    // Keep pool and file alive for the lifetime of the buffer
-    state.shm_file = Some(file);
-    state.shm_pool = Some(pool);
+    // Extending a new memfd yields four zero bytes, one transparent ARGB8888 pixel.
+    let file = File::from(memfd_create(c"cursor-clip-pixel", MemfdFlags::CLOEXEC)?);
+    file.set_len(4)?;
+    let qh = queue.handle();
+    let pool = shm.create_pool(file.as_fd(), 4, &qh, ());
+    let buffer = pool.create_buffer(0, 1, 1, 4, wl_shm::Format::Argb8888, &qh, ());
+    // wl_buffer retains the backing storage after the pool is destroyed.
+    pool.destroy();
     state.transparent_buffer = Some(buffer);
     Ok(())
 }
