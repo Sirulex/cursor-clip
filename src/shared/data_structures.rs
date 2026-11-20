@@ -19,6 +19,20 @@ pub struct ClipboardItem {
 }
 
 impl ClipboardItem {
+    /// Preserve pins and carry forward password expiry when the newer copy lacks a hint.
+    pub fn inherit_duplicate_metadata(&mut self, older: &Self) {
+        self.pinned |= older.pinned;
+        if !self.mime_blobs.contains_key(PASSWORD_HINT_MIME)
+            && let Some(hint) = older.mime_blobs.get(PASSWORD_HINT_MIME)
+        {
+            self.mime_blobs
+                .insert(PASSWORD_HINT_MIME.to_owned(), hint.clone());
+            self.content_type = ClipboardContentType::Password;
+            self.thumbnail = None;
+            self.timestamp = older.timestamp;
+        }
+    }
+
     /// File managers and image applications may also offer a plain-text label.
     pub fn typing_format(&self) -> Option<(&str, &str)> {
         if self.content_type == ClipboardContentType::Image

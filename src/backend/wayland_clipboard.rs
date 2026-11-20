@@ -1,4 +1,5 @@
-use crate::backend::backend_state::{BackendState, DataControlManager};
+use super::selection::SelectionOwner;
+use crate::backend::backend_state::BackendState;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
@@ -48,40 +49,12 @@ impl WaylandClipboardMonitor {
             backend_state: self.backend_state.clone(),
         };
 
-        let qh = event_queue.handle();
-        {
-            let mut state = self.backend_state.lock().unwrap();
-            state.qh = Some(qh.clone());
-            state.connection = Some(connection);
-        }
-
-        // Bind wl_seat — required to create a data device for clipboard access.
-        match globals.bind::<wayland_client::protocol::wl_seat::WlSeat, _, _>(&qh, 1..=9, ()) {
-            Ok(seat) => self.backend_state.lock().unwrap().seat = Some(seat),
-            Err(_) => {
-                error!(
-                    "Critical Wayland interface 'wl_seat' is not available. \
-                    Your compositor did not expose an input seat, which is required \
-                    for clipboard access. Exiting."
-                );
+        let owner = SelectionOwner::bind(&globals, event_queue.handle(), connection)
+            .unwrap_or_else(|error| {
+                error!("{error}. Exiting.");
                 std::process::exit(1);
-            }
-        }
-
-        // Bind data control manager: prefer ext-data-control, fall back to wlr-data-control.
-        if let Ok(manager) = globals.bind::<ExtDataControlManagerV1, _, _>(&qh, 1..=1, ()) {
-            self.bind_data_device(DataControlManager::Ext(manager), &qh);
-            info!("Using ext_data_control_manager_v1 clipboard protocol");
-        } else if let Ok(manager) = globals.bind::<ZwlrDataControlManagerV1, _, _>(&qh, 2..=2, ()) {
-            self.bind_data_device(DataControlManager::Wlr(manager), &qh);
-            info!("Using zwlr_data_control_manager_v1 clipboard protocol");
-        } else {
-            error!(
-                "Neither 'ext_data_control_manager_v1' nor 'zwlr_data_control_manager_v1' is \
-                available. Clipboard monitoring cannot function without one of these protocols. Exiting."
-            );
-            std::process::exit(1);
-        }
+            });
+        self.backend_state.lock().unwrap().selection = Some(owner);
 
         info!("Wayland clipboard monitor initialized, monitoring changes...");
 
@@ -91,32 +64,12 @@ impl WaylandClipboardMonitor {
                 .map_err(|e| format!("Failed to dispatch events: {e}"))?;
         }
     }
-
-    fn bind_data_device(&self, manager: DataControlManager, qh: &QueueHandle<MutexBackendState>) {
-        let mut state = self.backend_state.lock().unwrap();
-        // seat is guaranteed set before this is called
-        let device = manager.get_data_device(state.seat.as_ref().unwrap(), qh);
-        state.data_control_manager = Some(manager);
-        state.data_control_device = Some(device);
-    }
 }
 
 impl Drop for WaylandClipboardMonitor {
     fn drop(&mut self) {
         if let Ok(mut state) = self.backend_state.lock() {
-            if let Some(dev) = state.data_control_device.take() {
-                dev.destroy();
-            }
-            if let Some(src) = state.current_source_object.take() {
-                src.destroy();
-            }
-            if let Some(mgr) = state.data_control_manager.take() {
-                mgr.destroy();
-            }
-            state.seat.take(); // wl_seat proxies auto-drop; no explicit destroy
-            if let Some(conn) = &state.connection {
-                let _ = conn.flush();
-            }
+            state.selection = None;
         }
     }
 }
@@ -176,11 +129,7 @@ fn handle_selection_event<F>(
             .as_ref()
             .is_some_and(|o| o == &offer_id);
         let mime_list = state.mime_type_offers.get(&offer_id).cloned();
-        (
-            mime_list,
-            already_current,
-            state.suppress_next_selection_read,
-        )
+        (mime_list, already_current, state.owned_entry_id().is_some())
     };
 
     let Some(mime_list) = mime_list else {
@@ -226,7 +175,7 @@ fn handle_selection_event<F>(
             // Let the password manager retain ownership and clear its own selection.
             && !password_hint
             && !state.monitor_only
-            && !state.suppress_next_selection_read
+            && state.owned_entry_id().is_none()
         {
             if let Err(e) = state.set_clipboard_by_id(new_id, false) {
                 warn!("Failed to take ownership of selection id {new_id}: {e}");
@@ -245,10 +194,19 @@ const MAX_ACTIVE_TRANSFERS: usize = 8;
 const TRANSFER_STALL_TIMEOUT_MS: i32 = 5_000;
 
 /// Handle a Source Send event for either Wlr or Ext source.
-fn handle_source_send(state: &BackendState, mime_type: String, fd: std::os::fd::OwnedFd) {
+fn handle_source_send(
+    state: &BackendState,
+    source_id: wayland_client::backend::ObjectId,
+    mime_type: String,
+    fd: std::os::fd::OwnedFd,
+) {
     debug!("Data source Send event for MIME type: {mime_type}");
-    let Some(item_id) = state.current_source_entry_id else {
-        warn!("No current_source_id set when Send event received");
+    let Some(item_id) = state
+        .selection
+        .as_ref()
+        .and_then(|owner| owner.entry_for_source(&source_id))
+    else {
+        debug!("Ignoring Send for inactive clipboard source {source_id:?}");
         return;
     };
     // Opened under the lock so a concurrent delete or store switch cannot
@@ -333,18 +291,6 @@ fn write_with_stall_timeout(fd: std::os::fd::OwnedFd, data: &[u8]) -> Result<(),
     Ok(())
 }
 
-/// Handle a Source Cancelled event. Re-enables selection reading if this is the active source.
-fn handle_source_cancelled(state: &mut BackendState, source_id: wayland_client::backend::ObjectId) {
-    debug!("Data source cancelled (object id {source_id:?})");
-    // If the cancelled source is still the active one, an external client took ownership — re-enable reads.
-    if state.current_source_object.as_ref().map(|s| s.id()) == Some(source_id) {
-        state.suppress_next_selection_read = false;
-        state.current_source_object = None;
-        state.current_source_entry_id = None;
-        debug!("Re-enabled selection reading (external client took over)");
-    }
-}
-
 // ================= Dispatch Implementations =================
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for MutexBackendState {
@@ -422,12 +368,17 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for MutexBackendState {
     ) {
         match event {
             zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
-                handle_source_send(&wrapper.backend_state.lock().unwrap(), mime_type, fd);
+                handle_source_send(
+                    &wrapper.backend_state.lock().unwrap(),
+                    event_source.id(),
+                    mime_type,
+                    fd,
+                );
             }
             zwlr_data_control_source_v1::Event::Cancelled => {
-                let source_id = event_source.id();
-                handle_source_cancelled(&mut wrapper.backend_state.lock().unwrap(), source_id);
-                event_source.destroy();
+                if let Some(owner) = &mut wrapper.backend_state.lock().unwrap().selection {
+                    owner.cancel(&event_source.id());
+                }
             }
             _ => {}
         }
@@ -509,12 +460,17 @@ impl Dispatch<ExtDataControlSourceV1, ()> for MutexBackendState {
     ) {
         match event {
             ext_data_control_source_v1::Event::Send { mime_type, fd } => {
-                handle_source_send(&wrapper.backend_state.lock().unwrap(), mime_type, fd);
+                handle_source_send(
+                    &wrapper.backend_state.lock().unwrap(),
+                    event_source.id(),
+                    mime_type,
+                    fd,
+                );
             }
             ext_data_control_source_v1::Event::Cancelled => {
-                let source_id = event_source.id();
-                handle_source_cancelled(&mut wrapper.backend_state.lock().unwrap(), source_id);
-                event_source.destroy();
+                if let Some(owner) = &mut wrapper.backend_state.lock().unwrap().selection {
+                    owner.cancel(&event_source.id());
+                }
             }
             _ => {}
         }

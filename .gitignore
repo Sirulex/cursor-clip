@@ -1,7 +1,9 @@
 /target
 /.direnv
 /.flatpak-builder
+/.agents/skills/
 /build-flatpak
 /repo
 
 *.xcf
+skills-lock.json

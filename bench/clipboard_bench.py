@@ -42,7 +42,7 @@ IMAGE_EVERY = 5  # every 5th item is a screenshot-sized PNG
 
 
 def make_png(seed: int, width: int = 1920, height: int | None = None) -> bytes:
-    """Screenshot-like PNG (~2 MB): flat UI areas plus noisy content.
+    """Repeatable screenshot-like PNG (~2 MB) with flat UI areas and noisy content.
 
     The height varies per seed so every image has a distinct byte size;
     v1.0.2 deduplicates by a preview string that only contains the size."""
@@ -52,12 +52,11 @@ def make_png(seed: int, width: int = 1920, height: int | None = None) -> bytes:
     rows = []
     for y in range(height):
         if (y // 40) % 3 == 0:
-            row = os.urandom(width * 3)
+            row = rng.randbytes(width * 3)
         else:
             shade = bytes([(y + seed * 17) % 256, (seed * 31) % 256, 200]) * width
             row = shade
         rows.append(b"\x00" + row)
-    rng.shuffle(rows[: height // 8])
     raw = b"".join(rows)
 
     def chunk(tag: bytes, data: bytes) -> bytes:

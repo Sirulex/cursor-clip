@@ -1,6 +1,6 @@
+use super::store::ClipboardStore;
 use gtk4::glib;
 use keyring::Entry;
-use log::warn;
 
 const KEYRING_SERVICE: &str = "cursor-clip";
 const KEYRING_DB_USERNAME: &str = "clipboard-db-key";
@@ -20,7 +20,7 @@ pub fn read_db_password_from_keyring_once() -> Result<Option<String>, String> {
     }
 }
 
-pub fn generate_and_store_db_password() -> Result<String, String> {
+fn generate_and_store_db_password() -> Result<String, String> {
     let entry = keyring_entry()?;
 
     let password = glib::base64_encode(&rand::random::<[u8; 32]>()).to_string();
@@ -41,6 +41,16 @@ pub fn generate_and_store_db_password() -> Result<String, String> {
     Ok(password)
 }
 
-pub fn warn_persistence_sync_error(context: &str, err: &str) {
-    warn!("Persistence {context} failed: {err}");
+pub(super) fn open_persistent_store(
+    password: &mut Option<String>,
+) -> Result<ClipboardStore, String> {
+    let password = match password {
+        Some(password) => password,
+        None if ClipboardStore::persistent_index_exists()? => {
+            return Err("Persistent history already exists but no password was found in keyring. \
+                        Refusing to generate a new password because it would make existing encrypted history unreadable.".into());
+        }
+        None => password.insert(generate_and_store_db_password()?),
+    };
+    ClipboardStore::open_persistent(password)
 }
