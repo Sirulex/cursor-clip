@@ -48,6 +48,7 @@ fn run_main_event_loop(
             show_overlay(
                 OverlayLocation {
                     cursor: (x, y),
+                    monitor_width: state.monitor_width,
                     monitor_height: state.monitor_height,
                     monitor: None,
                 },
