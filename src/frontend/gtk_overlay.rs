@@ -474,27 +474,36 @@ fn create_layer_shell_window(
 
     let backdrop = create_backdrop(&card, placement.clone());
     window.set_content(Some(&backdrop));
-    content.list_size.apply(location.monitor_height);
-    content.list_size.connect_apply(&config_path());
+    content.list_size.apply(
+        location.monitor_width,
+        location.monitor_height,
+        placement.get(),
+    );
+    content
+        .list_size
+        .connect_apply(&config_path(), placement.clone());
     content.search_entry.connect_visible_notify({
         let size = Rc::downgrade(&content.list_size);
         let window = window.downgrade();
+        let placement = placement.clone();
         move |_| {
             if let (Some(size), Some(window)) = (size.upgrade(), window.upgrade())
                 && window.is_mapped()
             {
-                size.apply(window.height());
+                size.apply(window.width(), window.height(), placement.get());
             }
         }
     });
     window.connect_realize({
         let size = content.list_size.clone();
+        let placement = placement.clone();
         move |window| {
             if let Some(surface) = window.surface() {
                 let size = Rc::downgrade(&size);
-                surface.connect_layout(move |_, _, height| {
+                let placement = placement.clone();
+                surface.connect_layout(move |_, width, height| {
                     if let Some(size) = size.upgrade() {
-                        size.apply(height);
+                        size.apply(width, height, placement.get());
                     }
                 });
             }
@@ -619,17 +628,19 @@ fn show_resident_overlay() {
             scrolled.vadjustment().set_value(0.0);
         }
 
+        let mut monitor_width = ui.window.width();
         let mut monitor_height = ui.window.height();
         if let Some(location) = hyprland::overlay_location(placement.position) {
             let monitor = location.monitor.as_deref().and_then(find_gdk_monitor);
             ui.window.set_monitor(monitor.as_ref());
             placement.cursor = location.cursor;
+            monitor_width = location.monitor_width;
             monitor_height = location.monitor_height;
         } else if placement.position != PopupPosition::Cursor {
             ui.window.set_monitor(None);
         }
 
-        ui.list_size.apply(monitor_height);
+        ui.list_size.apply(monitor_width, monitor_height, placement);
         ui.placement.set(placement);
         ui.backdrop.queue_allocate();
         ui.window.present();
@@ -676,11 +687,17 @@ impl ListSize {
         self.error.set_visible(false);
     }
 
-    fn apply(&self, area_height: i32) {
+    fn apply(&self, area_width: i32, area_height: i32, placement: CardPlacement) {
         let (requested_width, requested_height) = self.requested.get();
         let (header_min, _, _, _) = self.header.measure(Orientation::Horizontal, -1);
         let minimum = header_min.max(OVERLAY_MIN_WIDTH);
-        let width = requested_width.min(1200).max(minimum);
+        // The card CSS adds a one-pixel border on each side of the list.
+        let max_width = if area_width > 0 {
+            (placement.available(area_width) - 2).min(1200)
+        } else {
+            1200
+        };
+        let width = requested_width.min(max_width).max(minimum);
         if requested_width < minimum
             && (self.last_width.get() != Some(requested_width)
                 || self.scrolled.min_content_width() != width)
@@ -697,8 +714,7 @@ impl ListSize {
                 - self.scrolled.measure(Orientation::Vertical, width).1
         });
         let max_height = if area_height > 0 {
-            // Two 5px positioning margins and the card's two 1px borders.
-            (area_height - chrome_height - 12).max(1)
+            (placement.available(area_height) - chrome_height - 2).max(1)
         } else {
             crate::shared::config::DEFAULT_LIST_HEIGHT
         };
@@ -706,7 +722,7 @@ impl ListSize {
             .set_min_content_height(requested_height.clamp(1, max_height));
     }
 
-    fn connect_apply(self: &Rc<Self>, path: &Path) {
+    fn connect_apply(self: &Rc<Self>, path: &Path, placement: Rc<Cell<CardPlacement>>) {
         for entry in [&self.width_entry, &self.height_entry] {
             let button = self.apply_button.downgrade();
             entry.connect_activate(move |_| {
@@ -743,12 +759,12 @@ impl ListSize {
                 return;
             }
             size.set_requested(width, height);
-            let height = size
+            let (width, height) = size
                 .scrolled
                 .root()
                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
-                .map_or(0, |window| window.height());
-            size.apply(height);
+                .map_or((0, 0), |window| (window.width(), window.height()));
+            size.apply(width, height, placement.get());
         });
     }
 }
@@ -761,6 +777,14 @@ struct CardPlacement {
 }
 
 impl CardPlacement {
+    fn available(self, extent: i32) -> i32 {
+        if self.position == PopupPosition::Center {
+            extent
+        } else {
+            (extent - self.margin.saturating_mul(2)).max(0)
+        }
+    }
+
     fn origin(self, free_width: i32, free_height: i32) -> (i32, i32) {
         let left = self.margin.min(free_width);
         let top = self.margin.min(free_height);
@@ -786,17 +810,16 @@ fn create_backdrop(card: &Overlay, placement: Rc<Cell<CardPlacement>>) -> Overla
     // to the window's size request.
     backdrop.add_overlay(card);
     backdrop.connect_get_child_position(move |backdrop, card| {
-        let width = card
-            .measure(Orientation::Horizontal, -1)
-            .1
-            .min(backdrop.width());
-        let height = card
-            .measure(Orientation::Vertical, width)
-            .1
-            .min(backdrop.height());
-        let (left, top) = placement
-            .get()
-            .origin(backdrop.width() - width, backdrop.height() - height);
+        let placement = placement.get();
+        let fit = |orientation, for_size, extent| {
+            let (minimum, natural, _, _) = card.measure(orientation, for_size);
+            natural
+                .min(placement.available(extent).max(minimum))
+                .min(extent)
+        };
+        let width = fit(Orientation::Horizontal, -1, backdrop.width());
+        let height = fit(Orientation::Vertical, width, backdrop.height());
+        let (left, top) = placement.origin(backdrop.width() - width, backdrop.height() - height);
         Some(gtk4::gdk::Rectangle::new(left, top, width, height))
     });
     backdrop
@@ -2448,6 +2471,48 @@ mod size_tests {
 
     #[test]
     #[ignore = "requires a GTK display"]
+    fn oversized_list_fits_the_output_at_the_cursor_and_in_the_center() {
+        adw::init().unwrap();
+        let config = UserConfig {
+            width: 1100,
+            height: 900,
+            margin: 32,
+            ..UserConfig::default()
+        };
+        let placement = Rc::new(Cell::new(CardPlacement {
+            position: config.position,
+            margin: config.margin,
+            cursor: (798.0, 599.0),
+        }));
+        let content = generate_overlay_content(config);
+        let window = adw::ApplicationWindow::builder().build();
+        apply_custom_styling(&window);
+        content.overlay.add_css_class("cursor-clip-card");
+        let root = create_backdrop(&content.overlay, placement.clone());
+        window.set_content(Some(&root));
+        content.list_size.apply(0, 0, placement.get());
+
+        for (position, inset) in [(PopupPosition::Cursor, 32), (PopupPosition::Center, 0)] {
+            placement.set(CardPlacement {
+                position,
+                ..placement.get()
+            });
+            content.list_size.apply(800, 600, placement.get());
+            root.allocate(800, 600, -1, None);
+            let bounds = content.overlay.compute_bounds(&root).unwrap();
+            assert_eq!((bounds.x(), bounds.y()), (inset as f32, inset as f32));
+            assert_eq!(bounds.width(), (800 - 2 * inset) as f32);
+            assert_eq!(bounds.height(), (600 - 2 * inset) as f32);
+        }
+
+        content.list_size.apply(1920, 1080, placement.get());
+        root.allocate(1920, 1080, -1, None);
+        assert_eq!(content.list_size.scrolled.width(), 1100);
+        assert_eq!(content.list_size.scrolled.height(), 900);
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display"]
     fn size_fields_apply_save_and_reload_both_dimensions() {
         adw::init().unwrap();
         let config = UserConfig::default();
@@ -2478,7 +2543,7 @@ mod size_tests {
             margin: 24,
             cursor: (990.0, 540.0),
         }));
-        let root = create_backdrop(&content.overlay, placement);
+        let root = create_backdrop(&content.overlay, placement.clone());
         window.set_content(Some(&root));
         let size = &content.list_size;
         let minimum = size
@@ -2505,8 +2570,8 @@ mod size_tests {
             &content.search_entry,
         );
         window.add_controller(keys.clone());
-        size.connect_apply(&path);
-        size.apply(550);
+        size.connect_apply(&path, placement.clone());
+        size.apply(1000, 550, placement.get());
         window.present();
         wait_for_size(350, 400);
         let closed_width = content.overlay.width();
@@ -2606,7 +2671,7 @@ mod size_tests {
         .unwrap();
         let cfg = UserConfig::load_or_create(&path).unwrap();
         size.set_requested(cfg.width, cfg.height);
-        size.apply(550);
+        size.apply(1000, 550, placement.get());
         assert_eq!(size.width_entry.text(), "1");
         assert_eq!(size.height_entry.text(), "190");
         window.present();

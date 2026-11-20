@@ -25,6 +25,9 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
 
                 // Check if this is the capture layer surface
                 if Some(layer_surface) == state.capture_layer_surface.as_ref() {
+                    if width > 0 {
+                        state.monitor_width = width as i32;
+                    }
                     if height > 0 {
                         state.monitor_height = height as i32;
                     }

@@ -69,13 +69,14 @@ pub(super) fn overlay_location(position: PopupPosition) -> Option<OverlayLocatio
     };
     let monitors: Vec<Monitor> = serde_json::from_slice(&request(&socket, "j/monitors")?).ok()?;
     let monitor = select_monitor(&monitors, cursor.as_ref())?;
-    let (_, height) = monitor.logical_size();
+    let (width, height) = monitor.logical_size();
 
     let location = OverlayLocation {
         monitor: Some(monitor.name.clone()),
         cursor: cursor.map_or((0.0, 0.0), |cursor| {
             (cursor.x - monitor.x, cursor.y - monitor.y)
         }),
+        monitor_width: width.round() as i32,
         monitor_height: height.round() as i32,
     };
     debug!("Hyprland overlay location: {location:?}");
