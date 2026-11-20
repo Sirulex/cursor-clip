@@ -1,6 +1,6 @@
-use crate::frontend::ipc_client::{FrontendClient, PersistenceUpdateError};
 use crate::shared::config::{PopupPosition, UserConfig, config_path};
 use crate::shared::{ClipboardContentType, ClipboardItemPreview};
+use cursor_clip::ipc_client::{FrontendClient, PersistenceUpdateError};
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, Box, Button, CheckButton, Label, Orientation, Overlay, Revealer,
@@ -364,7 +364,7 @@ pub(super) fn init_clipboard_overlay(
         debug!("Libadwaita overlay window created");
     });
 
-    // Keep listening while GTK owns the main loop. A new cursor-clip process
+    // Keep listening while GTK owns the main loop. A new cursor-clip-toggle process
     // connects here: a resident overlay toggles its visibility, otherwise the
     // overlay quits instead of queueing another. The wait happens on a helper
     // thread so an idle overlay never wakes up.
@@ -2387,7 +2387,7 @@ mod size_tests {
             std::iter::successors(widget.first_child(), |child| child.next_sibling())
                 .find_map(|child| check_for(&child, title))
         }
-        crate::shared::isolated_test(|| {
+        crate::test_support::isolated_test(|| {
             adw::init().unwrap();
             let path = config_path();
             UserConfig::update(&path, |cfg| cfg.type_instead_of_paste = true).unwrap();
@@ -2743,7 +2743,7 @@ mod tests {
     #[test]
     #[ignore = "requires a GTK display"]
     fn row_actions_use_the_target_id_and_wait_for_acknowledgement() {
-        crate::shared::isolated_test(|| {
+        crate::test_support::isolated_test(|| {
             adw::init().unwrap();
             let dir = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
                 .join("cursor-clip");
@@ -2850,7 +2850,7 @@ mod tests {
     #[test]
     #[ignore = "requires a GTK display"]
     fn cold_focus_and_persistence_ack_are_independent_of_history() {
-        crate::shared::isolated_test(|| {
+        crate::test_support::isolated_test(|| {
             adw::init().unwrap();
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let _enter = runtime.enter();

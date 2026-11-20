@@ -146,12 +146,17 @@ fn dispatch_wayland_or_toggle(
 }
 
 // Frontend always uses its own Wayland connection (may change in future to support shared connection/hide feature)
-pub async fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_frontend() -> Result<(), Box<dyn std::error::Error>> {
     let Some(toggle_server) = ToggleServer::acquire()? else {
-        info!("An overlay is already active; requested it to close");
+        info!("Requested a toggle of the active overlay");
         return Ok(());
     };
 
+    run_overlay(toggle_server)
+}
+
+#[tokio::main]
+async fn run_overlay(toggle_server: ToggleServer) -> Result<(), Box<dyn std::error::Error>> {
     let config = gtk_overlay::overlay_config(&config_path()).unwrap_or_default();
     if let Some(location) = hyprland::overlay_location(config.position) {
         // Hyprland can locate the overlay on every reopen without restarting GTK.

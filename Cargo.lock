@@ -544,6 +544,7 @@ dependencies = [
  "clap",
  "env_logger",
  "fast_image_resize",
+ "glib",
  "gtk4",
  "gtk4-layer-shell",
  "image",

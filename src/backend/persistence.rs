@@ -1,5 +1,4 @@
 use super::store::ClipboardStore;
-use gtk4::glib;
 use keyring::Entry;
 
 const KEYRING_SERVICE: &str = "cursor-clip";
