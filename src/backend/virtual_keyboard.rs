@@ -16,18 +16,26 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
 };
 
+// Real evdev codes for Left Ctrl and V. The keymap below declares them under
+// their standard xkb names (evdev code + 8), so the keys mean Ctrl and V both
+// under this keymap and under the user's own. Codes 1 and 2 are Esc and 1:
+// apps that read the physical key (Chromium's KeyboardEvent.code, Electron
+// shortcuts) saw Esc followed by Ctrl+1 instead of a paste.
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_V: u32 = 47;
+
 const PASTE_KEYMAP: &[u8] = b"xkb_keymap {\n\
 xkb_keycodes \"(unnamed)\" {\n\
 minimum = 8;\n\
-maximum = 11;\n\
-<K1> = 9;\n\
-<K2> = 10;\n\
+maximum = 255;\n\
+<LCTL> = 37;\n\
+<AB04> = 55;\n\
 };\n\
 xkb_types \"(unnamed)\" { include \"complete\" };\n\
 xkb_compatibility \"(unnamed)\" { include \"complete\" };\n\
 xkb_symbols \"(unnamed)\" {\n\
-key <K1> {[Control_L]};\n\
-key <K2> {[v, V]};\n\
+key <LCTL> {[Control_L]};\n\
+key <AB04> {[v, V]};\n\
 };\n\
 };\n\0";
 
@@ -164,27 +172,27 @@ fn type_text(
 fn paste_shortcut(connection: &Connection, keyboard: &ZwpVirtualKeyboardV1) -> Result<(), String> {
     // Press Ctrl, declare modifiers, tap V, then clear modifiers and release Ctrl.
     // Some clients only honor Ctrl combinations when modifier state is sent explicitly.
-    keyboard.key(0, 1, 1);
+    keyboard.key(0, KEY_LEFTCTRL, 1);
     keyboard.modifiers(4, 0, 0, 0);
     connection
         .flush()
         .map_err(|e| format!("Failed to flush Ctrl down: {e}"))?;
     sleep(Duration::from_millis(10));
 
-    keyboard.key(0, 2, 1);
+    keyboard.key(0, KEY_V, 1);
     connection
         .flush()
         .map_err(|e| format!("Failed to flush V down: {e}"))?;
     sleep(Duration::from_millis(6));
 
-    keyboard.key(0, 2, 0);
+    keyboard.key(0, KEY_V, 0);
     connection
         .flush()
         .map_err(|e| format!("Failed to flush V up: {e}"))?;
     sleep(Duration::from_millis(6));
 
     keyboard.modifiers(0, 0, 0, 0);
-    keyboard.key(0, 1, 0);
+    keyboard.key(0, KEY_LEFTCTRL, 0);
     connection
         .flush()
         .map_err(|e| format!("Failed to flush virtual keyboard shortcut: {e}"))?;
@@ -195,6 +203,15 @@ fn paste_shortcut(connection: &Connection, keyboard: &ZwpVirtualKeyboardV1) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// xkb keycodes are evdev codes + 8; the keymap must name the codes sent.
+    #[test]
+    fn paste_keymap_declares_the_evdev_codes_that_are_sent() {
+        let keymap = std::str::from_utf8(PASTE_KEYMAP).unwrap();
+        assert!(keymap.contains(&format!("<LCTL> = {};", KEY_LEFTCTRL + 8)));
+        assert!(keymap.contains(&format!("<AB04> = {};", KEY_V + 8)));
+        assert!(keymap.ends_with('\0'));
+    }
 
     #[test]
     fn maps_repeated_unicode_tabs_and_line_endings_in_order() {
